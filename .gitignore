@@ -1,0 +1,61 @@
+# Claude Code
+.claude/
+
+# MCP 配置
+.mcp.json
+
+# 文档
+docs/
+
+# 比赛数据示例
+data/
+
+# 仿真评测结果及分析
+eval_results/
+
+# 参考论文
+papers/
+
+# Jupyter notebooks
+notebooks/
+
+# 分析测试结果输出
+outputs/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+dist/
+build/
+.ipynb_checkpoints/
+
+# 虚拟环境
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+
+# 模型文件
+*.safetensors
+*.bin
+*.pt
+*.pth
+
+# 大型数据文件
+*.zip
+*.tar.gz
+*.mp4
+
+# HuggingFace cache
+.cache/
+
+# 环境变量
+.env

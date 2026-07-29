@@ -1,0 +1,43 @@
+policy_name: act_lerobot
+protocol: ws
+host: localhost
+port: null
+
+bench_name: null
+task_name: null
+ckpt_name: null
+checkpoint_path: null
+env_cfg_type: arx_x5
+action_type: ee
+seed: 0
+eval_batch: false
+
+# "auto" selects CUDA when available. The production server should normally
+# override this with cuda:0 through its environment/GPU selection.
+device: auto
+
+# Always return exactly one action per client request. In queue mode the model
+# replans every action_queue_size requests; the optional limiter still uses the
+# latest simulator state for each queued action.
+actions_per_chunk: 1
+
+# Disable overlapping-chunk averaging for the queue experiment.
+temporal_ensemble_coeff: null
+
+# Ignored while temporal_ensemble_coeff is null.
+temporal_ensemble_horizon: 10
+
+# Plan once, then return the first 10 actions one at a time over 10 client
+# requests. This is equivalent to ACT's non-ensemble n_action_steps queue while
+# preserving the RoboDojo response shape [1,16].
+action_queue_size: 10
+
+# Print state/action values and compact image summaries for each request.
+# Image pixels are never printed.
+log_io: true
+
+# Policy-server-only Cartesian rate limiter. These values use the approximate
+# P95 state-to-action deltas of the stack_blocks training subset: 30 mm and 6°.
+action_limiter_enabled: true
+max_translation_m: 0.030
+max_rotation_deg: 6.0
