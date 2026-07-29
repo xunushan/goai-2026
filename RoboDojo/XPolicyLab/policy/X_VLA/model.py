@@ -272,19 +272,14 @@ def build_xvla_proprio(observation: dict[str, Any]) -> np.ndarray:
     left_grip_joint = np.asarray(state["left_ee_joint_state"], dtype=np.float32)[-1]
     right_grip_joint = np.asarray(state["right_ee_joint_state"], dtype=np.float32)[-1]
 
-    # RoboDojo uses 1=open, 0=closed.  The released X-VLA RoboDojo/RoboTwin
-    # checkpoint was trained with -1=open, +1=closed.
-    left_grip = 1 - left_grip_joint * 2
-    right_grip = 1 - right_grip_joint * 2
-
     return np.concatenate(
         [
             left_ee[:3],
             quat_to_rotate6d(left_ee[3:]),
-            np.array([left_grip], dtype=np.float32),
+            np.array([left_grip_joint], dtype=np.float32),
             right_ee[:3],
             quat_to_rotate6d(right_ee[3:]),
-            np.array([right_grip], dtype=np.float32),
+            np.array([right_grip_joint], dtype=np.float32),
         ],
         axis=-1,
     ).astype(np.float32)
@@ -320,15 +315,16 @@ def action_chunk_to_ee_dict_list(action_chunk: np.ndarray):
     left_rotate6d = action_chunk[:, 3:9]
     left_gripper = action_chunk[:, 9:10]
     left_quat = rotate6d_to_quat(left_rotate6d)
-    # Convert the checkpoint's binary gripper convention back to RoboDojo's
-    # normalized command: 1=open, 0=closed.
-    left_grip = 1.0 - (left_gripper > 0.7).astype(np.float32)
+    # X-VLA applies sigmoid to its gripper logits, so these channels are
+    # probabilities in [0, 1].  The RoboDojo fine-tuning data keeps the native
+    # convention 1=open, 0=closed.
+    left_grip = (left_gripper > 0.7).astype(np.float32)
 
     right_xyz = action_chunk[:, 10:13]
     right_rotate6d = action_chunk[:, 13:19]
     right_quat = rotate6d_to_quat(right_rotate6d)
     right_gripper = action_chunk[:, 19:20]
-    right_grip = 1.0 - (right_gripper > 0.7).astype(np.float32)
+    right_grip = (right_gripper > 0.7).astype(np.float32)
 
     actions = []
     for idx in range(action_chunk.shape[0]):
