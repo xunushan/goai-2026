@@ -1,0 +1,25 @@
+policy_name: smolvla_lerobot
+protocol: ws
+host: localhost
+port: null
+
+bench_name: null
+task_name: null
+ckpt_name: null
+checkpoint_path: null
+env_cfg_type: arx_x5
+action_type: joint
+seed: 0
+eval_batch: false
+
+# Uses the installed LeRobot package from the `lerobot` Conda environment.
+device: auto
+
+# Replan after executing this many absolute joint actions.
+actions_per_chunk: 10
+
+# Used only when the incoming observation has no language instruction.
+prompt: null
+
+# Print one compact state/action diagnostic per inference request.
+log_io: true

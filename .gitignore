@@ -48,6 +48,7 @@ venv/
 *.bin
 *.pt
 *.pth
+checkpoints/
 
 # 大型数据文件
 *.zip
