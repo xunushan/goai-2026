@@ -16,7 +16,7 @@ eval_batch: false
 device: auto
 
 # Replan after executing this many absolute joint actions.
-actions_per_chunk: 10
+actions_per_chunk: 50
 
 # Used only when the incoming observation has no language instruction.
 prompt: null

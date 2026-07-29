@@ -82,6 +82,10 @@ actions_per_chunk: 10
 效果调优时建议测试 `1、5、10、20`。较小的值重规划更频繁，对扰动更稳，
 但推理开销更高。
 
+chunk 内每执行一个动作都会采集一次 observation 用于完整录像，但只有
+chunk 执行完才会再次调用模型推理。因此 `actions_per_chunk: 10` 不会再把
+约 22 秒的 550 步评测压缩成约 2 秒视频。
+
 服务启动时会强校验：
 
 - observation state 为 14D；

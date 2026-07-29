@@ -16,6 +16,7 @@ from XPolicyLab.policy.smolvla_lerobot.model import (
     _prompt,
     _resolve_checkpoint,
 )
+from XPolicyLab.policy.smolvla_lerobot.deploy import eval_one_episode
 
 
 class SmolVLALeRobotTest(unittest.TestCase):
@@ -101,6 +102,39 @@ class SmolVLALeRobotTest(unittest.TestCase):
                     },
                 }
             )
+
+    def test_chunk_execution_captures_every_video_frame(self):
+        class FakeEnv:
+            def __init__(self):
+                self.steps = 0
+                self.observations = 0
+
+            def is_episode_end(self):
+                return self.steps >= 10
+
+            def get_obs(self):
+                self.observations += 1
+                return {"frame": self.observations}
+
+            def take_action(self, action):
+                self.steps += 1
+
+        class FakeClient:
+            def __init__(self):
+                self.inference_calls = 0
+
+            def call(self, func_name, **kwargs):
+                if func_name == "get_action":
+                    self.inference_calls += 1
+                    return list(range(10))
+                return None
+
+        env = FakeEnv()
+        client = FakeClient()
+        eval_one_episode(env, client)
+        self.assertEqual(env.steps, 10)
+        self.assertEqual(env.observations, 10)
+        self.assertEqual(client.inference_calls, 1)
 
 
 if __name__ == "__main__":
