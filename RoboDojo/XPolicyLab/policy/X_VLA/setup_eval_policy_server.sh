@@ -26,19 +26,29 @@ echo "[SERVER] policy=${policy_name}, task=${task_name}, policy_server_port=${po
 source "$(conda info --base)/etc/profile.d/conda.sh"
 conda activate "${policy_conda_env}"
 
+overrides=(
+    port="${policy_server_port}"
+    host="${policy_server_host}"
+    bench_name="${bench_name}"
+    task_name="${task_name}"
+    ckpt_name="${ckpt_name}"
+    env_cfg_type="${env_cfg_type}"
+    seed="${seed}"
+    policy_name="${policy_name}"
+    action_type="${action_type}"
+    action_dim="${action_dim}"
+)
+
+if [[ -n "${XVLA_MODEL_PATH:-}" ]]; then
+    overrides+=(model_path="${XVLA_MODEL_PATH}")
+fi
+if [[ -n "${XVLA_PROCESSOR_PATH:-}" ]]; then
+    overrides+=(processor_path="${XVLA_PROCESSOR_PATH}")
+fi
+
 exec env \
     PYTHONWARNINGS=ignore::UserWarning \
     CUDA_VISIBLE_DEVICES="${policy_gpu_id}" \
     python "${XPL_ROOT}/setup_policy_server.py" \
         --config_path "${yaml_file}" \
-        --overrides \
-            port="${policy_server_port}" \
-            host="${policy_server_host}" \
-            bench_name="${bench_name}" \
-            task_name="${task_name}" \
-            ckpt_name="${ckpt_name}" \
-            env_cfg_type="${env_cfg_type}" \
-            seed="${seed}" \
-            policy_name="${policy_name}" \
-            action_type="${action_type}" \
-            action_dim="${action_dim}"
+        --overrides "${overrides[@]}"

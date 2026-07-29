@@ -28,39 +28,47 @@ action_dim=$(bash "${UTILS_DIR}/get_action_dim.sh" "${BENCH_ROOT}" "${env_cfg_ty
 
 echo "[SERVER] policy=${policy_name}, task=${task_name}, port=${policy_server_port}, action_dim=${action_dim}"
 
-CONDA_BASE="$(conda info --base)"
-source "${CONDA_BASE}/etc/profile.d/conda.sh"
-YAML_PYTHON="${CONDA_BASE}/bin/python"
-
 # Resolve the Hy-Embodied uv venv root. "uv" -> read policy_uv_env_path from
 # deploy.yml; otherwise treat the arg as a path. Relative paths resolve
 # against the policy dir.
 resolve_uv_env() {
     local raw_path=$1
     if [[ "${raw_path}" == "uv" ]]; then
-        "${YAML_PYTHON}" - <<PYENV
-import yaml
-from pathlib import Path
-script_dir = Path("${SCRIPT_DIR}")
-cfg = yaml.safe_load(open("${yaml_file}", encoding="utf-8"))
-path = Path(cfg["policy_uv_env_path"]).expanduser()
-if not path.is_absolute():
-    path = (script_dir / path).resolve()
-print(path)
-PYENV
+        raw_path="$(
+            awk '
+                $1 == "policy_uv_env_path:" {
+                    sub(/^[^:]+:[[:space:]]*/, "")
+                    sub(/[[:space:]]*#.*/, "")
+                    gsub(/^["'\'']|["'\'']$/, "")
+                    print
+                    exit
+                }
+            ' "${yaml_file}"
+        )"
+        if [[ -z "${raw_path}" ]]; then
+            echo "[SERVER][ERROR] policy_uv_env_path is missing from ${yaml_file}" >&2
+            exit 1
+        fi
+    fi
+    raw_path="${raw_path/#\~/${HOME}}"
+    if [[ "${raw_path}" = /* ]]; then
+        printf '%s\n' "${raw_path}"
     else
-        "${YAML_PYTHON}" - <<PYENV
-from pathlib import Path
-script_dir = Path("${SCRIPT_DIR}")
-path = Path("${raw_path}").expanduser()
-if not path.is_absolute():
-    path = (script_dir / path).resolve()
-print(path)
-PYENV
+        printf '%s\n' "${SCRIPT_DIR}/${raw_path}"
     fi
 }
 
 policy_uv_env_path="$(resolve_uv_env "${policy_uv_env}")"
+
+if [[ ! -x "${policy_uv_env_path}/.venv/bin/python" ]]; then
+    echo "[SERVER][ERROR] uv venv python not found: ${policy_uv_env_path}/.venv/bin/python" >&2
+    echo "[SERVER][ERROR] Run: bash ${SCRIPT_DIR}/install.sh" >&2
+    exit 1
+fi
+
+# Use the policy's own environment for YAML/path handling. The standalone
+# policy machine therefore does not need Conda; only the Isaac Sim client does.
+YAML_PYTHON="${policy_uv_env_path}/.venv/bin/python"
 
 # Resolve the Hy-Embodied source tree root (mirrors model.py._resolve_hy_root):
 # deploy.yml `hy_root` -> $HY_VLA_ROOT -> ./Hy-Embodied-0.5-VLA. Relative paths
