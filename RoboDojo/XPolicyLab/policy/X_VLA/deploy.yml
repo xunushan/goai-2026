@@ -21,4 +21,10 @@ domain_id: 0
 steps: 10
 device: cuda
 
+# X-VLA inference can take longer than the WebSocket library's default
+# keepalive window. Application requests already detect a dead connection, so
+# disable protocol-level pings to avoid disconnecting a healthy long inference.
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
+
 port: 6000

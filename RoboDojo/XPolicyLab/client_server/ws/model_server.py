@@ -34,8 +34,8 @@ def _ok_payload(result: Any = None) -> dict[str, Any]:
 class PolicyServerConfig:
     host: str = "0.0.0.0"
     port: int = 19000
-    ws_ping_interval_s: float = 20.0
-    ws_ping_timeout_s: float = 20.0
+    ws_ping_interval_s: float | None = 20.0
+    ws_ping_timeout_s: float | None = 20.0
 
 
 @dataclass
@@ -318,6 +318,8 @@ def main() -> None:
         PolicyServerConfig(
             host=deploy_cfg.get("host", "0.0.0.0"),
             port=int(deploy_cfg.get("port", 19000)),
+            ws_ping_interval_s=deploy_cfg.get("ws_ping_interval_s", 20.0),
+            ws_ping_timeout_s=deploy_cfg.get("ws_ping_timeout_s", 20.0),
         ),
     )
     asyncio.run(server.serve_forever())
