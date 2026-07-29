@@ -18,7 +18,16 @@ model_path: null
 processor_path: checkpoints/shared/X-VLA-Pt
 lora_path: null
 domain_id: 0
+# Flow-matching denoising iterations. This is not the number of simulator
+# actions executed before the next inference.
 steps: 10
+# The checkpoint predicts model.config.num_actions actions (30 by default).
+# Execute only this prefix, then request a fresh observation and replan.
+actions_per_chunk: 10
+gripper_threshold: 0.7
+# Log action ranges plus raw/thresholded gripper values; image pixels are never
+# printed.
+log_io: true
 device: cuda
 
 # X-VLA inference can take longer than the WebSocket library's default

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -306,7 +307,11 @@ def encode_obs(observation, default_prompt):
     }
 
 
-def action_chunk_to_ee_dict_list(action_chunk: np.ndarray):
+def action_chunk_to_ee_dict_list(
+    action_chunk: np.ndarray,
+    *,
+    gripper_threshold: float = 0.7,
+):
     action_chunk = np.asarray(action_chunk, dtype=np.float32)
     if action_chunk.ndim == 1:
         action_chunk = action_chunk[None, :]
@@ -318,13 +323,13 @@ def action_chunk_to_ee_dict_list(action_chunk: np.ndarray):
     # X-VLA applies sigmoid to its gripper logits, so these channels are
     # probabilities in [0, 1].  The RoboDojo fine-tuning data keeps the native
     # convention 1=open, 0=closed.
-    left_grip = (left_gripper > 0.7).astype(np.float32)
+    left_grip = (left_gripper > gripper_threshold).astype(np.float32)
 
     right_xyz = action_chunk[:, 10:13]
     right_rotate6d = action_chunk[:, 13:19]
     right_quat = rotate6d_to_quat(right_rotate6d)
     right_gripper = action_chunk[:, 19:20]
-    right_grip = (right_gripper > 0.7).astype(np.float32)
+    right_grip = (right_gripper > gripper_threshold).astype(np.float32)
 
     actions = []
     for idx in range(action_chunk.shape[0]):
@@ -351,12 +356,53 @@ class Model(ModelTemplate):
         env_cfg = self.model_cfg.get("env_cfg") or self.model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = get_robot_action_dim_info(env_cfg) if env_cfg is not None else None
         self._latest_env_idx_list: list[int] = [0]
+        self._latest_by_env: dict[int, dict[str, Any]] = {}
         self.observation_window: list[dict[str, Any]] | None = None
 
         self.device = self._get_device(self.model_cfg.get("device", "cuda"))
         self.processor = self._load_processor(self.model_cfg)
         self.model = self._load_model(self.model_cfg)
         self.model.eval()
+
+        self.model_chunk_size = int(getattr(self.model, "num_actions", 0))
+        if self.model_chunk_size <= 0:
+            raise ValueError(
+                f"X-VLA model has invalid num_actions={self.model_chunk_size}"
+            )
+        requested_chunk = self.model_cfg.get("actions_per_chunk")
+        self.actions_per_chunk = (
+            self.model_chunk_size
+            if requested_chunk is None
+            else int(requested_chunk)
+        )
+        if not 1 <= self.actions_per_chunk <= self.model_chunk_size:
+            raise ValueError(
+                "actions_per_chunk must be within "
+                f"[1,{self.model_chunk_size}], got {self.actions_per_chunk}"
+            )
+        self.gripper_threshold = float(
+            self.model_cfg.get("gripper_threshold", 0.7)
+        )
+        if not 0.0 <= self.gripper_threshold <= 1.0:
+            raise ValueError(
+                "gripper_threshold must be within [0,1], got "
+                f"{self.gripper_threshold}"
+            )
+        self.log_io = bool(self.model_cfg.get("log_io", True))
+        self.denoise_steps = int(self.model_cfg.get("steps", 10))
+        if self.denoise_steps < 1:
+            raise ValueError(
+                f"steps must be at least 1, got {self.denoise_steps}"
+            )
+        self._request_index = 0
+        print(
+            "[x_vla] "
+            f"model_chunk_size={self.model_chunk_size} "
+            f"execute_steps={self.actions_per_chunk} "
+            f"denoise_steps={self.denoise_steps} "
+            f"gripper_threshold={self.gripper_threshold}",
+            flush=True,
+        )
 
     def _get_device(self, device_arg: str):
         if device_arg == "auto":
@@ -424,10 +470,13 @@ class Model(ModelTemplate):
 
     def update_obs_batch(self, obs_list):
         self._latest_env_idx_list = [
-            obs.get("env_idx", index) if isinstance(obs, dict) else index
+            int(obs.get("env_idx", index)) if isinstance(obs, dict) else index
             for index, obs in enumerate(obs_list)
         ]
         self.observation_window = [encode_obs(obs, self.default_prompt) for obs in obs_list]
+        self._latest_by_env = dict(
+            zip(self._latest_env_idx_list, self.observation_window, strict=True)
+        )
 
     def infer(self, observation: dict[str, Any], steps: int | None = None):
         pil_images = [Image.fromarray(image) for image in observation["images"]]
@@ -450,7 +499,9 @@ class Model(ModelTemplate):
         inputs["proprio"] = to_model(proprio)
         inputs["domain_id"] = domain_id.to(self.device)
 
-        denoise_steps = int(steps if steps is not None else self.model_cfg.get("steps", 10))
+        denoise_steps = int(steps if steps is not None else self.denoise_steps)
+        if denoise_steps < 1:
+            raise ValueError(f"steps must be at least 1, got {denoise_steps}")
         with torch.no_grad():
             action = self.model.generate_actions(**inputs, steps=denoise_steps)
         return action.squeeze(0).float().cpu().numpy()
@@ -465,12 +516,76 @@ class Model(ModelTemplate):
 
         env_idx_list = env_idx_list or self._latest_env_idx_list
         action_list = []
-        for batch_index, _ in enumerate(env_idx_list):
-            encoded_obs = self.observation_window[batch_index]
-            action_chunk = self.infer(encoded_obs)
-            action_list.append(action_chunk_to_ee_dict_list(action_chunk))
+        for env_idx in env_idx_list:
+            resolved_env_idx = int(env_idx)
+            if resolved_env_idx not in self._latest_by_env:
+                raise KeyError(
+                    f"No buffered observation for env_idx={resolved_env_idx}; "
+                    f"available={sorted(self._latest_by_env)}"
+                )
+            encoded_obs = self._latest_by_env[resolved_env_idx]
+            raw_chunk = self.infer(encoded_obs)
+            if raw_chunk.ndim != 2 or raw_chunk.shape[1] < 20:
+                raise ValueError(
+                    f"Expected X-VLA action chunk [T,>=20], got {raw_chunk.shape}"
+                )
+            if raw_chunk.shape[0] != self.model_chunk_size:
+                raise ValueError(
+                    "X-VLA returned an unexpected chunk length: "
+                    f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
+                )
+            executed_chunk = raw_chunk[: self.actions_per_chunk]
+            actions = action_chunk_to_ee_dict_list(
+                executed_chunk,
+                gripper_threshold=self.gripper_threshold,
+            )
+            if self.log_io:
+                left_prob = raw_chunk[:, 9]
+                right_prob = raw_chunk[:, 19]
+                summary = {
+                    "event": "server_actions",
+                    "request": self._request_index,
+                    "model_chunk_size": int(raw_chunk.shape[0]),
+                    "execute_steps": int(executed_chunk.shape[0]),
+                    "gripper_threshold": self.gripper_threshold,
+                    "left_gripper_probability": {
+                        "min": float(np.min(left_prob)),
+                        "max": float(np.max(left_prob)),
+                        "executed": executed_chunk[:, 9].tolist(),
+                        "command": [
+                            float(action["left_ee_joint_state"][0])
+                            for action in actions
+                        ],
+                    },
+                    "right_gripper_probability": {
+                        "min": float(np.min(right_prob)),
+                        "max": float(np.max(right_prob)),
+                        "executed": executed_chunk[:, 19].tolist(),
+                        "command": [
+                            float(action["right_ee_joint_state"][0])
+                            for action in actions
+                        ],
+                    },
+                    "left_xyz": {
+                        "min": np.min(executed_chunk[:, 0:3], axis=0).tolist(),
+                        "max": np.max(executed_chunk[:, 0:3], axis=0).tolist(),
+                    },
+                    "right_xyz": {
+                        "min": np.min(executed_chunk[:, 10:13], axis=0).tolist(),
+                        "max": np.max(executed_chunk[:, 10:13], axis=0).tolist(),
+                    },
+                }
+                print(
+                    "[x_vla][io] "
+                    + json.dumps(summary, ensure_ascii=False),
+                    flush=True,
+                )
+            self._request_index += 1
+            action_list.append(actions)
         return action_list
 
     def reset(self):
         self.observation_window = None
         self._latest_env_idx_list = [0]
+        self._latest_by_env = {}
+        self._request_index = 0
