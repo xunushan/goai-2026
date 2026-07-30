@@ -52,8 +52,8 @@ bash serve_remote.sh \
 # 流匹配去噪迭代次数，不是执行动作数
 steps: 10
 
-# 每次模型预测一个完整 chunk，只执行前 10 步便重新获取观测并推理
-actions_per_chunk: 10
+# 官方 checkpoint 每次预测并执行完整的 30 步，再重新获取观测并推理
+actions_per_chunk: 30
 
 # X-VLA 输出 0～1 的夹爪概率；大于阈值发送 1（开），否则发送 0（关）
 gripper_threshold: 0.7
@@ -68,8 +68,8 @@ log_io: true
 - `steps`：一次预测内部的去噪次数，增大通常会增加推理时间；
 - `actions_per_chunk`：一次预测后真正交给仿真执行的动作数，范围为
   `1..model_chunk_size`；
-- 当前建议先使用 `actions_per_chunk: 10`，若接触物体后纠偏仍不及时，再测试
-  `5`。
+- 官方评测实现会遍历并执行模型返回的整个 chunk，所以对齐官方时使用
+  `actions_per_chunk: 30`。`10` 或 `5` 只作为后续提高重规划频率的实验配置。
 
 `log_io: true` 时，每次推理会输出两类 `[x_vla][io]` JSON 日志：
 

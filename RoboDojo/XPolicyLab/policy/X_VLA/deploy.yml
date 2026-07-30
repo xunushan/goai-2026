@@ -21,9 +21,9 @@ domain_id: 0
 # Flow-matching denoising iterations. This is not the number of simulator
 # actions executed before the next inference.
 steps: 10
-# The official RoboDojo ckpt-100000 predicts model.config.num_actions=30 actions.
-# Execute only this prefix, then request a fresh observation and replan.
-actions_per_chunk: 10
+# The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
+# requesting a fresh observation. Keep 30 for official-aligned evaluation.
+actions_per_chunk: 30
 gripper_threshold: 0.7
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
