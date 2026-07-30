@@ -80,6 +80,22 @@ log_io: true
 - `task_prompt_map`：将仿真 task name 映射为模型输入的完整自然语言指令，
   未命中的 instruction 保持原样。
 
+夹爪连续值直出（默认，推荐先测试）：
+
+```yaml
+gripper_mode: continuous
+```
+
+使用阈值将夹爪指令二值化：
+
+```yaml
+gripper_mode: threshold
+gripper_threshold: 0.7
+```
+
+阈值模式下，预测值大于 `0.7` 时发送 `1`（开），否则发送 `0`（关）。
+连续模式下 `gripper_threshold` 不生效。
+
 `log_io: true` 时，每次推理会输出两类 `[x_vla][io]` JSON 日志：
 
 - `client_observation`：环境编号、原始任务指令、实际模型 prompt、原始状态、
