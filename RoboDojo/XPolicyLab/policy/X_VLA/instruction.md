@@ -55,8 +55,13 @@ steps: 10
 # 官方 checkpoint 每次预测并执行完整的 30 步，再重新获取观测并推理
 actions_per_chunk: 30
 
-# X-VLA 输出 0～1 的夹爪概率；大于阈值发送 1（开），否则发送 0（关）
+# RoboDojo 使用 0～1 连续夹爪位置，直接输出 X-VLA sigmoid 后的值
+gripper_mode: continuous
 gripper_threshold: 0.7
+
+# 仿真传入 task name，服务端映射成完整自然语言指令
+task_prompt_map:
+  stack_blocks: "Stack the three blocks with different textures."
 
 log_io: true
 ```
@@ -70,13 +75,17 @@ log_io: true
   `1..model_chunk_size`；
 - 官方评测实现会遍历并执行模型返回的整个 chunk，所以对齐官方时使用
   `actions_per_chunk: 30`。`10` 或 `5` 只作为后续提高重规划频率的实验配置。
+- `gripper_mode: continuous`：保留 `[0,1]` 连续夹爪值；只有对照实验改成
+  `threshold` 时，`gripper_threshold` 才生效；
+- `task_prompt_map`：将仿真 task name 映射为模型输入的完整自然语言指令，
+  未命中的 instruction 保持原样。
 
 `log_io: true` 时，每次推理会输出两类 `[x_vla][io]` JSON 日志：
 
 - `client_observation`：环境编号、原始任务指令、实际模型 prompt、原始状态、
   20D proprio，以及模型输入图像的 shape/dtype/min/max/mean；
 - `server_actions`：完整 chunk 长度、实际执行长度、左右夹爪概率的最小/最大
-  值、执行段概率、阈值化后的 0/1 指令以及左右臂 XYZ 范围。
+  值、执行段概率、实际发送的连续夹爪指令以及左右臂 XYZ 范围。
 
 日志不会打印图像像素。
 日志会包含任务文本和机器人 EE/夹爪状态；如不需要诊断，请设置

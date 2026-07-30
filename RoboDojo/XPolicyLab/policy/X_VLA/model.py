@@ -95,16 +95,20 @@ def _normalize_prompt_value(value: Any) -> str | None:
     return str(value)
 
 
-def resolve_prompt(observation: dict[str, Any], default_prompt: str) -> str:
+def resolve_prompt(
+    observation: dict[str, Any],
+    default_prompt: str,
+    task_prompt_map: dict[str, str] | None = None,
+) -> str:
     for key in ("prompt", "instruction", "task", "language_instruction"):
         prompt = _normalize_prompt_value(observation.get(key))
         if prompt is not None:
-            return prompt
+            return (task_prompt_map or {}).get(prompt, prompt)
 
     fallback = _normalize_prompt_value(default_prompt)
     if fallback is None:
         raise ValueError("No valid prompt found in observation or model config.")
-    return fallback
+    return (task_prompt_map or {}).get(fallback, fallback)
 
 
 def _extract_step_number(value: Any) -> int | None:
@@ -286,10 +290,10 @@ def build_xvla_proprio(observation: dict[str, Any]) -> np.ndarray:
     ).astype(np.float32)
 
 
-def encode_obs(observation, default_prompt):
+def encode_obs(observation, default_prompt, task_prompt_map=None):
     if "images" in observation and "state" in observation:
         head = ensure_hwc_uint8(observation["images"]["cam_high"])
-        prompt = resolve_prompt(observation, default_prompt)
+        prompt = resolve_prompt(observation, default_prompt, task_prompt_map)
         return {
             "images": [head],
             "proprio": build_xvla_proprio(observation),
@@ -298,7 +302,7 @@ def encode_obs(observation, default_prompt):
         }
 
     images = [ensure_hwc_uint8(extract_image(observation, ["cam_high", "cam_head", "head_camera", "top_camera"]))]
-    prompt = resolve_prompt(observation, default_prompt)
+    prompt = resolve_prompt(observation, default_prompt, task_prompt_map)
     return {
         "images": images,
         "proprio": build_xvla_proprio(observation),
@@ -310,6 +314,7 @@ def encode_obs(observation, default_prompt):
 def action_chunk_to_ee_dict_list(
     action_chunk: np.ndarray,
     *,
+    gripper_mode: str = "continuous",
     gripper_threshold: float = 0.7,
 ):
     action_chunk = np.asarray(action_chunk, dtype=np.float32)
@@ -320,16 +325,25 @@ def action_chunk_to_ee_dict_list(
     left_rotate6d = action_chunk[:, 3:9]
     left_gripper = action_chunk[:, 9:10]
     left_quat = rotate6d_to_quat(left_rotate6d)
-    # X-VLA applies sigmoid to its gripper logits, so these channels are
-    # probabilities in [0, 1].  The RoboDojo fine-tuning data keeps the native
-    # convention 1=open, 0=closed.
-    left_grip = (left_gripper > gripper_threshold).astype(np.float32)
+    # X-VLA already applies sigmoid, and RoboDojo stores continuous gripper
+    # positions in [0, 1] (1=open, 0=closed). Preserve them by default.
+    if gripper_mode == "continuous":
+        left_grip = np.clip(left_gripper, 0.0, 1.0)
+    elif gripper_mode == "threshold":
+        left_grip = (left_gripper > gripper_threshold).astype(np.float32)
+    else:
+        raise ValueError(
+            f"gripper_mode must be 'continuous' or 'threshold', got {gripper_mode!r}"
+        )
 
     right_xyz = action_chunk[:, 10:13]
     right_rotate6d = action_chunk[:, 13:19]
     right_quat = rotate6d_to_quat(right_rotate6d)
     right_gripper = action_chunk[:, 19:20]
-    right_grip = (right_gripper > gripper_threshold).astype(np.float32)
+    if gripper_mode == "continuous":
+        right_grip = np.clip(right_gripper, 0.0, 1.0)
+    else:
+        right_grip = (right_gripper > gripper_threshold).astype(np.float32)
 
     actions = []
     for idx in range(action_chunk.shape[0]):
@@ -353,6 +367,7 @@ class Model(ModelTemplate):
             raise ValueError("X-VLA in XPolicyLab currently supports only action_type='ee'.")
 
         self.default_prompt = self.model_cfg.get("prompt", self.task_name)
+        self.task_prompt_map = dict(self.model_cfg.get("task_prompt_map") or {})
         env_cfg = self.model_cfg.get("env_cfg") or self.model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = get_robot_action_dim_info(env_cfg) if env_cfg is not None else None
         self._latest_env_idx_list: list[int] = [0]
@@ -381,6 +396,14 @@ class Model(ModelTemplate):
                 "actions_per_chunk must be within "
                 f"[1,{self.model_chunk_size}], got {self.actions_per_chunk}"
             )
+        self.gripper_mode = str(
+            self.model_cfg.get("gripper_mode", "continuous")
+        ).lower()
+        if self.gripper_mode not in {"continuous", "threshold"}:
+            raise ValueError(
+                "gripper_mode must be 'continuous' or 'threshold', got "
+                f"{self.gripper_mode!r}"
+            )
         self.gripper_threshold = float(
             self.model_cfg.get("gripper_threshold", 0.7)
         )
@@ -401,6 +424,7 @@ class Model(ModelTemplate):
             f"model_chunk_size={self.model_chunk_size} "
             f"execute_steps={self.actions_per_chunk} "
             f"denoise_steps={self.denoise_steps} "
+            f"gripper_mode={self.gripper_mode} "
             f"gripper_threshold={self.gripper_threshold}",
             flush=True,
         )
@@ -540,7 +564,10 @@ class Model(ModelTemplate):
             int(obs.get("env_idx", index)) if isinstance(obs, dict) else index
             for index, obs in enumerate(obs_list)
         ]
-        self.observation_window = [encode_obs(obs, self.default_prompt) for obs in obs_list]
+        self.observation_window = [
+            encode_obs(obs, self.default_prompt, self.task_prompt_map)
+            for obs in obs_list
+        ]
         self._latest_by_env = dict(
             zip(self._latest_env_idx_list, self.observation_window, strict=True)
         )
@@ -614,6 +641,7 @@ class Model(ModelTemplate):
             executed_chunk = raw_chunk[: self.actions_per_chunk]
             actions = action_chunk_to_ee_dict_list(
                 executed_chunk,
+                gripper_mode=self.gripper_mode,
                 gripper_threshold=self.gripper_threshold,
             )
             if self.log_io:
@@ -625,6 +653,7 @@ class Model(ModelTemplate):
                     "env_idx": resolved_env_idx,
                     "model_chunk_size": int(raw_chunk.shape[0]),
                     "execute_steps": int(executed_chunk.shape[0]),
+                    "gripper_mode": self.gripper_mode,
                     "gripper_threshold": self.gripper_threshold,
                     "left_gripper_probability": {
                         "min": float(np.min(left_prob)),
