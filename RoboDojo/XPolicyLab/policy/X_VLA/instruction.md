@@ -61,8 +61,9 @@ gripper_threshold: 0.7
 log_io: true
 ```
 
-完整预测长度来自 checkpoint 的 `config.num_actions`，X-VLA 默认配置为
-`30`，实际值会在服务启动时打印为 `model_chunk_size`。因此：
+完整预测长度来自 checkpoint 的 `config.num_actions`。官方 RoboDojo
+`ckpt-100000/config.json` 中明确为 `30`，实际加载值也会在服务启动时打印为
+`model_chunk_size`。因此：
 
 - `steps`：一次预测内部的去噪次数，增大通常会增加推理时间；
 - `actions_per_chunk`：一次预测后真正交给仿真执行的动作数，范围为
@@ -70,6 +71,13 @@ log_io: true
 - 当前建议先使用 `actions_per_chunk: 10`，若接触物体后纠偏仍不及时，再测试
   `5`。
 
-`log_io: true` 时，每次推理会输出一行 `[x_vla][io]` JSON 日志，包括完整
-chunk 长度、实际执行长度、左右夹爪概率的最小/最大值、执行段概率、阈值化
-后的 0/1 指令以及左右臂 XYZ 范围。不会打印图像像素。
+`log_io: true` 时，每次推理会输出两类 `[x_vla][io]` JSON 日志：
+
+- `client_observation`：环境编号、原始任务指令、实际模型 prompt、原始状态、
+  20D proprio，以及模型输入图像的 shape/dtype/min/max/mean；
+- `server_actions`：完整 chunk 长度、实际执行长度、左右夹爪概率的最小/最大
+  值、执行段概率、阈值化后的 0/1 指令以及左右臂 XYZ 范围。
+
+日志不会打印图像像素。
+日志会包含任务文本和机器人 EE/夹爪状态；如不需要诊断，请设置
+`log_io: false`。

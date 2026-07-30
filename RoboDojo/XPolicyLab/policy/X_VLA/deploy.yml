@@ -21,7 +21,7 @@ domain_id: 0
 # Flow-matching denoising iterations. This is not the number of simulator
 # actions executed before the next inference.
 steps: 10
-# The checkpoint predicts model.config.num_actions actions (30 by default).
+# The official RoboDojo ckpt-100000 predicts model.config.num_actions=30 actions.
 # Execute only this prefix, then request a fresh observation and replan.
 actions_per_chunk: 10
 gripper_threshold: 0.7

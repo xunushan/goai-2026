@@ -356,6 +356,7 @@ class Model(ModelTemplate):
         env_cfg = self.model_cfg.get("env_cfg") or self.model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = get_robot_action_dim_info(env_cfg) if env_cfg is not None else None
         self._latest_env_idx_list: list[int] = [0]
+        self._raw_by_env: dict[int, dict[str, Any]] = {}
         self._latest_by_env: dict[int, dict[str, Any]] = {}
         self.observation_window: list[dict[str, Any]] | None = None
 
@@ -468,6 +469,72 @@ class Model(ModelTemplate):
     def update_obs(self, obs):
         self.update_obs_batch([obs])
 
+    @staticmethod
+    def _array_summary(value: Any) -> dict[str, Any]:
+        array = np.asarray(value)
+        summary: dict[str, Any] = {
+            "shape": list(array.shape),
+            "dtype": str(array.dtype),
+        }
+        if array.size:
+            summary.update(
+                {
+                    "min": float(np.min(array)),
+                    "max": float(np.max(array)),
+                    "mean": float(np.mean(array)),
+                }
+            )
+        return summary
+
+    def _log_observation(
+        self,
+        observation: dict[str, Any],
+        encoded_observation: dict[str, Any],
+        env_idx: int,
+    ) -> None:
+        if not self.log_io:
+            return
+
+        def finite_list(value: Any) -> list[float | None]:
+            array = np.asarray(value, dtype=np.float32).reshape(-1)
+            return [
+                float(item) if np.isfinite(item) else None
+                for item in array
+            ]
+
+        state = observation.get("state", {})
+        state_summary = {
+            key: finite_list(state[key])
+            for key in (
+                "left_ee_pose",
+                "left_ee_joint_state",
+                "right_ee_pose",
+                "right_ee_joint_state",
+            )
+            if key in state
+        }
+        images = {
+            f"image_{index}": self._array_summary(image)
+            for index, image in enumerate(encoded_observation["images"])
+        }
+        summary = {
+            "event": "client_observation",
+            "request": self._request_index,
+            "env_idx": env_idx,
+            "instruction": str(observation.get("instruction", ""))[:200],
+            "model_prompt": resolve_prompt(
+                encoded_observation,
+                self.default_prompt,
+            )[:200],
+            "state": state_summary,
+            "proprio20": finite_list(encoded_observation["proprio"]),
+            "images": images,
+        }
+        print(
+            "[x_vla][io] " + json.dumps(summary, ensure_ascii=False),
+            flush=True,
+        )
+
     def update_obs_batch(self, obs_list):
         self._latest_env_idx_list = [
             int(obs.get("env_idx", index)) if isinstance(obs, dict) else index
@@ -476,6 +543,9 @@ class Model(ModelTemplate):
         self.observation_window = [encode_obs(obs, self.default_prompt) for obs in obs_list]
         self._latest_by_env = dict(
             zip(self._latest_env_idx_list, self.observation_window, strict=True)
+        )
+        self._raw_by_env = dict(
+            zip(self._latest_env_idx_list, obs_list, strict=True)
         )
 
     def infer(self, observation: dict[str, Any], steps: int | None = None):
@@ -524,11 +594,18 @@ class Model(ModelTemplate):
                     f"available={sorted(self._latest_by_env)}"
                 )
             encoded_obs = self._latest_by_env[resolved_env_idx]
+            self._log_observation(
+                self._raw_by_env[resolved_env_idx],
+                encoded_obs,
+                resolved_env_idx,
+            )
             raw_chunk = self.infer(encoded_obs)
             if raw_chunk.ndim != 2 or raw_chunk.shape[1] < 20:
                 raise ValueError(
                     f"Expected X-VLA action chunk [T,>=20], got {raw_chunk.shape}"
                 )
+            if not np.isfinite(raw_chunk).all():
+                raise ValueError("X-VLA action chunk contains NaN or Inf")
             if raw_chunk.shape[0] != self.model_chunk_size:
                 raise ValueError(
                     "X-VLA returned an unexpected chunk length: "
@@ -545,6 +622,7 @@ class Model(ModelTemplate):
                 summary = {
                     "event": "server_actions",
                     "request": self._request_index,
+                    "env_idx": resolved_env_idx,
                     "model_chunk_size": int(raw_chunk.shape[0]),
                     "execute_steps": int(executed_chunk.shape[0]),
                     "gripper_threshold": self.gripper_threshold,
@@ -587,5 +665,6 @@ class Model(ModelTemplate):
     def reset(self):
         self.observation_window = None
         self._latest_env_idx_list = [0]
+        self._raw_by_env = {}
         self._latest_by_env = {}
         self._request_index = 0
