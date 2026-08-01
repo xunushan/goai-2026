@@ -23,9 +23,8 @@ SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 DATASET_ROOT=${DATASET_ROOT:-/workspace/data/lerobot_v30_ee}
 SEED=${SEED:-42}
 TRAIN_RATIO=${TRAIN_RATIO:-0.9}
-# 默认仅保留当前 stack-blocks 任务。若要保留全部任务，请显式设置
-# TASKS_JSON='[]'。
-TASKS_JSON=${TASKS_JSON:-'["Stack the three blocks with different textures."]'}
+# TASKS_JSON 是精确任务文本的 JSON 列表；空列表或未设置表示保留所有任务。
+TASKS_JSON=${TASKS_JSON:-'[]'}
 
 RATIO_TAG=$(python -c \
     'import sys; print(round(float(sys.argv[1]) * 100))' \
@@ -42,7 +41,7 @@ mapfile -t TASKS < <(python -c \
 mkdir -p "$(dirname "$SPLIT_PATH")"
 
 SPLIT_CMD=(
-    python "$SCRIPT_DIR/split_episodes.py"
+    python "$SCRIPT_DIR/../utils/split_episodes.py"
     --dataset-root "$DATASET_ROOT" \
     --output "$SPLIT_PATH" \
     --train-ratio "$TRAIN_RATIO" \
