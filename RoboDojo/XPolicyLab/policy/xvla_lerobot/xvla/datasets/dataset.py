@@ -189,9 +189,15 @@ class InfiniteDataReader(IterableDataset):
     def _iter_one_dataset(self, dataset_name: str) -> Iterable[dict]:
         meta = self.metas[dataset_name]
         base_traj_indices = list(range(len(meta["datalist"])))
+        # DataLoader worker sharding
         worker = get_worker_info()
         if worker is not None:
             base_traj_indices = base_traj_indices[worker.id::worker.num_workers]
+        # Accelerate multi-process sharding
+        world_size = int(os.environ.get("WORLD_SIZE", 1))
+        if world_size > 1:
+            rank = int(os.environ.get("LOCAL_RANK", 0))
+            base_traj_indices = base_traj_indices[rank::world_size]
         if not base_traj_indices:
             return
         Handler = get_handler_cls(dataset_name)

@@ -43,8 +43,8 @@ if [[ -n "${SPLIT_PATH}" && ! -f "${SPLIT_PATH}" ]]; then
     echo "Episode split not found: ${SPLIT_PATH}" >&2
     exit 2
 fi
-if [[ "${NUM_PROCESSES}" != "1" ]]; then
-    echo "NUM_PROCESSES must remain 1: the upstream iterable loader is not Accelerate-sharded." >&2
+if [[ "${NUM_PROCESSES}" -lt 1 ]]; then
+    echo "NUM_PROCESSES must be at least 1, got ${NUM_PROCESSES}." >&2
     exit 2
 fi
 
