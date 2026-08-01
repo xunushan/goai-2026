@@ -1,0 +1,29 @@
+# X-VLA runtime/training dependencies
+transformers<=4.51.3
+fastapi
+tensorboard
+peft==0.17.1
+uvicorn==0.34.3
+json_numpy==2.1.0
+safetensors==0.4.5
+numpy==1.26.3
+scipy==1.15.0
+einops==0.8.1
+timm==1.0.12
+mmengine==0.10.5
+h5py==3.12.1
+mediapy==1.2.4
+
+# Joint X-VLA + LeRobot v3 dataset-reader dependency set.
+# These intentionally supersede the older X-VLA-only av/accelerate pins.
+accelerate>=1.10.0,<2.0.0
+av>=15.0.0,<16.0.0
+pyarrow>=21.0.0,<24.0.0
+datasets>=4.0.0,<5.0.0
+huggingface-hub>=0.34.2,<0.36.0
+packaging>=24.2,<26.0
+opencv-python-headless==4.11.0.86
+
+# lerobot itself is installed with --no-deps by install.sh. Its full dependency
+# set includes rerun-sdk (NumPy>=2), robot drivers and UI packages that are not
+# used by this X-VLA dataset-reader integration and conflict with NumPy 1.26.
