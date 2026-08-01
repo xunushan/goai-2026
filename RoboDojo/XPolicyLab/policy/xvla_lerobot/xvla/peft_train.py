@@ -20,6 +20,7 @@ import time
 import json
 import random
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict
 
@@ -29,16 +30,28 @@ import torch.backends.cudnn as cudnn
 from torch.optim import AdamW
 
 from accelerate import Accelerator
-from datasets import create_dataloader
-from models.modeling_xvla import XVLA
-from models.processing_xvla import XVLAProcessor
 from peft import LoraConfig, get_peft_model
+
+if __package__:
+    from .datasets import create_dataloader
+    from .models.modeling_xvla import XVLA
+    from .models.processing_xvla import XVLAProcessor
+else:
+    _XVLA_DIR = Path(__file__).resolve().parent
+    sys.path = [
+        entry
+        for entry in sys.path
+        if Path(entry or ".").resolve() != _XVLA_DIR
+    ]
+    sys.path.insert(0, str(_XVLA_DIR.parent))
+    from xvla.datasets import create_dataloader
+    from xvla.models.modeling_xvla import XVLA
+    from xvla.models.processing_xvla import XVLAProcessor
 
 
 
 import logging
 import os
-import sys
 
 # ============================================================
 # logger

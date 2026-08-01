@@ -18,10 +18,24 @@ import argparse
 import os
 import os.path as osp
 import json
-import torch
-from models.modeling_xvla import XVLA
-from models.processing_xvla import XVLAProcessor
 import sys
+from pathlib import Path
+
+import torch
+
+if __package__:
+    from .models.modeling_xvla import XVLA
+    from .models.processing_xvla import XVLAProcessor
+else:
+    _XVLA_DIR = Path(__file__).resolve().parent
+    sys.path = [
+        entry
+        for entry in sys.path
+        if Path(entry or ".").resolve() != _XVLA_DIR
+    ]
+    sys.path.insert(0, str(_XVLA_DIR.parent))
+    from xvla.models.modeling_xvla import XVLA
+    from xvla.models.processing_xvla import XVLAProcessor
 
 def main():
     parser = argparse.ArgumentParser(description="Launch XVLA inference FastAPI server")
