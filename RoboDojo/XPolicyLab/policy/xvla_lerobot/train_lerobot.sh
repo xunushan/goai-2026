@@ -112,13 +112,15 @@ echo "[xvla_lerobot] model=${MODEL_PATH}"
 echo "[xvla_lerobot] dataset=${DATASET_ROOT} fps=25 qdur=1.0 anchors=30"
 echo "[xvla_lerobot] meta=${RUNTIME_META} domain_id=6 action_mode=arx_ee6d"
 echo "[xvla_lerobot] output=${OUTPUT_DIR}"
-echo "[xvla_lerobot] mixed_precision=${MIXED_PRECISION} num_processes=1"
+echo "[xvla_lerobot] mixed_precision=${MIXED_PRECISION} num_processes=${NUM_PROCESSES}"
 
 cd "${POLICY_DIR}"
 exec env CUDA_VISIBLE_DEVICES="${GPU_IDS}" accelerate launch \
     --num_processes "${NUM_PROCESSES}" \
+    --num_machines 1 \
+    --dynamo_backend no \
     --mixed_precision "${MIXED_PRECISION}" \
-    xvla/train.py \
+    --module xvla.train \
     --models "${MODEL_PATH}" \
     --train_metas_path "${RUNTIME_META}" \
     --action_mode arx_ee6d \
