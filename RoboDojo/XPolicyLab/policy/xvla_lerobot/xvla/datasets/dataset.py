@@ -116,7 +116,26 @@ def _prepare_lerobot_episode_meta(meta: dict, meta_dir: str) -> dict:
         split_name = str(meta.get("episode_split", "train"))
         if split_name not in split_data:
             raise KeyError(f"Episode split file has no {split_name!r} entry: {path}")
-        sets = {name: set(map(int, values)) for name, values in split_data.items()}
+        # Split files created by utils/split_episodes.py also contain scalar
+        # metadata (version, seed, ratios) and nested summaries.  Only the
+        # actual episode-list fields participate in overlap validation.
+        split_fields = ("train", "val", "test")
+        sets = {}
+        for name in split_fields:
+            if name not in split_data:
+                continue
+            values = split_data[name]
+            if not isinstance(values, list):
+                raise TypeError(
+                    f"Episode split {name!r} must be a JSON list, got "
+                    f"{type(values).__name__}: {path}"
+                )
+            sets[name] = set(map(int, values))
+        if split_name not in sets:
+            raise TypeError(
+                f"Episode split {split_name!r} must be one of the JSON list "
+                f"fields {split_fields}: {path}"
+            )
         names = list(sets)
         for index, name in enumerate(names):
             for other in names[index + 1 :]:

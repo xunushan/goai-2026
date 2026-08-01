@@ -43,6 +43,16 @@ goai_2026/
 
 **下载数据文件夹放置于远程服务器 `/data` 目录下。**
 
+## policy-server 服务日志规范
+
+每次启动或重启 policy-server 服务时，日志文件命名需包含 policy 目录名和时间戳，格式：
+
+```
+/data/outputs/<policy_dir名>_<YYYYMMDD_HHMMSS>.log
+```
+
+例如：`/data/outputs/X_VLA_20260730_112244.log`
+
 ## Isaac 仿真评测
 
 详见 [docs/仿真测试指南.md](docs/仿真测试指南.md)。

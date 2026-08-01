@@ -37,10 +37,12 @@ bash install.sh
 cd /path/to/RoboDojo/XPolicyLab/policy/xvla_lerobot
 mkdir -p checkpoints/shared
 
-huggingface-cli download \
+hf download \
   2toINF/X-VLA-RoboTwin2 \
-  --local-dir checkpoints/shared/X-VLA-RoboTwin2
+  --local-dir checkpoints/shared/X-VLA-Pt
 ```
+
+
 
 至少确认以下文件存在：
 
@@ -100,21 +102,21 @@ bash train_lerobot.sh
 
 常用环境变量：
 
-| 变量 | 默认值 | 含义 |
-|---|---:|---|
-| `MODEL_PATH` | `checkpoints/shared/X-VLA-RoboTwin2` | 基座 checkpoint |
-| `DATASET_ROOT` | 必填 | LeRobot v3 根目录 |
-| `SPLIT_PATH` | 无 | 含 `train` 列表的固定 split JSON |
-| `EPISODES_JSON` | 无 | 内联列表或列表文件路径 |
-| `ALLOW_ALL_EPISODES` | `0` | 显式允许使用全部 episode |
-| `TASKS_JSON` | `[]` | 可选的精确任务文本过滤 |
-| `BATCH_SIZE` | `32` | 每进程 batch size |
-| `ITERS` | `30000` | optimizer steps |
-| `FREEZE_STEPS` | `1000` | prompt/action-head warm-up 步数 |
-| `WARMUP_STEPS` | `2000` | 联合训练学习率 warm-up |
-| `GPU_IDS` | `0` | 可见 GPU |
-| `NUM_PROCESSES` | `1` | 当前固定为1；上游 iterable loader 未做进程级分片 |
-| `MIXED_PRECISION` | `auto` | Ampere及更新GPU用bf16，否则fp16 |
+| 变量                 |                               默认值 | 含义                                             |
+| -------------------- | -----------------------------------: | ------------------------------------------------ |
+| `MODEL_PATH`         | `checkpoints/shared/X-VLA-RoboTwin2` | 基座 checkpoint                                  |
+| `DATASET_ROOT`       |                                 必填 | LeRobot v3 根目录                                |
+| `SPLIT_PATH`         |                                   无 | 含 `train` 列表的固定 split JSON                 |
+| `EPISODES_JSON`      |                                   无 | 内联列表或列表文件路径                           |
+| `ALLOW_ALL_EPISODES` |                                  `0` | 显式允许使用全部 episode                         |
+| `TASKS_JSON`         |                                 `[]` | 可选的精确任务文本过滤                           |
+| `BATCH_SIZE`         |                                 `32` | 每进程 batch size                                |
+| `ITERS`              |                              `30000` | optimizer steps                                  |
+| `FREEZE_STEPS`       |                               `1000` | prompt/action-head warm-up 步数                  |
+| `WARMUP_STEPS`       |                               `2000` | 联合训练学习率 warm-up                           |
+| `GPU_IDS`            |                                  `0` | 可见 GPU                                         |
+| `NUM_PROCESSES`      |                                  `1` | 当前固定为1；上游 iterable loader 未做进程级分片 |
+| `MIXED_PRECISION`    |                               `auto` | Ampere及更新GPU用bf16，否则fp16                  |
 
 脚本在输出目录保存实际使用的 `train_meta.json`。每个 checkpoint 同时保存模型
 config、权重和 processor/tokenizer 文件，`config.json` 中的 action mode 应为
