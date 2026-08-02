@@ -1,0 +1,20 @@
+policy_name: xvla_v1
+protocol: ws
+host: 0.0.0.0
+port: 80
+
+bench_name: null
+task_name: null
+ckpt_name: null
+checkpoint_path: /data/checkpoints/xvla_v1
+env_cfg_type: arx_x5
+action_type: ee
+seed: 0
+eval_batch: false
+
+device: auto
+action_chunk: 30
+n_step_action: 30
+prompt: null
+invert_gripper: true
+log_io: true
