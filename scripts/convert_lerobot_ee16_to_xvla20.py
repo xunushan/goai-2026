@@ -51,9 +51,10 @@ XVLA_NAMES = [
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
-    parser.add_argument("--output", type=Path, required=True)
     parser.add_argument(
-        "--video-mode", choices=("hardlink", "symlink", "copy"), default="hardlink"
+        "--output",
+        type=Path,
+        help="Output dataset root (default: a sibling directory named <source>_6d)",
     )
     return parser.parse_args()
 
@@ -162,23 +163,18 @@ def _replace_episode_stats(
     return table, len(from_indices)
 
 
-def _copy_file(source: Path, output: Path, mode: str) -> None:
+def _symlink_file(source: Path, output: Path) -> None:
     output.parent.mkdir(parents=True, exist_ok=True)
-    if mode == "hardlink":
-        os.link(source, output)
-    elif mode == "symlink":
-        output.symlink_to(source.resolve())
-    else:
-        shutil.copy2(source, output)
+    output.symlink_to(source.resolve())
 
 
-def _copy_tree_files(source: Path, output: Path, mode: str) -> int:
+def _symlink_tree_files(source: Path, output: Path) -> int:
     if not source.exists():
         return 0
     count = 0
     for path in sorted(source.rglob("*")):
         if path.is_file():
-            _copy_file(path, output / path.relative_to(source), mode)
+            _symlink_file(path, output / path.relative_to(source))
             count += 1
     return count
 
@@ -221,13 +217,11 @@ def _validate_output(
                 raise ValueError(f"Output stats.json has invalid {feature}/{stat_name}")
 
 
-def convert_dataset(
-    source: Path, output: Path, *, video_mode: str = "hardlink"
-) -> dict[str, Any]:
+def convert_dataset(source: Path, output: Path | None = None) -> dict[str, Any]:
     """Create a converted dataset at ``output`` without modifying ``source``."""
 
     source = source.resolve()
-    output = output.resolve()
+    output = (output or source.with_name(f"{source.name}_6d")).resolve()
     info = _validate_source(source)
     if output.exists():
         raise FileExistsError(f"Output already exists: {output}")
@@ -246,9 +240,7 @@ def convert_dataset(
 
     try:
         shutil.copytree(source / "meta", temporary / "meta", copy_function=shutil.copy2)
-        video_count = _copy_tree_files(
-            source / "videos", temporary / "videos", video_mode
-        )
+        video_count = _symlink_tree_files(source / "videos", temporary / "videos")
 
         offset = 0
         data_files = sorted((source / "data").rglob("*.parquet"))
@@ -320,13 +312,13 @@ def convert_dataset(
         "fps": info["fps"],
         "data_files": len(data_files),
         "video_files": video_count,
-        "video_mode": video_mode,
+        "video_mode": "symlink",
     }
 
 
 def main() -> None:
     args = parse_args()
-    summary = convert_dataset(args.source, args.output, video_mode=args.video_mode)
+    summary = convert_dataset(args.source, args.output)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

@@ -1,5 +1,4 @@
 import json
-import os
 from pathlib import Path
 
 import numpy as np
@@ -169,4 +168,17 @@ def test_convert_dataset_updates_values_and_all_metadata(tmp_path: Path) -> None
 
     source_video = source / "videos/observation.images.cam_high/chunk-000/file-000.mp4"
     output_video = output / "videos/observation.images.cam_high/chunk-000/file-000.mp4"
-    assert os.stat(source_video).st_ino == os.stat(output_video).st_ino
+    assert output_video.is_symlink()
+    assert output_video.resolve() == source_video.resolve()
+
+
+def test_default_output_is_sibling_with_6d_suffix(tmp_path: Path) -> None:
+    source = tmp_path / "lerobot_v30_ee"
+    _write_fixture(source)
+
+    summary = convert_dataset(source)
+
+    output = tmp_path / "lerobot_v30_ee_6d"
+    assert Path(summary["output"]) == output
+    assert output.is_dir()
+    assert summary["video_mode"] == "symlink"
