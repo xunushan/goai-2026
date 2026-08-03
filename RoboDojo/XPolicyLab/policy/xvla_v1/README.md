@@ -91,3 +91,13 @@ print('action:', cfg['output_features']['action'])
 ```
 
 两者 `shape` 均应为 `[20]`。
+
+## 环境变量
+
+X-VLA 使用自定义 LeRobot 分支，运行前必须设置 PYTHONPATH：
+
+```bash
+export PYTHONPATH=/data/lerobot-xvla-arx-x5/src:$PYTHONPATH
+```
+
+否则 `PreTrainedConfig.from_pretrained` 会因 `XVLAConfig` 不认识 `domain_id` 等字段而报 `DecodingError`。
