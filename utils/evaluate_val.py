@@ -107,6 +107,12 @@ def parse_args() -> argparse.Namespace:
         default=Path("outputs/eval_val"),
         help="Output directory for metrics and plots.",
     )
+    parser.add_argument(
+        "--convert-20d-to-16d",
+        action="store_true",
+        help="Convert 20D X-VLA predictions to 16D EE before computing physical MAE. "
+        "Uses utils.xvla_ee.xvla20_to_ee16 (rotation6d→quaternion + gripper invert).",
+    )
     return parser.parse_args()
 
 
@@ -123,8 +129,16 @@ def run_batch_evaluation(
     action_mean: torch.Tensor,
     action_std: torch.Tensor,
     device: torch.device,
+    convert_20d_to_16d: bool = False,
 ) -> dict:
-    """Run batch inference and compute normalized + physical-unit metrics."""
+    """Run batch inference and compute normalized + physical-unit metrics.
+
+    When *convert_20d_to_16d* is True, predicted actions are unnormalized to
+    physical 20D, then converted to 16D via ``xvla20_to_ee16`` before comparing
+    with the 16D expert actions.  The normalized L1 (eval_loss) is still computed
+    in the model's native 20D space.
+    """
+    from utils.xvla_ee import xvla20_to_ee16
 
     normalized_error_sum = 0.0
     normalized_error_count = 0
@@ -157,6 +171,11 @@ def run_batch_evaluation(
 
             # Physical MAE
             predicted_action_physical = predicted_action_normalized * action_std + action_mean
+            if convert_20d_to_16d:
+                # Convert predicted 20D → 16D in physical units, then compare with 16D expert
+                pred_20d = predicted_action_physical.cpu().numpy()
+                pred_16d = xvla20_to_ee16(pred_20d.reshape(-1, 20)).reshape(pred_20d.shape[:-1] + (16,))
+                predicted_action_physical = torch.as_tensor(pred_16d, dtype=torch.float32, device=device)
             physical_error = torch.abs(predicted_action_physical - expert_action_physical)
             physical_error_sum += physical_error[valid_element_mask].sum().item()
             physical_error_count += int(valid_element_mask.sum().item())
@@ -218,6 +237,7 @@ def run_sparse_sampling(
     device: torch.device,
     stride: int,
     max_samples: int = 0,
+    convert_20d_to_16d: bool = False,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Sample observations at stride intervals and collect expert/predicted actions.
 
@@ -229,6 +249,7 @@ def run_sparse_sampling(
         expert_array:  [N, 16] float array of expert first-step actions (physical units).
         predicted_array: [N, 16] float array of predicted first-step actions (physical units).
     """
+    from utils.xvla_ee import xvla20_to_ee16
     sample_indices = list(range(0, len(dataset), stride))
     if max_samples > 0:
         sample_indices = sample_indices[:max_samples]
@@ -257,9 +278,14 @@ def run_sparse_sampling(
         batch = preprocessor(batch)
 
         with torch.inference_mode():
-            predicted_chunk = policy.predict_action_chunk(batch)  # [1, chunk, 16]
-        predicted_first_normalized = predicted_chunk[0, 0]  # [16]
+            predicted_chunk = policy.predict_action_chunk(batch)  # [1, chunk, D]
+        predicted_first_normalized = predicted_chunk[0, 0]  # [D]
         predicted_first_physical = predicted_first_normalized * action_std[0, 0] + action_mean[0, 0]
+
+        if convert_20d_to_16d:
+            pred_20d = predicted_first_physical.cpu().numpy().reshape(-1, 20)
+            pred_16d = xvla20_to_ee16(pred_20d).reshape(-1)
+            predicted_first_physical = torch.as_tensor(pred_16d, dtype=torch.float32, device=device)
 
         first_expert.append(expert_first[0].cpu().numpy())
         first_predicted.append(predicted_first_physical.cpu().numpy())
@@ -440,8 +466,11 @@ def main() -> None:
 
     # --- Batch evaluation ---
     print(f"Evaluating {args.split} split: {len(episodes)} episodes, {len(eval_dataset)} frames")
+    if args.convert_20d_to_16d:
+        print("20D→16D conversion enabled for physical MAE")
     metrics = run_batch_evaluation(
-        policy, preprocessor, dataloader, dataset, action_mean, action_std, device
+        policy, preprocessor, dataloader, dataset, action_mean, action_std, device,
+        convert_20d_to_16d=args.convert_20d_to_16d,
     )
 
     # Build result dict
@@ -453,13 +482,15 @@ def main() -> None:
         "val_frames": len(eval_dataset),
         "batch_size": args.batch_size,
         "device": str(device),
+        "convert_20d_to_16d": args.convert_20d_to_16d,
         **metrics,
     }
 
     # --- Sparse sampling for visualization ---
     print(f"Sampling for visualization (stride={args.stride})...")
     frame_indices, expert_array, predicted_array = run_sparse_sampling(
-        policy, preprocessor, dataset, action_mean, action_std, device, args.stride
+        policy, preprocessor, dataset, action_mean, action_std, device, args.stride,
+        convert_20d_to_16d=args.convert_20d_to_16d,
     )
 
     # --- Output ---
