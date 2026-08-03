@@ -37,14 +37,29 @@ from tqdm import tqdm
 from lerobot.configs.default import DatasetConfig
 from lerobot.configs.policies import PreTrainedConfig
 from lerobot.configs.train import TrainPipelineConfig
+from lerobot.datasets.dataset_metadata import LeRobotDatasetMetadata
 from lerobot.datasets.factory import make_dataset
 from lerobot.policies import make_policy, make_pre_post_processors
 from lerobot.utils.collate import lerobot_collate_fn
 
 
 ACTION_NAMES = (
-    "l_x", "l_y", "l_z", "l_w", "l_wx", "l_wy", "l_wz", "l_g",
-    "r_x", "r_y", "r_z", "r_w", "r_wx", "r_wy", "r_wz", "r_g",
+    "l_x",
+    "l_y",
+    "l_z",
+    "l_w",
+    "l_wx",
+    "l_wy",
+    "l_wz",
+    "l_g",
+    "r_x",
+    "r_y",
+    "r_z",
+    "r_w",
+    "r_wx",
+    "r_wy",
+    "r_wz",
+    "r_g",
 )
 
 ACTION_GROUPS = {
@@ -124,10 +139,9 @@ def parse_args() -> argparse.Namespace:
 def run_batch_evaluation(
     policy,
     preprocessor,
+    postprocessor,
     dataloader,
     dataset,
-    action_mean: torch.Tensor,
-    action_std: torch.Tensor,
     device: torch.device,
     convert_20d_to_16d: bool = False,
 ) -> dict:
@@ -153,7 +167,9 @@ def run_batch_evaluation(
 
     with torch.inference_mode():
         for batch in tqdm(dataloader, desc="Validation", unit="batch"):
-            expert_action_physical = batch["action"].to(device=device, dtype=torch.float32).clone()
+            expert_action_physical = (
+                batch["action"].to(device=device, dtype=torch.float32).clone()
+            )
             for camera_key in dataset.meta.camera_keys:
                 if camera_key in batch and batch[camera_key].dtype == torch.uint8:
                     batch[camera_key] = batch[camera_key].float() / 255.0
@@ -162,40 +178,81 @@ def run_batch_evaluation(
             predicted_action_normalized = policy.predict_action_chunk(batch)
             expert_action_normalized = batch["action"]
             valid_step_mask = ~batch["action_is_pad"]
-            valid_element_mask = valid_step_mask.unsqueeze(-1).expand_as(predicted_action_normalized)
+            valid_element_mask = valid_step_mask.unsqueeze(-1).expand_as(
+                predicted_action_normalized
+            )
 
             # Normalized L1
-            normalized_error = torch.abs(predicted_action_normalized - expert_action_normalized)
+            normalized_error = torch.abs(
+                predicted_action_normalized - expert_action_normalized
+            )
             normalized_error_sum += normalized_error[valid_element_mask].sum().item()
             normalized_error_count += int(valid_element_mask.sum().item())
 
             # Physical MAE
-            predicted_action_physical = predicted_action_normalized * action_std + action_mean
+            batch_size, horizon, action_dim = predicted_action_normalized.shape
+            predicted_action_physical = (
+                postprocessor(
+                    predicted_action_normalized.reshape(
+                        batch_size * horizon, action_dim
+                    )
+                )
+                .reshape(batch_size, horizon, action_dim)
+                .to(device)
+            )
             if convert_20d_to_16d:
-                # Convert predicted 20D → 16D in physical units, then compare with 16D expert
+                # The converted dataset stores both expert and prediction in
+                # physical 20D. Convert both sides only after prediction
+                # postprocessing/denormalization.
                 pred_20d = predicted_action_physical.cpu().numpy()
-                pred_16d = xvla20_to_ee16(pred_20d.reshape(-1, 20)).reshape(pred_20d.shape[:-1] + (16,))
-                predicted_action_physical = torch.as_tensor(pred_16d, dtype=torch.float32, device=device)
-            physical_error = torch.abs(predicted_action_physical - expert_action_physical)
-            physical_error_sum += physical_error[valid_element_mask].sum().item()
-            physical_error_count += int(valid_element_mask.sum().item())
+                pred_16d = xvla20_to_ee16(pred_20d.reshape(-1, 20)).reshape(
+                    pred_20d.shape[:-1] + (16,)
+                )
+                predicted_action_physical = torch.as_tensor(
+                    pred_16d, dtype=torch.float32, device=device
+                )
+                expert_20d = expert_action_physical.cpu().numpy()
+                expert_16d = xvla20_to_ee16(expert_20d.reshape(-1, 20)).reshape(
+                    expert_20d.shape[:-1] + (16,)
+                )
+                expert_action_physical = torch.as_tensor(
+                    expert_16d, dtype=torch.float32, device=device
+                )
+            physical_error = torch.abs(
+                predicted_action_physical - expert_action_physical
+            )
+            physical_valid_mask = valid_step_mask.unsqueeze(-1).expand_as(
+                physical_error
+            )
+            physical_error_sum += physical_error[physical_valid_mask].sum().item()
+            physical_error_count += int(physical_valid_mask.sum().item())
 
             # First step
-            first_mask = valid_element_mask[:, :1]
+            first_mask = physical_valid_mask[:, :1]
             first_error_sum += physical_error[:, :1][first_mask].sum().item()
             first_error_count += int(first_mask.sum().item())
 
             # Execution window
-            execution_steps = min(int(policy.config.n_action_steps), physical_error.shape[1])
-            execution_mask = valid_element_mask[:, :execution_steps]
-            execution_error_sum += physical_error[:, :execution_steps][execution_mask].sum().item()
+            execution_steps = min(
+                int(policy.config.n_action_steps), physical_error.shape[1]
+            )
+            execution_mask = physical_valid_mask[:, :execution_steps]
+            execution_error_sum += (
+                physical_error[:, :execution_steps][execution_mask].sum().item()
+            )
             execution_error_count += int(execution_mask.sum().item())
 
             # Per dimension
             per_dimension_sum += (
-                (physical_error * valid_element_mask).sum(dim=(0, 1)).detach().double().cpu()
+                (physical_error * physical_valid_mask)
+                .sum(dim=(0, 1))
+                .detach()
+                .double()
+                .cpu()
             )
-            per_dimension_count += valid_element_mask.sum(dim=(0, 1)).detach().double().cpu()
+            per_dimension_count += (
+                physical_valid_mask.sum(dim=(0, 1)).detach().double().cpu()
+            )
 
     per_dimension_mae = per_dimension_sum / per_dimension_count.clamp_min(1)
     grouped_mae = {
@@ -216,7 +273,9 @@ def run_batch_evaluation(
             "full_chunk": physical_error_sum / max(physical_error_count, 1),
             "per_dimension": {
                 name: float(value)
-                for name, value in zip(ACTION_NAMES, per_dimension_mae.tolist(), strict=True)
+                for name, value in zip(
+                    ACTION_NAMES, per_dimension_mae.tolist(), strict=True
+                )
             },
             "groups": grouped_mae,
         },
@@ -231,9 +290,8 @@ def run_batch_evaluation(
 def run_sparse_sampling(
     policy,
     preprocessor,
+    postprocessor,
     dataset,
-    action_mean: torch.Tensor,
-    action_std: torch.Tensor,
     device: torch.device,
     stride: int,
     max_samples: int = 0,
@@ -250,6 +308,7 @@ def run_sparse_sampling(
         predicted_array: [N, 16] float array of predicted first-step actions (physical units).
     """
     from utils.xvla_ee import xvla20_to_ee16
+
     sample_indices = list(range(0, len(dataset), stride))
     if max_samples > 0:
         sample_indices = sample_indices[:max_samples]
@@ -280,12 +339,21 @@ def run_sparse_sampling(
         with torch.inference_mode():
             predicted_chunk = policy.predict_action_chunk(batch)  # [1, chunk, D]
         predicted_first_normalized = predicted_chunk[0, 0]  # [D]
-        predicted_first_physical = predicted_first_normalized * action_std[0, 0] + action_mean[0, 0]
+        predicted_first_physical = postprocessor(
+            predicted_first_normalized.unsqueeze(0)
+        )[0].to(device)
 
         if convert_20d_to_16d:
             pred_20d = predicted_first_physical.cpu().numpy().reshape(-1, 20)
             pred_16d = xvla20_to_ee16(pred_20d).reshape(-1)
-            predicted_first_physical = torch.as_tensor(pred_16d, dtype=torch.float32, device=device)
+            predicted_first_physical = torch.as_tensor(
+                pred_16d, dtype=torch.float32, device=device
+            )
+            expert_20d = expert_first[0].cpu().numpy().reshape(-1, 20)
+            expert_16d = xvla20_to_ee16(expert_20d).reshape(-1)
+            expert_first = torch.as_tensor(
+                expert_16d, dtype=torch.float32, device=device
+            ).unsqueeze(0)
 
         first_expert.append(expert_first[0].cpu().numpy())
         first_predicted.append(predicted_first_physical.cpu().numpy())
@@ -391,6 +459,62 @@ def save_mae_bar_charts(
 # ---------------------------------------------------------------------------
 
 
+def validate_local_dataset(
+    repo_id: str,
+    root: Path,
+    episodes: list[int],
+) -> None:
+    """Fail clearly before LeRobot silently falls back to Hugging Face Hub."""
+
+    required_metadata = (
+        root / "meta/info.json",
+        root / "meta/stats.json",
+        root / "meta/tasks.parquet",
+    )
+    missing = [path for path in required_metadata if not path.is_file()]
+    if missing:
+        raise FileNotFoundError(
+            "Local LeRobot dataset metadata is incomplete:\n"
+            + "\n".join(f"  - {path}" for path in missing)
+        )
+    episode_metadata = list((root / "meta/episodes").rglob("*.parquet"))
+    if not episode_metadata:
+        raise FileNotFoundError(
+            f"Local LeRobot dataset has no episode metadata under {root / 'meta/episodes'}"
+        )
+
+    metadata = LeRobotDatasetMetadata(repo_id, root=root)
+    if any(index < 0 or index >= metadata.total_episodes for index in episodes):
+        invalid = [
+            index for index in episodes if index < 0 or index >= metadata.total_episodes
+        ]
+        raise ValueError(
+            f"Split contains out-of-range episodes {invalid[:20]}; "
+            f"dataset has {metadata.total_episodes} episodes"
+        )
+
+    required_paths: set[Path] = set()
+    for episode in episodes:
+        required_paths.add(root / metadata.get_data_file_path(episode))
+        for camera_key in metadata.video_keys:
+            required_paths.add(root / metadata.get_video_file_path(episode, camera_key))
+    missing = sorted(path for path in required_paths if not path.exists())
+    if missing:
+        broken_links = [path for path in missing if path.is_symlink()]
+        detail = "\n".join(f"  - {path}" for path in missing[:50])
+        hint = (
+            "\nBroken video symlinks were detected. Re-run the conversion script "
+            "on the server, or recreate links so they target the server's original dataset."
+            if broken_links
+            else ""
+        )
+        raise FileNotFoundError(
+            f"Local dataset is missing {len(missing)} required data/video files. "
+            "LeRobot would otherwise fall back to the Hub:\n"
+            f"{detail}{hint}"
+        )
+
+
 def main() -> None:
     args = parse_args()
     checkpoint = args.checkpoint.resolve()
@@ -403,6 +527,8 @@ def main() -> None:
     episodes = [int(v) for v in split_data[args.split]]
     if not episodes:
         raise ValueError(f"Split {args.split!r} is empty in {args.split_path}")
+    dataset_root = args.dataset_root.resolve()
+    validate_local_dataset(args.repo_id, dataset_root, episodes)
 
     # Build policy config from checkpoint
     policy_cfg = PreTrainedConfig.from_pretrained(checkpoint)
@@ -412,7 +538,7 @@ def main() -> None:
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(
             repo_id=args.repo_id,
-            root=str(args.dataset_root.resolve()),
+            root=str(dataset_root),
             episodes=episodes,
             video_backend=args.video_backend,
             eval_split=0.0,
@@ -446,30 +572,26 @@ def main() -> None:
     # Build policy and preprocessor
     policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
     device = next(policy.parameters()).device
-    preprocessor, _ = make_pre_post_processors(
+    preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy_cfg,
         pretrained_path=checkpoint,
         dataset_stats=dataset.meta.stats,
     )
     policy.eval()
 
-    # Action stats for unnormalization
-    action_stats = dataset.meta.stats["action"]
-    action_mean = (
-        torch.as_tensor(action_stats["mean"], dtype=torch.float32, device=device)
-        .reshape(1, 1, -1)
-    )
-    action_std = (
-        torch.as_tensor(action_stats["std"], dtype=torch.float32, device=device)
-        .reshape(1, 1, -1)
-    )
-
     # --- Batch evaluation ---
-    print(f"Evaluating {args.split} split: {len(episodes)} episodes, {len(eval_dataset)} frames")
+    print(
+        f"Evaluating {args.split} split: {len(episodes)} episodes, {len(eval_dataset)} frames"
+    )
     if args.convert_20d_to_16d:
         print("20D→16D conversion enabled for physical MAE")
     metrics = run_batch_evaluation(
-        policy, preprocessor, dataloader, dataset, action_mean, action_std, device,
+        policy,
+        preprocessor,
+        postprocessor,
+        dataloader,
+        dataset,
+        device,
         convert_20d_to_16d=args.convert_20d_to_16d,
     )
 
@@ -489,7 +611,12 @@ def main() -> None:
     # --- Sparse sampling for visualization ---
     print(f"Sampling for visualization (stride={args.stride})...")
     frame_indices, expert_array, predicted_array = run_sparse_sampling(
-        policy, preprocessor, dataset, action_mean, action_std, device, args.stride,
+        policy,
+        preprocessor,
+        postprocessor,
+        dataset,
+        device,
+        args.stride,
         convert_20d_to_16d=args.convert_20d_to_16d,
     )
 
