@@ -32,3 +32,62 @@ bash scripts/robodojo.sh server \
 
 动作转换顺序固定为：模型 20D 输出 → LeRobot 后处理/反归一化 →
 `utils/xvla_ee.py` 转换为 RoboDojo 16D EE 动作。
+
+## Checkpoint State 修复
+
+自训 X-VLA checkpoint 的 `observation.state` shape 可能被错误记录为 `[8]`（仅关节角），
+实际应为 `[20]`（关节角 8D + rotation6d 6D × 2 臂 + gripper 2D）。部署服务前需确认
+`config.json`、`policy_preprocessor.json`、`train_config.json` 中 `observation.state`
+的 `shape` 为 `[20]`，否则推理时状态维度不匹配会导致错误。
+
+修复脚本：
+
+```python
+import json
+from pathlib import Path
+
+checkpoint = Path("<pretrained_model目录>")
+
+files = [
+    checkpoint / "config.json",
+    checkpoint / "policy_preprocessor.json",
+    checkpoint / "train_config.json",
+]
+
+def patch_state_shape(value):
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if (
+                key == "observation.state"
+                and isinstance(child, dict)
+                and "shape" in child
+            ):
+                print("patch observation.state:", child["shape"], "-> [20]")
+                child["shape"] = [20]
+            patch_state_shape(child)
+    elif isinstance(value, list):
+        for child in value:
+            patch_state_shape(child)
+
+for path in files:
+    if not path.exists():
+        print("skip missing:", path)
+        continue
+    data = json.loads(path.read_text())
+    patch_state_shape(data)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=4) + "\n")
+    print("updated:", path)
+```
+
+验证：
+
+```bash
+python3 -c "
+import json
+cfg = json.load(open('<pretrained_model目录>/config.json'))
+print('observation.state:', cfg['input_features']['observation.state'])
+print('action:', cfg['output_features']['action'])
+"
+```
+
+两者 `shape` 均应为 `[20]`。
