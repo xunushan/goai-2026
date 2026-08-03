@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """Evaluate a LeRobot ACT checkpoint on validation data with visualization.
 
-Evaluation pipeline
--------------------
-1. Load checkpoint via LeRobot official pipeline (PreTrainedConfig + make_policy).
-2. Build validation dataset from split JSON + lerobot_v3 data.
-3. Batch inference over all val frames → compute metrics.
-4. Sparse sampling for time-series visualization.
+Evaluation pipeline (3 stages)
+------------------------------
+1. Inference:  Run model on sampled validation frames → save raw results (raw_results.npz).
+2. Metrics:    Compute all metrics from raw inference results → save metrics.json.
+3. Visualize:  Generate time-series and bar charts from metrics + raw results → save plots.
 
 Output metrics
 --------------
@@ -26,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import json
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import numpy as np
@@ -114,7 +114,7 @@ def parse_args() -> argparse.Namespace:
         "--stride",
         type=int,
         default=25,
-        help="Sampling stride for visualization (default: 25).",
+        help="Sampling stride for evaluation frames and visualization (default: 25).",
     )
     parser.add_argument(
         "--output-dir",
@@ -128,15 +128,39 @@ def parse_args() -> argparse.Namespace:
         help="Convert 20D X-VLA predictions to 16D EE before computing physical MAE. "
         "Uses utils.xvla_ee.xvla20_to_ee16 (rotation6d→quaternion + gripper invert).",
     )
+    parser.add_argument(
+        "--rename-map",
+        type=str,
+        default=None,
+        help="JSON mapping of dataset feature keys to policy feature keys, "
+        'e.g. \'{"observation.images.cam_high":"observation.images.image"}\'.',
+    )
     return parser.parse_args()
 
 
 # ---------------------------------------------------------------------------
-# Batch evaluation: compute all metrics over the full validation set
+# Stage 1: Inference — collect raw predictions, no metric computation
 # ---------------------------------------------------------------------------
 
 
-def run_batch_evaluation(
+@dataclass
+class InferenceResult:
+    """Raw inference outputs for metric computation and visualization."""
+
+    # Per-frame first-step actions in physical units
+    frame_indices: np.ndarray  # [N] global frame index
+    expert_first: np.ndarray  # [N, action_dim] expert first-step action
+    predicted_first: np.ndarray  # [N, action_dim] predicted first-step action
+
+    # Per-batch data for metric computation
+    physical_errors: list = field(default_factory=list)  # list of [B, chunk, D] arrays
+    valid_masks: list = field(default_factory=list)  # list of [B, chunk] bool arrays
+    normalized_error_sums: list = field(default_factory=list)  # per-batch sum
+    normalized_error_counts: list = field(default_factory=list)  # per-batch count
+    execution_steps: int = 0
+
+
+def run_inference(
     policy,
     preprocessor,
     postprocessor,
@@ -144,29 +168,26 @@ def run_batch_evaluation(
     dataset,
     device: torch.device,
     convert_20d_to_16d: bool = False,
-) -> dict:
-    """Run batch inference and compute normalized + physical-unit metrics.
+) -> InferenceResult:
+    """Run batch inference and collect raw data (no metric computation).
 
-    When *convert_20d_to_16d* is True, predicted actions are unnormalized to
-    physical 20D, then converted to 16D via ``xvla20_to_ee16`` before comparing
-    with the 16D expert actions.  The normalized L1 (eval_loss) is still computed
-    in the model's native 20D space.
+    Returns an InferenceResult containing per-frame expert/predicted actions
+    and per-batch error tensors for downstream metric computation.
     """
     from utils.xvla_ee import xvla20_to_ee16
 
-    normalized_error_sum = 0.0
-    normalized_error_count = 0
-    physical_error_sum = 0.0
-    physical_error_count = 0
-    first_error_sum = 0.0
-    first_error_count = 0
-    execution_error_sum = 0.0
-    execution_error_count = 0
-    per_dimension_sum = torch.zeros(len(ACTION_NAMES), dtype=torch.float64)
-    per_dimension_count = torch.zeros(len(ACTION_NAMES), dtype=torch.float64)
+    first_expert: list[np.ndarray] = []
+    first_predicted: list[np.ndarray] = []
+    frame_indices: list[int] = []
+    physical_errors: list[np.ndarray] = []
+    valid_masks: list[np.ndarray] = []
+    normalized_error_sums: list[float] = []
+    normalized_error_counts: list[int] = []
+
+    global_idx = 0
 
     with torch.inference_mode():
-        for batch in tqdm(dataloader, desc="Validation", unit="batch"):
+        for batch in tqdm(dataloader, desc="Inference", unit="batch"):
             expert_action_physical = (
                 batch["action"].to(device=device, dtype=torch.float32).clone()
             )
@@ -178,18 +199,20 @@ def run_batch_evaluation(
             predicted_action_normalized = policy.predict_action_chunk(batch)
             expert_action_normalized = batch["action"]
             valid_step_mask = ~batch["action_is_pad"]
+
+            # Normalized L1 (collect raw sums for later aggregation)
             valid_element_mask = valid_step_mask.unsqueeze(-1).expand_as(
                 predicted_action_normalized
             )
-
-            # Normalized L1
             normalized_error = torch.abs(
                 predicted_action_normalized - expert_action_normalized
             )
-            normalized_error_sum += normalized_error[valid_element_mask].sum().item()
-            normalized_error_count += int(valid_element_mask.sum().item())
+            normalized_error_sums.append(
+                normalized_error[valid_element_mask].sum().item()
+            )
+            normalized_error_counts.append(int(valid_element_mask.sum().item()))
 
-            # Physical MAE
+            # Physical-space prediction
             batch_size, horizon, action_dim = predicted_action_normalized.shape
             predicted_action_physical = (
                 postprocessor(
@@ -201,173 +224,117 @@ def run_batch_evaluation(
                 .to(device)
             )
             if convert_20d_to_16d:
-                # The converted dataset stores both expert and prediction in
-                # physical 20D. Convert both sides only after prediction
-                # postprocessing/denormalization.
-                pred_20d = predicted_action_physical.cpu().numpy()
+                pred_20d = predicted_action_physical.float().cpu().numpy()
                 pred_16d = xvla20_to_ee16(pred_20d.reshape(-1, 20)).reshape(
                     pred_20d.shape[:-1] + (16,)
                 )
                 predicted_action_physical = torch.as_tensor(
                     pred_16d, dtype=torch.float32, device=device
                 )
-                expert_20d = expert_action_physical.cpu().numpy()
+                expert_20d = expert_action_physical.float().cpu().numpy()
                 expert_16d = xvla20_to_ee16(expert_20d.reshape(-1, 20)).reshape(
                     expert_20d.shape[:-1] + (16,)
                 )
                 expert_action_physical = torch.as_tensor(
                     expert_16d, dtype=torch.float32, device=device
                 )
+
+            # Physical error (collect for later metric computation)
             physical_error = torch.abs(
                 predicted_action_physical - expert_action_physical
             )
             physical_valid_mask = valid_step_mask.unsqueeze(-1).expand_as(
                 physical_error
             )
-            physical_error_sum += physical_error[physical_valid_mask].sum().item()
-            physical_error_count += int(physical_valid_mask.sum().item())
+            physical_errors.append(physical_error.cpu().numpy())
+            valid_masks.append(physical_valid_mask.cpu().numpy())
 
-            # First step
-            first_mask = physical_valid_mask[:, :1]
-            first_error_sum += physical_error[:, :1][first_mask].sum().item()
-            first_error_count += int(first_mask.sum().item())
+            # Collect per-frame first-step actions
+            for b in range(batch_size):
+                frame_indices.append(global_idx)
+                first_expert.append(
+                    expert_action_physical[b, 0].float().cpu().numpy()
+                )
+                first_predicted.append(
+                    predicted_action_physical[b, 0].float().cpu().numpy()
+                )
+                global_idx += 1
 
-            # Execution window
-            execution_steps = min(
-                int(policy.config.n_action_steps), physical_error.shape[1]
-            )
-            execution_mask = physical_valid_mask[:, :execution_steps]
-            execution_error_sum += (
-                physical_error[:, :execution_steps][execution_mask].sum().item()
-            )
-            execution_error_count += int(execution_mask.sum().item())
+    return InferenceResult(
+        frame_indices=np.asarray(frame_indices),
+        expert_first=np.stack(first_expert),
+        predicted_first=np.stack(first_predicted),
+        physical_errors=physical_errors,
+        valid_masks=valid_masks,
+        normalized_error_sums=normalized_error_sums,
+        normalized_error_counts=normalized_error_counts,
+        execution_steps=int(policy.config.n_action_steps),
+    )
 
-            # Per dimension
-            per_dimension_sum += (
-                (physical_error * physical_valid_mask)
-                .sum(dim=(0, 1))
-                .detach()
-                .double()
-                .cpu()
-            )
-            per_dimension_count += (
-                physical_valid_mask.sum(dim=(0, 1)).detach().double().cpu()
-            )
 
-    per_dimension_mae = per_dimension_sum / per_dimension_count.clamp_min(1)
-    grouped_mae = {
-        name: float(
-            per_dimension_sum[list(indices)].sum()
-            / per_dimension_count[list(indices)].sum().clamp_min(1)
-        )
-        for name, indices in ACTION_GROUPS.items()
+# ---------------------------------------------------------------------------
+# Stage 2: Metric computation — pure calculation, no model involved
+# ---------------------------------------------------------------------------
+
+
+def compute_metrics(result: InferenceResult) -> dict:
+    """Compute all metrics from InferenceResult. No model involved."""
+    # Aggregate normalized L1
+    normalized_l1 = sum(result.normalized_error_sums) / max(
+        sum(result.normalized_error_counts), 1
+    )
+
+    # Aggregate physical errors
+    all_physical = np.concatenate(result.physical_errors, axis=0)  # [N, chunk, D]
+    all_valid = np.concatenate(result.valid_masks, axis=0)  # [N, chunk, D]
+
+    # Full chunk MAE
+    physical_mae_full = float(all_physical[all_valid].mean()) if all_valid.any() else 0.0
+
+    # First step MAE
+    first_valid = all_valid[:, :1]
+    first_errors = all_physical[:, :1]
+    physical_mae_first = float(first_errors[first_valid].mean()) if first_valid.any() else 0.0
+
+    # Execution window MAE
+    exec_steps = min(result.execution_steps, all_physical.shape[1])
+    exec_valid = all_valid[:, :exec_steps]
+    exec_errors = all_physical[:, :exec_steps]
+    physical_mae_exec = float(exec_errors[exec_valid].mean()) if exec_valid.any() else 0.0
+
+    # Per-dimension MAE
+    per_dim_sum = (all_physical * all_valid).sum(axis=(0, 1))  # [D]
+    per_dim_count = all_valid.sum(axis=(0, 1))  # [D]
+    per_dim_count = np.maximum(per_dim_count, 1)
+    per_dim_mae = per_dim_sum / per_dim_count
+    per_dimension = {
+        name: float(value)
+        for name, value in zip(ACTION_NAMES, per_dim_mae.tolist(), strict=True)
     }
-    normalized_l1 = normalized_error_sum / max(normalized_error_count, 1)
+
+    # Grouped MAE
+    grouped = {}
+    for name, indices in ACTION_GROUPS.items():
+        idx = list(indices)
+        group_sum = per_dim_sum[idx].sum()
+        group_count = per_dim_count[idx].sum()
+        grouped[name] = float(group_sum / max(group_count, 1))
 
     return {
         "eval_loss": normalized_l1,
         "physical_mae": {
-            "first_step": first_error_sum / max(first_error_count, 1),
-            "execution_window": execution_error_sum / max(execution_error_count, 1),
-            "execution_steps": int(policy.config.n_action_steps),
-            "full_chunk": physical_error_sum / max(physical_error_count, 1),
-            "per_dimension": {
-                name: float(value)
-                for name, value in zip(
-                    ACTION_NAMES, per_dimension_mae.tolist(), strict=True
-                )
-            },
-            "groups": grouped_mae,
+            "first_step": physical_mae_first,
+            "execution_window": physical_mae_exec,
+            "execution_steps": exec_steps,
+            "full_chunk": physical_mae_full,
+            "per_dimension": per_dimension,
+            "groups": grouped,
         },
     }
 
 
 # ---------------------------------------------------------------------------
-# Sparse sampling for visualization
-# ---------------------------------------------------------------------------
-
-
-def run_sparse_sampling(
-    policy,
-    preprocessor,
-    postprocessor,
-    dataset,
-    device: torch.device,
-    stride: int,
-    max_samples: int = 0,
-    convert_20d_to_16d: bool = False,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Sample observations at stride intervals and collect expert/predicted actions.
-
-    Uses the same collate + preprocessor pipeline as batch evaluation to ensure
-    consistency. Samples are processed one-by-one to keep memory low.
-
-    Returns:
-        frame_indices: 1-D int array of sampled frame indices.
-        expert_array:  [N, 16] float array of expert first-step actions (physical units).
-        predicted_array: [N, 16] float array of predicted first-step actions (physical units).
-    """
-    from utils.xvla_ee import xvla20_to_ee16
-
-    sample_indices = list(range(0, len(dataset), stride))
-    if max_samples > 0:
-        sample_indices = sample_indices[:max_samples]
-
-    collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
-
-    first_expert: list[np.ndarray] = []
-    first_predicted: list[np.ndarray] = []
-    frame_indices: list[int] = []
-
-    for idx in tqdm(sample_indices, desc="Sampling for visualization", unit="frame"):
-        sample = dataset[idx]
-        # Collate single sample into batch format (same as DataLoader)
-        if collate_fn is not None:
-            batch = collate_fn([sample])
-        else:
-            batch = default_collate([sample])
-
-        # Save expert action in physical units before preprocessor normalizes it
-        expert_first = batch["action"].to(device=device, dtype=torch.float32).clone()
-
-        # Preprocess: normalize images and state (same as batch evaluation)
-        for camera_key in dataset.meta.camera_keys:
-            if camera_key in batch and batch[camera_key].dtype == torch.uint8:
-                batch[camera_key] = batch[camera_key].float() / 255.0
-        batch = preprocessor(batch)
-
-        with torch.inference_mode():
-            predicted_chunk = policy.predict_action_chunk(batch)  # [1, chunk, D]
-        predicted_first_normalized = predicted_chunk[0, 0]  # [D]
-        predicted_first_physical = postprocessor(
-            predicted_first_normalized.unsqueeze(0)
-        )[0].to(device)
-
-        if convert_20d_to_16d:
-            pred_20d = predicted_first_physical.cpu().numpy().reshape(-1, 20)
-            pred_16d = xvla20_to_ee16(pred_20d).reshape(-1)
-            predicted_first_physical = torch.as_tensor(
-                pred_16d, dtype=torch.float32, device=device
-            )
-            expert_20d = expert_first[0].cpu().numpy().reshape(-1, 20)
-            expert_16d = xvla20_to_ee16(expert_20d).reshape(-1)
-            expert_first = torch.as_tensor(
-                expert_16d, dtype=torch.float32, device=device
-            ).unsqueeze(0)
-
-        first_expert.append(expert_first[0].cpu().numpy())
-        first_predicted.append(predicted_first_physical.cpu().numpy())
-        frame_indices.append(idx)
-
-    return (
-        np.asarray(frame_indices),
-        np.stack(first_expert),
-        np.stack(first_predicted),
-    )
-
-
-# ---------------------------------------------------------------------------
-# Visualization
+# Stage 3: Visualization
 # ---------------------------------------------------------------------------
 
 
@@ -535,6 +502,7 @@ def main() -> None:
     policy_cfg.pretrained_path = checkpoint
 
     # Build dataset
+    rename_map = json.loads(args.rename_map) if args.rename_map else {}
     cfg = TrainPipelineConfig(
         dataset=DatasetConfig(
             repo_id=args.repo_id,
@@ -547,6 +515,7 @@ def main() -> None:
         batch_size=args.batch_size,
         num_workers=args.num_workers,
         eval_steps=0,
+        rename_map=rename_map,
     )
     dataset = make_dataset(cfg)
 
@@ -555,6 +524,10 @@ def main() -> None:
         count = min(args.max_samples, len(dataset))
         indices = torch.linspace(0, len(dataset) - 1, steps=count).long().tolist()
         eval_dataset = Subset(dataset, indices)
+    elif args.stride > 1:
+        indices = list(range(0, len(dataset), args.stride))
+        eval_dataset = Subset(dataset, indices)
+        print(f"Stride={args.stride}: evaluating {len(indices)}/{len(dataset)} frames")
 
     collate_fn = lerobot_collate_fn if dataset.meta.has_language_columns else None
     dataloader = DataLoader(
@@ -570,7 +543,7 @@ def main() -> None:
     )
 
     # Build policy and preprocessor
-    policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta)
+    policy = make_policy(cfg=policy_cfg, ds_meta=dataset.meta, rename_map=rename_map or None)
     device = next(policy.parameters()).device
     preprocessor, postprocessor = make_pre_post_processors(
         policy_cfg=policy_cfg,
@@ -579,13 +552,16 @@ def main() -> None:
     )
     policy.eval()
 
-    # --- Batch evaluation ---
+    output_dir = args.output_dir.resolve()
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    # --- Stage 1: Inference ---
     print(
         f"Evaluating {args.split} split: {len(episodes)} episodes, {len(eval_dataset)} frames"
     )
     if args.convert_20d_to_16d:
         print("20D→16D conversion enabled for physical MAE")
-    metrics = run_batch_evaluation(
+    inference_result = run_inference(
         policy,
         preprocessor,
         postprocessor,
@@ -595,7 +571,17 @@ def main() -> None:
         convert_20d_to_16d=args.convert_20d_to_16d,
     )
 
-    # Build result dict
+    # Save raw inference results
+    np.savez(
+        output_dir / "raw_results.npz",
+        frame_indices=inference_result.frame_indices,
+        expert_first=inference_result.expert_first,
+        predicted_first=inference_result.predicted_first,
+    )
+    print(f"Saved raw results: {output_dir / 'raw_results.npz'}")
+
+    # --- Stage 2: Metric computation ---
+    metrics = compute_metrics(inference_result)
     result = {
         "checkpoint": str(checkpoint),
         "split": args.split,
@@ -607,31 +593,19 @@ def main() -> None:
         "convert_20d_to_16d": args.convert_20d_to_16d,
         **metrics,
     }
-
-    # --- Sparse sampling for visualization ---
-    print(f"Sampling for visualization (stride={args.stride})...")
-    frame_indices, expert_array, predicted_array = run_sparse_sampling(
-        policy,
-        preprocessor,
-        postprocessor,
-        dataset,
-        device,
-        args.stride,
-        convert_20d_to_16d=args.convert_20d_to_16d,
-    )
-
-    # --- Output ---
-    output_dir = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-
-    # Save metrics JSON
     text = json.dumps(result, ensure_ascii=False, indent=2)
     (output_dir / "metrics.json").write_text(text + "\n", encoding="utf-8")
     print(text)
     print(f"Saved metrics: {output_dir / 'metrics.json'}")
 
-    # Save visualization
-    save_timeseries_plots(output_dir, frame_indices, expert_array, predicted_array)
+    # --- Stage 3: Visualization ---
+    # Downsample for time-series plots using stride
+    vis_stride = args.stride
+    vis_indices = inference_result.frame_indices[::vis_stride]
+    vis_expert = inference_result.expert_first[::vis_stride]
+    vis_predicted = inference_result.predicted_first[::vis_stride]
+
+    save_timeseries_plots(output_dir, vis_indices, vis_expert, vis_predicted)
     save_mae_bar_charts(
         output_dir,
         metrics["physical_mae"]["per_dimension"],
