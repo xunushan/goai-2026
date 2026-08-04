@@ -1,9 +1,89 @@
 #!/usr/bin/env python3
-"""Stream-audit a LeRobot v3 EE dataset without decoding video.
+"""LeRobot v3 数据集质量审计（仅数值数据，不解码视频）。
 
-The main parquet files are processed one row group at a time and only numeric
-columns are loaded. Outputs include a human-readable report, per-episode
-metrics, and a JSONL list of findings that can later drive video extraction.
+按 row group 逐批读取 parquet 主数据文件，仅加载数值列，检测数据完整性问题。
+输出人类可读报告、episode 粒度指标和 findings JSONL（可驱动后续视频提取确认）。
+
+================================================================================
+检测类别
+================================================================================
+
+frame_sequence              帧编号不连续              critical  不需要视频
+timestamp_sequence          时间戳不连续              critical  需要视频
+global_index_sequence       全局索引不连续            critical  不需要视频
+non_finite_values           存在 NaN 或 Inf           critical  不需要视频
+metadata_length_mismatch    元数据与主数据长度不一致   critical  不需要视频
+metadata_task_mismatch      任务文本与 task_index 不一致 critical  不需要视频
+video_metadata_missing      缺少三路视频定位元数据     critical  不需要视频
+action_state_tracking       action 与下一帧 state 跟踪误差异常 high    需要视频
+action_discontinuity        相邻 action 存在异常跳变   high      需要视频
+quaternion_norm             四元数范数异常（≠1）        critical  不需要视频
+quaternion_sign_flip        四元数发生 q/-q 符号翻转   medium    不需要视频
+
+================================================================================
+关键参数（命令行参数）
+================================================================================
+
+--tracking-translation-m     0.005   action 与 next-state 位移误差阈值（米）
+--tracking-rotation-deg      5.0     action 与 next-state 旋转误差阈值（度）
+--jump-translation-m         0.05    相邻 action 位移跳变阈值（米）
+--jump-rotation-deg          15.0    相邻 action 旋转跳变阈值（度）
+--quaternion-norm-tolerance  0.02    四元数范数容差（偏离 1 的最大允许量）
+--fps-tolerance              1e-4    时间戳帧间隔容差（秒）
+--chunk-size                 50      chunk 大小，用于 padding 比例统计
+--max-findings-per-type      200     每类问题最多保留数量
+--task                       None    精确任务文本；不指定则审计所有任务
+
+================================================================================
+输出文件
+================================================================================
+
+episode_metrics.csv
+    每个 episode 的统计指标：tracking/jump/rotation/max 等数值，以及
+    padding_fraction（用于判断训练时 future action 是否充足）。
+
+integrity_findings.jsonl
+    所有检测到的问题条目（review_required=true 的需要视频确认），
+    包含 issue_id、severity、category、start_frame、end_frame、key_frames、
+    metrics、questions 等字段。
+
+audit_summary.json
+    统计摘要，包含已审计 episode 数、元数据 episode 数、各类别 findings 数量、
+    review_required 数量、当前阈值配置。
+
+audit_report.md
+    人类可读的 Markdown 报告，含结论说明、自动判定结果、findings 分类表、
+    padding 风险统计。
+
+================================================================================
+用法
+================================================================================
+
+    python audit_dataset_quality.py \
+        --dataset data/lerobot_v30_ee \
+        --task "Stack the three blocks with different textures." \
+        --output-dir outputs/audit
+
+    # 不指定 task，审计所有任务
+    python audit_dataset_quality.py \
+        --dataset data/lerobot_v30_ee \
+        --output-dir outputs/audit_all
+
+    # 自定义阈值
+    python audit_dataset_quality.py \
+        --dataset data/lerobot_v30_ee \
+        --task "Stack the three blocks with different textures." \
+        --output-dir outputs/audit \
+        --tracking-translation-m 0.003 \
+        --jump-translation-m 0.02
+
+================================================================================
+注意
+================================================================================
+
+所有 findings 仅基于数值数据判定。review_required=true 的条目需要根据
+episode_index / start_frame / end_frame / key_frames 从三路视频中提取
+对应片段进行人工确认。
 """
 
 from __future__ import annotations

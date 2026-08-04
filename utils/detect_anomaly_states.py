@@ -4,6 +4,90 @@
 This script does not claim that an object was grasped, dropped, or recovered.
 It creates a ranked review queue whose semantics must be confirmed from video.
 Main parquet files are read one row group at a time.
+
+================================================================================
+检测类别
+================================================================================
+
+rapid_regrasp
+    短时间内出现闭合—打开—再次闭合的抓取模式。
+    判据：pattern=(1,0,1,0)，且 t2-t0 <= rapid_regrasp_seconds，末端返回距离 <= regrasp_return_distance_m。
+
+sustained_tracking_error
+    Action 与下一帧 state 持续不一致，可能指示碰撞、阻挡或控制失败。
+    判据：translation error > tracking_translation_m 或 rotation error > tracking_rotation_deg 连续 >=3 帧。
+
+local_oscillation
+    小范围内反复运动且净位移很小，可能指示精细对准或无效振荡。
+    判据：路径长 >0.025m，净位移 <0.006m，方向反转 >=4 次。
+
+trajectory_return
+    末端执行器返回较早访问过的位置，可能指示重试或恢复。
+    判据：大范围移动（>0.12m）后回到之前位置附近（<0.012m）。
+
+================================================================================
+关键参数（命令行参数）
+================================================================================
+
+--open-threshold       0.8       夹爪张开阈值（0~1）
+--closed-threshold     0.5       夹爪闭合阈值（0~1）
+--debounce-frames      4         夹爪状态去抖帧数
+--rapid-regrasp-seconds 3.0      快速重抓的时间窗口（秒）
+--regrasp-return-distance-m 0.08 重抓后末端允许的最大返回距离（米）
+--merge-gap-frames     25        同一臂事件合并的最大间隔帧数
+--max-merged-window-frames 125   合并后事件的最大窗口帧数
+--tracking-translation-m 0.005   位移误差阈值（米/帧）
+--tracking-rotation-deg 5.0      旋转误差阈值（度/帧）
+--stagnation-window    25        振荡检测窗口大小（帧）
+--negative-controls    8         随机正常对照片段数量
+--max-candidates       300       最大候选数量
+
+================================================================================
+输出文件
+================================================================================
+
+recovery_candidates.jsonl
+    所有检测到的候选片段（含 rapid_regrasp / sustained_tracking_error /
+    local_oscillation / trajectory_return 四类，以及 negative_control）。
+
+review_queue.jsonl
+    合并 integrity_findings.jsonl（可选）和 recovery_candidates.jsonl 后的
+    完整待确认队列，按 severity 排序：critical > high > medium > low > control。
+
+recovery_summary.json
+    统计摘要，包含 task、task_index、episodes_scanned、各类别计数、
+    negative_controls 数量、review_queue_size。
+
+recovery_report.md
+    人类可读的 Markdown 报告。
+
+================================================================================
+用法
+================================================================================
+
+    python find_recovery_candidates.py \
+        --dataset data/lerobot_v30_ee \
+        --task "Stack the three blocks with different textures." \
+        --output-dir outputs/recovery
+
+    # 自定义阈值示例
+    python find_recovery_candidates.py \
+        --dataset data/lerobot_v30_ee \
+        --task "Stack the three blocks with different textures." \
+        --output-dir outputs/recovery \
+        --open-threshold 0.85 \
+        --closed-threshold 0.45 \
+        --rapid-regrasp-seconds 2.0 \
+        --tracking-translation-m 0.003 \
+        --negative-controls 12
+
+================================================================================
+注意
+================================================================================
+
+所有数值规则检测的结果仅供视频确认用，不能直接判定抓取、碰撞、掉落或恢复
+是否真实发生。视频确认需根据 episode_index / start_frame / end_frame
+从对应相机视频中提取片段回放。
 """
 
 from __future__ import annotations
