@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Compare two safetensors checkpoints with pluggable key mapping.
+"""
+Compare two safetensors checkpoints with pluggable key mapping.
 
 Architecture
 ------------
@@ -13,11 +14,34 @@ Architecture
 
 Usage
 -----
-  # 通用场景（任意 safetensors 模型）
-  python checkpoint_diff.py weight-diff model_a.safetensors model_b.safetensors
+================================================================================
+通用调用示例（任意 safetensors 模型）
+================================================================================
 
-  # X-VLA 场景（完整报告）
-  python checkpoint_diff.py full xvla-base.safetensors ft-30k.safetensors
+from checkpoint_diff import CheckpointData, CheckpointComparator
+
+# 1. 一次性加载两个 checkpoint 到内存
+orig = CheckpointData.from_path("model_a.safetensors")
+ft   = CheckpointData.from_path("model_b.safetensors")
+
+# 2. 创建比较器（不注入 mapper，默认 IdentityMapper，同名 key 1:1 映射）
+comp = CheckpointComparator(orig, ft)
+
+# 3. Key 差异分析
+kd = comp.key_diff()
+print(f"Identity 映射: {kd.identity_count}, 缺失: {len(kd.missing)}, 新增: {kd.unmapped_ft_count}")
+
+# 4. 权重差异分析（核心：判断哪些参数被真正训练更新）
+wd = comp.weight_diff(threshold=3.0, top_n=5)
+print(f"实质性更新: {len(wd.updated)} ({wd.update_ratio:.1f}%)")
+for mod, cnt in wd.prefix_stats.most_common(5):
+    print(f"  {mod}: {cnt}")
+
+# 5. 对指定 key 输出详细 diff 表格
+print(comp.sample_report(["model.layers.0.attn.q_proj.weight"], threshold=3.0))
+
+# 6. 完整文本报告
+print(comp.full_text_report(threshold=3.0, sample_keys=[...], target_prefixes=["model.layers.0"]))
 """
 
 from __future__ import annotations
@@ -32,10 +56,10 @@ from typing import Optional, Protocol, Sequence
 import torch
 from safetensors import safe_open
 
-
 # ============================================================================
 # 1. Data layer – one-shot load
 # ============================================================================
+
 
 @dataclass
 class CheckpointData:
@@ -94,6 +118,7 @@ class CheckpointData:
 # 2. Mapping layer – pluggable, identity by default
 # ============================================================================
 
+
 class KeyMapper(Protocol):
     """Key 映射协议：用于处理两个 checkpoint 之间 key 命名不一致的情况。
 
@@ -108,13 +133,19 @@ class KeyMapper(Protocol):
        使其 shape 和语义与训练后 tensor 对齐。
     """
 
-    def build_mapping(self, ft_keys: set[str], orig_keys: set[str]) -> dict[str, str]: ...
+    def build_mapping(
+        self, ft_keys: set[str], orig_keys: set[str]
+    ) -> dict[str, str]: ...
+
     """返回映射字典：{ft_key: orig_key}。
 
     如果某个 ft_key 在 orig_keys 中找不到对应，则不应出现在返回字典中。
     """
 
-    def transform_tensor(self, ft_key: str, orig_tensor: torch.Tensor) -> torch.Tensor: ...
+    def transform_tensor(
+        self, ft_key: str, orig_tensor: torch.Tensor
+    ) -> torch.Tensor: ...
+
     """根据 ft_key 判断是否需要对 orig_tensor 做变换（如 transpose）。
 
     默认实现直接返回原 tensor，不做任何修改。
@@ -139,6 +170,7 @@ class IdentityMapper:
 # ============================================================================
 # 3. Generic comparator – model-agnostic
 # ============================================================================
+
 
 @dataclass
 class KeyDiffResult:
@@ -216,7 +248,12 @@ class WeightDiffResult:
     @property
     def total_processed(self) -> int:
         """总共处理了多少个 key（所有分类之和）。"""
-        return len(self.updated) + len(self.precision_only) + len(self.new_keys) + len(self.unmatched)
+        return (
+            len(self.updated)
+            + len(self.precision_only)
+            + len(self.new_keys)
+            + len(self.unmatched)
+        )
 
     @property
     def update_ratio(self) -> float:
@@ -456,7 +493,9 @@ class CheckpointComparator:
         lines.append("-" * 50)
         lines.append(f"  Identity 映射:     {kd.identity_count}")
         lines.append(f"  Custom 映射:       {kd.custom_mapped_count}")
-        lines.append(f"  总映射数:          {kd.identity_count + kd.custom_mapped_count}")
+        lines.append(
+            f"  总映射数:          {kd.identity_count + kd.custom_mapped_count}"
+        )
         lines.append(f"  缺失 (orig 有 ft 无): {len(kd.missing)}")
         lines.append(f"  新增 (ft 有 orig 无): {kd.unmapped_ft_count}")
         lines.append("")
@@ -484,7 +523,9 @@ class CheckpointComparator:
             lines.append("")
 
         # ---- Weight diff section ----
-        wd = self.weight_diff(threshold=threshold, target_prefixes=target_prefixes, top_n=top_n)
+        wd = self.weight_diff(
+            threshold=threshold, target_prefixes=target_prefixes, top_n=top_n
+        )
         lines.append("-" * 50)
         lines.append("Weight Diff 统计")
         lines.append("-" * 50)
@@ -522,6 +563,7 @@ class CheckpointComparator:
 # ============================================================================
 # 4. X-VLA custom mapper – 隔离模型特定的 key 重映射逻辑
 # ============================================================================
+
 
 class XVLAKeyMapper:
     """X-VLA 场景专用的 KeyMapper。
@@ -575,7 +617,9 @@ class XVLAKeyMapper:
 
         # 3. multi_modal_projector 子模块命名变更
         if "multi_modal_projector.image_position_embed" in ft_key:
-            c = ft_key.replace("multi_modal_projector.image_position_embed", "image_pos_embed")
+            c = ft_key.replace(
+                "multi_modal_projector.image_position_embed", "image_pos_embed"
+            )
             return c if c in orig_keys else None
         if "multi_modal_projector.image_proj_norm" in ft_key:
             c = ft_key.replace("multi_modal_projector.", "")
@@ -586,7 +630,14 @@ class XVLAKeyMapper:
 
         # 4. vision_tower: DaViT 的 channel_attn / window_attn 去掉 .fn.
         if "channel_attn." in ft_key or "window_attn." in ft_key:
-            for suffix in (".qkv.", ".proj.", ".q_proj.", ".k_proj.", ".v_proj.", ".out_proj."):
+            for suffix in (
+                ".qkv.",
+                ".proj.",
+                ".q_proj.",
+                ".k_proj.",
+                ".v_proj.",
+                ".out_proj.",
+            ):
                 if suffix in ft_key:
                     c = ft_key.replace(suffix, ".fn" + suffix)
                     if c in orig_keys:
@@ -632,6 +683,7 @@ class XVLAKeyMapper:
 # 5. X-VLA special checks – 模型特定的专项检查
 # ============================================================================
 
+
 class XVLASpecialChecker:
     """X-VLA 场景特有的额外检查，与通用分析器解耦。
 
@@ -655,7 +707,9 @@ class XVLASpecialChecker:
         lines = ["\n--- shared.weight 修复验证 ---"]
         orig_has = "model.vlm.language_model.shared.weight" in self.orig.keys
         ft_has = "model.vlm.language_model.shared.weight" in self.ft.keys
-        ft_has_embed = "model.vlm.language_model.encoder.embed_tokens.weight" in self.ft.keys
+        ft_has_embed = (
+            "model.vlm.language_model.encoder.embed_tokens.weight" in self.ft.keys
+        )
 
         lines.append(f"  原始有 shared.weight: {orig_has}")
         lines.append(f"  训练后有 shared.weight: {ft_has}")
@@ -664,7 +718,9 @@ class XVLASpecialChecker:
         if not ft_has and ft_has_embed:
             # 训练后没有 shared.weight，但有 embed_tokens.weight
             # 需要验证 embed_tokens 和原始的 shared.weight 是否一致
-            ft_embed = self.ft.tensors["model.vlm.language_model.encoder.embed_tokens.weight"]
+            ft_embed = self.ft.tensors[
+                "model.vlm.language_model.encoder.embed_tokens.weight"
+            ]
             orig_key = None
             for cand in (
                 "model.vlm.language_model.encoder.embed_tokens.weight",
@@ -751,6 +807,7 @@ class XVLASpecialChecker:
 # 6. X-VLA analyzer – 组装通用分析 + 专项检查
 # ============================================================================
 
+
 class XVLACheckpointAnalyzer:
     """X-VLA 场景的一站式分析器。
 
@@ -791,6 +848,7 @@ class XVLACheckpointAnalyzer:
 # 7. CLI
 # ============================================================================
 
+
 def _default_samples() -> list[str]:
     """X-VLA 默认采样 key，用于快速查看关键层的更新情况。"""
     return [
@@ -804,6 +862,29 @@ def _default_samples() -> list[str]:
 
 
 def main() -> None:
+    """
+    Lerobot  X-VLA 调用示例：
+     ----------------
+     # Python API 方式
+     from checkpoint_diff import XVLACheckpointAnalyzer
+
+     analyzer = XVLACheckpointAnalyzer(
+         "xvla-base.safetensors",
+         "ft-30k.safetensors"
+     )
+     report = analyzer.full_report(
+         threshold=3.0,
+         sample_keys=["model.transformer.action_decoder.fc.weight"],
+         target_prefixes=["model.transformer"],
+         top_n=5,
+     )
+     print(report)
+
+     # CLI 方式
+     python checkpoint_diff.py full xvla-base.safetensors ft-30k.safetensors --threshold 3.0
+     python checkpoint_diff.py full xvla-base.safetensors ft-30k.safetensors --prefixes model.transformer model.vlm.vision_tower
+    """
+
     parser = argparse.ArgumentParser(
         description="Compare two safetensors checkpoints with pluggable key mapping.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -820,15 +901,23 @@ def main() -> None:
     p_wt = sub.add_parser("weight-diff", help="对比权重差异，输出统计")
     p_wt.add_argument("orig", help="Original model.safetensors")
     p_wt.add_argument("ft", help="Fine-tuned model.safetensors")
-    p_wt.add_argument("--threshold", type=float, default=3.0, help="Ratio threshold (default: 3.0)")
-    p_wt.add_argument("--prefixes", nargs="+", default=None, help="Target prefixes to report")
+    p_wt.add_argument(
+        "--threshold", type=float, default=3.0, help="Ratio threshold (default: 3.0)"
+    )
+    p_wt.add_argument(
+        "--prefixes", nargs="+", default=None, help="Target prefixes to report"
+    )
 
     # ---- full ----
     p_full = sub.add_parser("full", help="X-VLA 完整报告（key + weight + 专项检查）")
     p_full.add_argument("orig", help="Original model.safetensors")
     p_full.add_argument("ft", help="Fine-tuned model.safetensors")
-    p_full.add_argument("--threshold", type=float, default=3.0, help="Ratio threshold (default: 3.0)")
-    p_full.add_argument("--prefixes", nargs="+", default=None, help="Target prefixes to report")
+    p_full.add_argument(
+        "--threshold", type=float, default=3.0, help="Ratio threshold (default: 3.0)"
+    )
+    p_full.add_argument(
+        "--prefixes", nargs="+", default=None, help="Target prefixes to report"
+    )
 
     args = parser.parse_args()
 
