@@ -1,0 +1,47 @@
+# Basic experiment configuration
+policy_name: xvla_2
+protocol: ws
+host: localhost
+port: null
+
+bench_name: null
+task_name: null
+ckpt_name: null
+env_cfg_type: arx_x5
+action_type: ee
+seed: 0
+eval_batch: false
+
+# 模型来源：本地 checkpoint 目录优先（已提前下载到 /data/checkpoints）。
+#   HF 下载命令：
+#     huggingface-cli download tianSeconds/goai/xvla-ee6d/002000 \
+#       --local-dir /data/checkpoints/xvla-ee6d/002000
+# 本地目录不存在时视为 HF repo id（tianSeconds/goai/xvla-ee6d/002000）兜底，
+# from_pretrained 两种都直接支持。setup_eval_policy_server.sh 会用 --ckpt 覆盖此值。
+model: /data/checkpoints/xvla-ee6d/002000
+
+# "auto" 选择 CUDA（可用时）。生产服务器通常由 robodojo.sh server 覆盖为 cuda:0。
+device: auto
+
+# Flow-matching 去噪迭代数（不是仿真执行步数）。
+steps: 10
+
+# DATA_DOMAIN_ID["arx_x5_ee"] = 6（训练时 domain_id 之一）。
+domain_id: 6
+
+# 全 chunk 模式：每次 get_action 返回 num_actions 个动作，仿真端执行完整个
+# chunk 后再请求下一次预测（与官方 X_VLA 一致；官方 19 次预测跑完 551 帧 episode）。
+actions_per_chunk: 30
+
+# 策略服务器日志：每预测输出 [xvla_2][io]（state16/20 + 完整 30x16 动作 chunk），
+# 用 evaluation/robodojo/parse_log.py 可还原 episode。
+log_io: true
+
+# 仿真端每步打印 [xvla_2][sim]（deploy.py 开关，默认关；落入仿真 stdout，去向不可控）。
+# 注意：完整逐帧视频不依赖此开关 —— deploy.py 每步 get_obs 即触发仿真自带录制。
+sim_step_log: false
+
+# X-VLA 推理可能超过 ws 默认 keepalive 窗口；应用层请求已能检测死连接，
+# 因此关闭协议层 ping，避免健康的长推理被误断。
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
