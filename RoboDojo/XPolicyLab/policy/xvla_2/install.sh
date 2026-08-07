@@ -7,7 +7,7 @@
 #     见 README）。
 #
 # 可选环境变量：
-#   XVLA_CONDA_ENV      conda 环境名（默认 xvla）
+#   XVLA_CONDA_ENV      conda 环境名（默认 XVLA，policy-server 上已有的环境）
 #   XVLA_SKIP_CONDA_CREATE=1   跳过创建 conda 环境
 #   XVLA_SKIP_TORCH=1          跳过 torch/torchvision 安装（环境已有）
 # 完成后在 policy env 里 import 冒烟。
@@ -15,7 +15,7 @@
 set -euo pipefail
 
 POLICY_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-CONDA_ENV="${XVLA_CONDA_ENV:-xvla}"
+CONDA_ENV="${XVLA_CONDA_ENV:-XVLA}"
 
 source "$(conda info --base)/etc/profile.d/conda.sh"
 

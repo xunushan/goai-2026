@@ -14,11 +14,11 @@ eval_batch: false
 
 # 模型来源：本地 checkpoint 目录优先（已提前下载到 /data/checkpoints）。
 #   HF 下载命令：
-#     huggingface-cli download tianSeconds/goai/xvla-ee6d/002000 \
-#       --local-dir /data/checkpoints/xvla-ee6d/002000
-# 本地目录不存在时视为 HF repo id（tianSeconds/goai/xvla-ee6d/002000）兜底，
+#     huggingface-cli download tianSeconds/goai/xvla-ee6d/018000 \
+#       --local-dir /data/checkpoints/xvla-ee6d/018000
+# 本地目录不存在时视为 HF repo id（tianSeconds/goai/xvla-ee6d/018000）兜底，
 # from_pretrained 两种都直接支持。setup_eval_policy_server.sh 会用 --ckpt 覆盖此值。
-model: /data/checkpoints/xvla-ee6d/002000
+model: /data/checkpoints/xvla-ee6d/018000
 
 # "auto" 选择 CUDA（可用时）。生产服务器通常由 robodojo.sh server 覆盖为 cuda:0。
 device: auto
