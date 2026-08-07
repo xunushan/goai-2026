@@ -7,9 +7,21 @@ camera frames are decoded, and one `infer` request is issued per sampled frame.
 The server must return a full action chunk (default 30 x 16d) with finite values,
 unit quaternions and gripper in [0,1].
 
+For every sampled frame the prediction is also compared against the expert ground
+truth. Ground truth is built exactly like training (LeRobotV3RoboDojoHandler.
+iter_episode): the episode's 20d absolute state trajectory is interpolated on the
+action grid (step = qdur/num_actions, decoupled from recording fps), and the chunk
+for start index ``idx`` is the next ``num_actions`` absolute targets
+``interp1d(linspace(lt[idx], lt[idx]+qdur, num_actions+1))[1:]``, converted to 16d
+with ``xvla20_to_ee16(invert_gripper=True)`` so it shares the server output space
+(gripper 1=open). Per-dimension MAE, group MAE (position/quaternion/gripper) and a
+"stay still" (zero-motion) baseline MAE are reported in summary.json.
+
 Artifacts written under --output-dir:
-* ``requests.jsonl`` — one record per request (input state16/20, predicted chunk);
-* ``summary.json``   — shape/finiteness/quaternion/gripper diagnostics + latency;
+* ``requests.jsonl`` — one record per request (input state16/20, predicted chunk,
+  ground truth chunk, per-step absolute error);
+* ``summary.json``   — shape/finiteness/quaternion/gripper diagnostics + latency
+  + prediction-vs-truth error;
 * ``images/``        — the three input frames per sampled request.
 
 Run from the policy dir with XPolicyLab on PYTHONPATH, e.g.:
@@ -32,6 +44,7 @@ import av
 import cv2
 import numpy as np
 import pyarrow.parquet as pq
+from scipy.interpolate import interp1d
 
 from client_server.ws.protocol.client import PolicyEvalClient, PolicyEvalClientConfig
 from xvla_datasets.utils import ee16_to_xvla20, xvla20_to_ee16
@@ -55,6 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--stride", type=int, default=25)
     parser.add_argument("--max-samples", type=int, default=5)
     parser.add_argument("--action-steps", type=int, default=30)
+    parser.add_argument("--qdur", type=float, default=1.0, help="训练动作窗口时长（秒），ground truth 网格用")
     parser.add_argument("--output-dir", type=Path, default=Path("outputs/xvla_2_mock"))
     return parser.parse_args()
 
@@ -162,6 +176,59 @@ def flatten_actions(actions: list[dict[str, Any]]) -> np.ndarray:
     return result
 
 
+def compute_prediction_error(request_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """预测 vs 真实误差汇总（16d 空间，gripper 1=开）。
+
+    每样本 ground truth = 训练一致网格插值 chunk（xvla20_to_ee16 invert_gripper=True）。
+    group_mae 分组：position=xyz(0:3,8:11)，quaternion=wxyz(3:7,11:15)，gripper=1 维(7,15)。
+    zero-motion 基线 = 始终预测当前状态时的误差（|gt - current_state|），量化"不做比做差多少"。
+    """
+    pos_dims = [0, 1, 2, 8, 9, 10]
+    quat_dims = [3, 4, 5, 6, 11, 12, 13, 14]
+    gripper_dims = [7, 15]
+
+    errs: list[np.ndarray] = []   # [H,16] per request
+    chunks: list[np.ndarray] = []  # [H,16] per request (gt)
+    states: list[np.ndarray] = []  # [16] per request (input state)
+    for rec in request_records:
+        e = rec.get("error_abs")
+        if not e:
+            continue
+        errs.append(np.asarray(e, dtype=np.float32))
+        chunks.append(np.asarray(rec["ground_truth_actions"], dtype=np.float32))
+        states.append(np.asarray(rec["input_state16"], dtype=np.float32))
+    if not errs:
+        return {"n_samples": 0, "note": "no ground-truth samples"}
+
+    E = np.concatenate(errs, axis=0)  # [N*H,16]
+    per_dim_mae = E.mean(axis=0).tolist()
+    group_mae = lambda dims: float(E[:, dims].mean())
+    # 逐 horizon 位置 MAE（观察误差沿 chunk 的演化）
+    E_chunk = np.stack(errs, axis=0)  # [N,H,16]
+    per_horizon_position_mae = E_chunk[:, :, pos_dims].mean(axis=(0, 2)).tolist()
+
+    # zero-motion 基线：预测 = 当前状态（恒等复制）
+    B = np.concatenate(
+        [np.abs(gt - s[None, :]) for gt, s in zip(chunks, states)], axis=0
+    )  # [N*H,16]
+    return {
+        "n_samples": int(len(errs)),
+        "n_horizons": int(E_chunk.shape[1]),
+        "per_dim_mae_16d": per_dim_mae,
+        "dim_names": list(ACTION_NAMES),
+        "position_mae": group_mae(pos_dims),
+        "quaternion_mae": group_mae(quat_dims),
+        "gripper_mae": group_mae(gripper_dims),
+        "per_horizon_position_mae": per_horizon_position_mae,
+        "zero_motion_position_mae": float(B[:, pos_dims].mean()),
+        "zero_motion_gripper_mae": float(B[:, gripper_dims].mean()),
+        "gt_convention": (
+            "training grid interp1d(qdur, step=qdur/num_actions); "
+            "16d gripper 1=open; units: m / unit-quat / dimensionless"
+        ),
+    }
+
+
 def image_summary(images: dict[str, np.ndarray]) -> dict[str, Any]:
     return {
         name: {
@@ -175,6 +242,31 @@ def image_summary(images: dict[str, np.ndarray]) -> dict[str, Any]:
     }
 
 
+def build_state_interpolant(state20: np.ndarray, qdur: float, num_actions: int):
+    """训练一致动作网格插值器（与 LeRobotV3RoboDojoHandler.iter_episode 完全一致）。
+
+    网格步长 = qdur/num_actions（与录制帧率解耦），lt = arange(T) * step。
+    """
+    T = state20.shape[0]
+    lt = np.arange(T, dtype=np.float64) * (qdur / num_actions)
+    L = interp1d(
+        lt, state20, axis=0, bounds_error=False, fill_value=(state20[0], state20[-1])
+    )
+    return L, lt
+
+
+def ground_truth_chunk(L, lt, idx: int, qdur: float, num_actions: int) -> np.ndarray | None:
+    """训练一致 ground truth：start=idx 处起未来 num_actions 个绝对 20d 目标。
+
+    双臂完全静止段返回 None（handler 对 (seq[1]-seq[0]).abs().max() < 1e-5 的样本同样跳过）。
+    """
+    q = np.linspace(lt[idx], lt[idx] + qdur, num_actions + 1, dtype=np.float32)
+    seq = np.asarray(L(q), dtype=np.float32)  # [num_actions+1, 20]
+    if float(np.abs(seq[1] - seq[0]).max()) < 1e-5:
+        return None
+    return seq[1:]  # [num_actions, 20]
+
+
 async def run(args: argparse.Namespace) -> None:
     dataset = args.dataset.resolve()
     output = args.output_dir.resolve()
@@ -186,6 +278,14 @@ async def run(args: argparse.Namespace) -> None:
     metadata = load_episode_metadata(dataset, args.episode)
     rows = load_episode_data(dataset, metadata)
     instruction = str((metadata.get("tasks") or [""])[0])
+
+    # 完整 20d 状态轨迹 + 训练一致网格插值器（ground truth 用；训练仅对
+    # lt[i] <= lt[-1]-qdur 的帧采样，即 i < T-num_actions）
+    state20_full = np.stack([
+        np.asarray(r["observation.state"], dtype=np.float32) for r in rows
+    ])  # [T, 20]
+    L, lt = build_state_interpolant(state20_full, args.qdur, args.action_steps)
+    max_valid_start = int(state20_full.shape[0]) - args.action_steps
 
     sample_indices = list(range(0, len(rows), args.stride))
     if args.max_samples > 0:
@@ -230,6 +330,22 @@ async def run(args: argparse.Namespace) -> None:
                     flush=True,
                 )
 
+            # 预测 vs 真实误差（训练一致 ground truth，16d gripper 1=开，与服务端输出同空间）
+            gt16 = None
+            error_abs = None
+            if local_index < max_valid_start:
+                gt20 = ground_truth_chunk(L, lt, local_index, args.qdur, args.action_steps)
+                if gt20 is not None:
+                    gt16 = xvla20_to_ee16(gt20, invert_gripper=True)  # [H,16]
+                    if predicted.shape == gt16.shape:
+                        error_abs = np.abs(predicted - gt16)  # [H,16]
+                    else:
+                        print(
+                            f"WARNING: shape mismatch predicted {predicted.shape} vs "
+                            f"ground truth {gt16.shape}; skip error for request {request_index}",
+                            flush=True,
+                        )
+
             for camera_name, image in images.items():
                 path = image_dir / f"request_{request_index:04d}_{camera_name}.jpg"
                 cv2.imwrite(str(path), cv2.cvtColor(image, cv2.COLOR_RGB2BGR))
@@ -245,6 +361,8 @@ async def run(args: argparse.Namespace) -> None:
                 "input_state20": state20.tolist(),
                 "image_summary": image_summary(images),
                 "predicted_actions": predicted.tolist(),
+                "ground_truth_actions": gt16.tolist() if gt16 is not None else None,
+                "error_abs": error_abs.tolist() if error_abs is not None else None,
                 "server_latency_ms": float(response.payload.get("latency_ms", 0.0)),
                 "round_trip_ms": round_trip_ms,
             }
@@ -266,6 +384,8 @@ async def run(args: argparse.Namespace) -> None:
                         "name": name,
                         "state16": float(state16[dimension]),
                         "predicted": float(predicted[horizon, dimension]),
+                        "ground_truth": float(gt16[horizon, dimension]) if gt16 is not None else None,
+                        "error": float(error_abs[horizon, dimension]) if error_abs is not None else None,
                     })
     finally:
         await client.close()
@@ -312,11 +432,22 @@ async def run(args: argparse.Namespace) -> None:
         "mean_round_trip_ms": float(np.mean([
             record["round_trip_ms"] for record in request_records
         ])),
+        "prediction_error": compute_prediction_error(request_records),
     }
     (output / "summary.json").write_text(
         json.dumps(summary, ensure_ascii=False, indent=2) + "\n", encoding="utf-8",
     )
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    err_summary = summary.get("prediction_error") or {}
+    if err_summary.get("n_samples"):
+        print(
+            f"prediction error: n={err_summary['n_samples']} "
+            f"pos_mae={err_summary['position_mae']:.4f} "
+            f"quat_mae={err_summary['quaternion_mae']:.4f} "
+            f"gripper_mae={err_summary['gripper_mae']:.4f} "
+            f"zero_motion_pos_mae={err_summary['zero_motion_position_mae']:.4f}",
+            flush=True,
+        )
     if gripper_out_of_range:
         print(
             f"WARNING: {gripper_out_of_range} predicted gripper values are outside [0,1]; "
