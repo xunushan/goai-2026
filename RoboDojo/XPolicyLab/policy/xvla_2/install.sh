@@ -27,11 +27,16 @@ fi
 conda activate "${CONDA_ENV}"
 
 if [[ "${XVLA_SKIP_TORCH:-0}" != "1" ]]; then
-  # 与训练 environment.yml 一致：pytorch 2.1 / torchvision 0.16 / CUDA 12.1。
-  # （xvla 包的 pyproject.toml 刻意不声明 torch，由 conda/pip 在此提供。）
-  pip install --no-input \
-    "torch==2.1.2" "torchvision==0.16.2" \
-    --index-url https://download.pytorch.org/whl/cu121
+  # 环境已有 torch/torchvision 时跳过（避免把已配好 CUDA 的 env 降级成 2.1）。
+  # 全新环境才装与训练 environment.yml 一致的 pytorch 2.1 / torchvision 0.16 /
+  # CUDA 12.1（xvla 包的 pyproject.toml 刻意不声明 torch，由 conda/pip 在此提供）。
+  if python -c "import torch, torchvision" 2>/dev/null; then
+    echo "[xvla_2] torch/torchvision already installed, skip"
+  else
+    pip install --no-input \
+      "torch==2.1.2" "torchvision==0.16.2" \
+      --index-url https://download.pytorch.org/whl/cu121
+  fi
 fi
 
 # X-VLA 包：本地克隆路径优先（pip install -e，避免每次重新下载）。
