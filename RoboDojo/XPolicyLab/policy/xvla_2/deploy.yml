@@ -29,6 +29,24 @@ steps: 10
 # DATA_DOMAIN_ID["arx_x5_ee"] = 6（训练时 domain_id 之一）。
 domain_id: 6
 
+# gripper 反转约定：本模型 arx_ee6d 训练数据 1=闭合 → true（输入/输出均 1-g 反转，
+# 与训练数据约定一致）。参考官方 ee6d 模型（1=开，输出为 sigmoid 开合概率）需设 false。
+invert_gripper: true
+
+# image_mask 前置有效视角数：null/缺省 = 全部提取相机有效（本模型 3 路）。
+# 参考模型只训过 cam_head → 设 1（其余视角 mask=false，等价参考侧补零，不进网络）。
+valid_views: 3
+
+# ── 加载参考项目官方模型时的适配（实验 A：验证我们的服务）────────────
+# 把 model 指向参考 checkpoint，并按参考约定改以下 4 项：
+#   model:           /path/to/reference/ckpt      # 官方 X_VLA checkpoint
+#   domain_id:       0                             # 参考训练 domain=0（RoboDojo_ee 未注册）
+#   invert_gripper:  false                         # 参考 20d 夹爪 1=开，无反转
+#   valid_views:     1                             # 参考只训 cam_head（其余视角 mask 掉）
+# actions_per_chunk / steps 参考也用 30 / 10，无需改。
+# 图像管线无需改：torchvision Resize(224,224,BICUBIC)+ImageNet 归一化与参考训练
+# 完全一致（参考自身推理的 HF processor 与本管线也一致，见 preprocessor_config.json）。
+
 # 全 chunk 模式：每次 get_action 返回 num_actions 个动作，仿真端执行完整个
 # chunk 后再请求下一次预测（与官方 X_VLA 一致；官方 19 次预测跑完 551 帧 episode）。
 actions_per_chunk: 30
