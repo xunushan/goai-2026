@@ -10,7 +10,10 @@ ckpt_name: null
 env_cfg_type: arx_x5
 action_type: ee
 seed: 0
-eval_batch: false
+# eval_batch=true：main.py 读到 true 时保留 num_envs（sim_config.yml=10），
+# 多个 episode 在单 Isaac Sim 实例内并行跑（6 episodes ≈ 1 episode 时长）。
+# false 时 main.py 强制 num_envs→1，episodes 串行，速度慢 ~6 倍。
+eval_batch: true
 
 # 模型来源：本地 checkpoint 目录优先（已就位于 /data/checkpoints）。
 # 当前为参考项目官方 X_VLA checkpoint（RoboDojo 参考训练产物）：
