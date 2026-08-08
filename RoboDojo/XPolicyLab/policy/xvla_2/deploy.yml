@@ -12,13 +12,12 @@ action_type: ee
 seed: 0
 eval_batch: false
 
-# 模型来源：本地 checkpoint 目录优先（已提前下载到 /data/checkpoints）。
-#   HF 下载命令：
-#     huggingface-cli download tianSeconds/goai/xvla-ee6d/020000 \
-#       --local-dir /data/checkpoints/xvla-ee6d/020000
-# 本地目录不存在时视为 HF repo id（tianSeconds/goai/xvla-ee6d/020000）兜底，
-# from_pretrained 两种都直接支持。setup_eval_policy_server.sh 会用 --ckpt 覆盖此值。
-model: /data/checkpoints/xvla-ee6d/020000
+# 模型来源：本地 checkpoint 目录优先（已就位于 /data/checkpoints）。
+# 当前为参考项目官方 X_VLA checkpoint（RoboDojo 参考训练产物）：
+#   /data/checkpoints/x_vla/robodojo/ckpt/RoboDojo/X_VLA/RoboDojo-sim-arx_x5-ee-0/ckpt-100000
+# 本地目录不存在时视为 HF repo id 兜底，from_pretrained 两种都直接支持。
+# setup_eval_policy_server.sh 会用 --ckpt 覆盖此值。
+model: /data/checkpoints/x_vla/robodojo/ckpt/RoboDojo/X_VLA/RoboDojo-sim-arx_x5-ee-0/ckpt-100000
 
 # "auto" 选择 CUDA（可用时）。生产服务器通常由 robodojo.sh server 覆盖为 cuda:0。
 device: auto
@@ -26,23 +25,23 @@ device: auto
 # Flow-matching 去噪迭代数（不是仿真执行步数）。
 steps: 10
 
-# DATA_DOMAIN_ID["arx_x5_ee"] = 6（训练时 domain_id 之一）。
-domain_id: 6
+# 参考模型训练 domain=0（RoboDojo_ee 未注册）。
+# 本仓库训练模型 arx_ee6d 为 DATA_DOMAIN_ID["arx_x5_ee"]=6，需改回 6。
+domain_id: 0
 
-# gripper 反转约定：本模型 arx_ee6d 训练数据 1=闭合 → true（输入/输出均 1-g 反转，
-# 与训练数据约定一致）。参考官方 ee6d 模型（1=开，输出为 sigmoid 开合概率）需设 false。
-invert_gripper: true
+# gripper 反转约定：参考官方 ee6d 模型 20d 夹爪 1=开，无反转 → false
+# （输入/输出均不做 1-g 反转）。本仓库训练数据 1=闭合，才需设 true。
+invert_gripper: false
 
-# image_mask 前置有效视角数：null/缺省 = 全部提取相机有效（本模型 3 路）。
-# 参考模型只训过 cam_head → 设 1（其余视角 mask=false，等价参考侧补零，不进网络）。
-valid_views: 3
+# image_mask 前置有效视角数：参考模型只训过 cam_head → 1（其余视角 mask=false，
+# 等价参考侧补零，不进网络）。本仓库模型 3 路全用，需改回 null/缺省。
+valid_views: 1
 
-# ── 加载参考项目官方模型时的适配（实验 A：验证我们的服务）────────────
-# 把 model 指向参考 checkpoint，并按参考约定改以下 4 项：
-#   model:           /path/to/reference/ckpt      # 官方 X_VLA checkpoint
-#   domain_id:       0                             # 参考训练 domain=0（RoboDojo_ee 未注册）
-#   invert_gripper:  false                         # 参考 20d 夹爪 1=开，无反转
-#   valid_views:     1                             # 参考只训 cam_head（其余视角 mask 掉）
+# ── 切回本仓库训练模型（xvla-ee6d）时按以下约定改回 4 项 ─────────
+#   model:           /data/checkpoints/xvla-ee6d/020000   # 本仓库 arx_ee6d checkpoint
+#   domain_id:       6                                     # DATA_DOMAIN_ID["arx_x5_ee"]
+#   invert_gripper:  true                                  # 训练数据 1=闭合，双向反转
+#   valid_views:     3                                     # 3 路相机全用
 # actions_per_chunk / steps 参考也用 30 / 10，无需改。
 # 图像管线无需改：torchvision Resize(224,224,BICUBIC)+ImageNet 归一化与参考训练
 # 完全一致（参考自身推理的 HF processor 与本管线也一致，见 preprocessor_config.json）。
