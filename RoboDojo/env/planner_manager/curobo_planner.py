@@ -572,7 +572,16 @@ class CuroboPlanner:
         cspace_tensor = torch.as_tensor(
             np.stack(cspace_list), dtype=torch.float32, device=self.device_cfg.device
         )
-        current_state = JointState.from_position(cspace_tensor, joint_names=self.cspace_joint_names)
+        # 不用 from_position：它会给 velocity/acceleration/jerk 赋非 None 零张量，
+        # 而 curobo `_pad_batch_inputs` 只 pad pos/vel/acc、漏 pad jerk，导致 batch1
+        # prewarm 后 goal buffer 里 current_js 的 jerk 残留 (1,6)（pos/vel/acc 是
+        # (6,6)）。`_same_shape` 不检查 jerk，shape 误判一致后 jit copy 的
+        # jerk.copy_ 崩溃（[1,6] vs [6,6]）。手动构造让 vel/acc/jerk 保持 None，
+        # jit copy 对 None 字段直接跳过，规避该 curobo 上游 bug。
+        current_state = JointState(
+            position=cspace_tensor,
+            joint_names=list(self.cspace_joint_names),
+        )
 
         # ``num_seeds`` accepted for API compat; the dedicated InverseKinematics
         # has its num_seeds fixed at construction (CUDA graphs sized against it).
