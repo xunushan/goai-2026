@@ -35,7 +35,7 @@ if [[ "${XVLA_SKIP_TORCH:-0}" != "1" ]]; then
   else
     pip install --no-input \
       "torch==2.1.2" "torchvision==0.16.2" \
-      --index-url https://download.pytorch.org/whl/cu121
+      --index-url https://mirrors.cloud.tencent.com/pypi/simple  # 国内镜像，安装快
   fi
 fi
 
