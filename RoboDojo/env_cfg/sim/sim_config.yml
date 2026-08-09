@@ -1,6 +1,7 @@
 decimation: 1
+device: cuda:0
 dt: 0.004
 render_interval: 10
 scene:
-  num_envs: 10
+  num_envs: 6
   env_spacing: 7

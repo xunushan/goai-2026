@@ -431,7 +431,7 @@ class LayoutManager:
             if not relative:
                 env_pos = deepcopy(self.scene_manager.env_origins[env_idx]).to(device)
                 pos = pos + env_pos
-            return (pos, rot)
+            return (pos.detach().cpu(), rot.detach().cpu())
         elif instance_type in ["garment", "geometry"]:
             state = obj.get_state(is_relative=True)
             root_pose = state["root_pose"].detach().cpu().numpy()

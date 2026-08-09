@@ -275,7 +275,7 @@ class GeometryObject(SingleGeometryPrim):
             env_origin_tensor = (
                 torch.tensor(self.env_origin, dtype=torch.float32, device=root_pose.device)
                 if isinstance(self.env_origin, np.ndarray)
-                else self.env_origin
+                else self.env_origin.to(root_pose.device)
             )
             if env_origin_tensor.dim() == 0:
                 env_origin_tensor = env_origin_tensor.unsqueeze(0)
