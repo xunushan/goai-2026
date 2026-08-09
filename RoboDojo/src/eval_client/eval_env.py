@@ -286,7 +286,15 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
             for env_idx in env_idx_list:
                 if not self.end_flag[env_idx] or last_frame:
                     self._stream_vision(env_idx, data[env_idx])
-                env_data = deepcopy(data[env_idx])
+                # 浅拷贝 dict + 仅 vision 数组复制：vision 引用 tiled_capture 预分配
+                # warp buffer 的共享 view（每步被 overwrite），必须隔离为独立内存；
+                # state（robot 批量读回后已是独立 numpy）与 instruction（只读）无需
+                # 整 dict 深拷贝，省去逐项遍历与多余拷贝。
+                env_data = data[env_idx].copy()
+                for cam_val in env_data.get("vision", {}).values():
+                    for attr_key, attr_val in cam_val.items():
+                        if isinstance(attr_val, np.ndarray):
+                            cam_val[attr_key] = attr_val.copy()
                 env_data["env_idx"] = env_idx
                 data_list.append(env_data)
             return data_list
