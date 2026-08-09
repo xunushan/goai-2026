@@ -31,6 +31,7 @@ class CuroboPlanner:
         dt=None,
         yml_path=None,
         table_height=0.74,
+        ik_batch_size: int = 12,
     ):
         if yml_path is not None:
             self.yml_path = yml_path
@@ -68,6 +69,13 @@ class CuroboPlanner:
             self._active_to_cspace_idx.append(self.cspace_joint_names.index(joint_name))
 
         self.device_cfg = DeviceCfg()
+
+        # IK 批量求解上限：solve_ik_to_joint_batch 一次处理多少个 env 的 IK。
+        # curobo InverseKinematics.solve_pose 原生支持 batch（batch_size 由
+        # goal_tool_poses.batch_size 决定，不足 max_batch_size 自动 pad/slice），
+        # 仅需 max_batch_size 够大。批量 IK 是消掉阶段一 ik_solve 退化
+        # （GPU 物理下 12 次独立 .cpu() 同步）的对症手段，见性能排查文档 3.0.8。
+        self.ik_batch_size = ik_batch_size
 
         self.use_cuda_graph = True
 
@@ -441,37 +449,221 @@ class CuroboPlanner:
         target_ee_pose,
         transformed_target_position,
         transformed_target_quaternion,
+        index=None,
     ):
         """Extract lightweight IKResult fields only when a solve fails.
 
-        Do not include ``debug_info`` here: enabling/storing full optimizer
-        traces is expensive and can make a 550-step evaluation log enormous.
+        ``index`` is set when the ``ik_result`` is a **batch** result (from
+        ``solve_ik_to_joint_batch``); per-env tensor fields are then sliced to
+        that row before conversion. Do not include ``debug_info`` here:
+        enabling/storing full optimizer traces is expensive and can make a
+        550-step evaluation log enormous.
         """
+
+        def _at(v):
+            if v is None or index is None:
+                return v
+            if hasattr(v, "detach"):
+                v = v.detach().cpu()
+            if hasattr(v, "numpy"):
+                v = v.numpy()
+            if isinstance(v, np.ndarray) and v.ndim >= 1 and v.shape[0] > index:
+                return v[index]
+            return v
+
         js_solution = getattr(ik_result, "js_solution", None)
         return {
-            "success": self._ik_diagnostic_value(getattr(ik_result, "success", None)),
+            "success": self._ik_diagnostic_value(_at(getattr(ik_result, "success", None))),
             "position_error_m": self._ik_diagnostic_value(
-                getattr(ik_result, "position_error", None)
+                _at(getattr(ik_result, "position_error", None))
             ),
             "rotation_error_rad": self._ik_diagnostic_value(
-                getattr(ik_result, "rotation_error", None)
+                _at(getattr(ik_result, "rotation_error", None))
             ),
-            "total_error": self._ik_diagnostic_value(getattr(ik_result, "error", None)),
-            "solve_time_s": self._ik_diagnostic_value(getattr(ik_result, "solve_time", None)),
+            "total_error": self._ik_diagnostic_value(_at(getattr(ik_result, "error", None))),
+            "solve_time_s": self._ik_diagnostic_value(
+                _at(getattr(ik_result, "solve_time", None))
+            ),
             "current_joint_position": self._ik_diagnostic_value(curr_joint_pos),
             "requested_target_pose": self._ik_diagnostic_value(target_ee_pose),
             "solver_target_position": self._ik_diagnostic_value(transformed_target_position),
             "solver_target_quaternion": self._ik_diagnostic_value(transformed_target_quaternion),
             "candidate_solution": self._ik_diagnostic_value(
-                getattr(ik_result, "solution", None)
+                _at(getattr(ik_result, "solution", None))
             ),
             "candidate_joint_position": self._ik_diagnostic_value(
-                getattr(js_solution, "position", None)
+                _at(getattr(js_solution, "position", None))
             ),
             "candidate_joint_names": list(getattr(js_solution, "joint_names", None) or []),
             "position_tolerance_m": 0.001,
             "orientation_tolerance_rad": 0.02,
             "self_collision_check": True,
+        }
+
+    def solve_ik_to_joint_batch(
+        self,
+        curr_joint_pos_list,
+        target_ee_pose_list,
+        real_robot_pose,
+        num_seeds: int = 32,
+    ):
+        """Solve IK for multiple envs in one batched cuRobo call.
+
+        One ``InverseKinematics.solve_pose`` call handles all problems
+        (batch dimension == len(target_ee_pose_list)); the standalone IK pads
+        internally to ``max_batch_size`` and slices results back. This turns
+        12 independent per-env solves + 12 GPU→CPU syncs into 1 call, which is
+        the direct fix for the stage-1 ik_solve regression (see
+        docs/仿真评测性能排查_单episode耗时分析.md 3.0.8).
+
+        Args:
+            curr_joint_pos_list: list of per-env current joint positions
+                (numpy array or list, active-joint or full-robot order).
+            target_ee_pose_list: list of per-env target ee poses
+                [pos(3), quat(4)].
+            real_robot_pose: robot origin pose in world frame.
+
+        Returns:
+            List of per-env results in the same order as the inputs, each
+            matching ``solve_ik_to_joint``'s return contract
+            ({"status": "Success", "joint_value", ...} or
+            {"status": "Fail", "diagnostics", ...}).
+        """
+        batch_size = len(target_ee_pose_list)
+        if batch_size == 0:
+            return []
+        if batch_size > self.ik_batch_size:
+            raise ValueError(
+                f"solve_ik_to_joint_batch: {batch_size} problems exceeds "
+                f"ik_batch_size={self.ik_batch_size}; raise CuroboPlanner "
+                f"ik_batch_size or split the batch."
+            )
+
+        world_base_pose = np.array(self.robot_origin_pose, dtype=np.float32)
+        pos_list, quat_list, trans_p_list, trans_q_list = [], [], [], []
+        for target_ee_pose in target_ee_pose_list:
+            target_pose = deepcopy(target_ee_pose)
+            target_pose = calculate_target_pose(real_robot_pose, self.robot_origin_pose, target_pose)
+            world_target_pose = np.array(target_pose, dtype=np.float32)
+            target_pose_p, target_pose_q = self._trans_from_world_to_base(world_base_pose, world_target_pose)
+            target_pose_p[0] += self.frame_bias[0]
+            target_pose_p[1] += self.frame_bias[1]
+            target_pose_p[2] += self.frame_bias[2]
+            pos_list.append(target_pose_p)
+            quat_list.append(target_pose_q)
+            trans_p_list.append(target_pose_p)
+            trans_q_list.append(target_pose_q)
+
+        goal_tool_poses = GoalToolPose.from_poses(
+            {
+                self.ee_link: Pose(
+                    position=torch.as_tensor(
+                        np.stack(pos_list), dtype=torch.float32, device=self.device_cfg.device
+                    ),
+                    quaternion=torch.as_tensor(
+                        np.stack(quat_list), dtype=torch.float32, device=self.device_cfg.device
+                    ),
+                )
+            },
+            ordered_tool_frames=self.tool_frames,
+            num_goalset=1,
+        )
+        cspace_list = [self._build_cspace_joint_values(jp) for jp in curr_joint_pos_list]
+        cspace_tensor = torch.as_tensor(
+            np.stack(cspace_list), dtype=torch.float32, device=self.device_cfg.device
+        )
+        current_state = JointState.from_position(cspace_tensor, joint_names=self.cspace_joint_names)
+
+        # ``num_seeds`` accepted for API compat; the dedicated InverseKinematics
+        # has its num_seeds fixed at construction (CUDA graphs sized against it).
+        ik_result = self.ik_solver.solve_pose(
+            goal_tool_poses=goal_tool_poses,
+            current_state=current_state,
+            return_seeds=1,
+        )
+
+        results = []
+        for i in range(batch_size):
+            results.append(
+                self._extract_ik_single(
+                    ik_result,
+                    i,
+                    curr_joint_pos=curr_joint_pos_list[i],
+                    target_ee_pose=target_ee_pose_list[i],
+                    target_pose_p=trans_p_list[i],
+                    target_pose_q=trans_q_list[i],
+                )
+            )
+        return results
+
+    @staticmethod
+    def _batch_ik_success(success, index):
+        """Per-env success flag from a batched IKResult.success field."""
+        if success is None:
+            return False
+        if isinstance(success, torch.Tensor):
+            success = success.detach().cpu().numpy()
+        arr = np.asarray(success)
+        if arr.ndim == 0:
+            return bool(arr)
+        return bool(arr[index])
+
+    def _extract_ik_single(
+        self,
+        ik_result,
+        index,
+        *,
+        curr_joint_pos,
+        target_ee_pose,
+        target_pose_p,
+        target_pose_q,
+    ):
+        """Extract one env's solution / failure diagnostics from a batch result."""
+        if not self._batch_ik_success(ik_result.success, index):
+            return {
+                "status": "Fail",
+                "joint_names": self.active_joints_name,
+                "diagnostics": self._build_ik_failure_diagnostics(
+                    ik_result=ik_result,
+                    index=index,
+                    curr_joint_pos=curr_joint_pos,
+                    target_ee_pose=target_ee_pose,
+                    transformed_target_position=target_pose_p,
+                    transformed_target_quaternion=target_pose_q,
+                ),
+            }
+
+        joint_solution = np.asarray(ik_result.js_solution.position.detach().cpu())[index]
+        while joint_solution.ndim > 1:
+            joint_solution = joint_solution[0]
+        dof = joint_solution.shape[0]
+        n_active = len(self.active_joints_name)
+        n_cspace = len(self.cspace_joint_names)
+        js_names = list(getattr(ik_result.js_solution, "joint_names", None) or [])
+
+        if len(js_names) == dof:
+            try:
+                indices = [js_names.index(n) for n in self.active_joints_name]
+            except ValueError as exc:
+                raise ValueError(
+                    f"IK solution joint_names {js_names} do not contain all "
+                    f"active joints {self.active_joints_name}: {exc}"
+                ) from None
+            joint_solution = joint_solution[indices]
+        elif dof == n_cspace:
+            joint_solution = joint_solution[self._active_to_cspace_idx]
+        elif dof != n_active:
+            raise ValueError(
+                "Unexpected IK solution dimension from curobo: "
+                f"got {dof}, expected either {n_active} active joints or "
+                f"{n_cspace} cspace joints (and no usable joint_names "
+                f"on js_solution)."
+            )
+
+        return {
+            "status": "Success",
+            "joint_names": self.active_joints_name,
+            "joint_value": joint_solution,
         }
 
     def _trans_from_world_to_base(self, base_pose, target_pose):
@@ -600,7 +792,7 @@ class CuroboPlanner:
             orientation_tolerance=0.02,
             self_collision_check=True,
             use_cuda_graph=self.use_cuda_graph,
-            max_batch_size=1,
+            max_batch_size=self.ik_batch_size,
             multi_env=False,
             max_goalset=1,
         )

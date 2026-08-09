@@ -370,12 +370,43 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
             self.validate_action_dict(action)
             self.take_action_batch([action], env_idx_list=[0])
 
+        def _build_gripper_control(self, robot, action):
+            """从 action 构建末端执行器（gripper/hand）的 control 项。
+
+            joint 型与 ee 型 action 的 gripper 处理逻辑完全相同，提取复用
+            （原 take_action_batch 两处重复）。
+            """
+            key_name = self.robot_manager.process_name(robot.gripper_name)
+            if robot.ee_type == "gripper":
+                val = deepcopy(action[key_name][0])
+                val = np.clip(val, 0, 1)
+                if robot.gripper_move["sign"] == 1:
+                    val = val * (robot.gripper_scale[1] - robot.gripper_scale[0]) + robot.gripper_scale[0]
+                else:
+                    val = (1 - val) * (
+                        robot.gripper_scale[1] - robot.gripper_scale[0]
+                    ) + robot.gripper_scale[0]
+                vals = [
+                    val,
+                    val * robot.gripper_move["mimic"][1] + robot.gripper_move["mimic"][2],
+                ]
+                return {key_name: {"position": vals}}
+            elif robot.ee_type == "hand":
+                return {key_name: {"position": action[key_name]}}
+            return {}
+
         def take_action_batch(self, actions_list, env_idx_list=None):
             if self.physx_monitor_enabled:
                 self._check_physx_broken_envs()
             control_info_list = []
             if env_idx_list is None:
                 env_idx_list = list(range(self.num_envs))
+            # 第一遍：解析 action、维护计数器，收集 ee 型 IK 请求（不求解）。
+            # 批量 IK 是性能关键：把 n 个 env 的 IK 从逐 env solve_ik（n 次
+            # get_joint + n 次 .cpu() 同步）合并为按 robot 分组的一次批量求解
+            # （solve_ik_batch → solve_ik_to_joint_batch），见性能排查文档 3.0.8。
+            active = {}  # env_idx -> (action, action_type)，仅 active env
+            ik_requests = []  # {env_idx, robot, obs_name, target_pose}
             for idx, env_idx in enumerate(env_idx_list):
                 action = actions_list[idx]
                 self.validate_action_dict(action)
@@ -388,6 +419,47 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
                     f"env{env_idx} step: \033[92m{self.take_action_cnt[env_idx]} / {self.step_lim}\033[0m",
                     end="\r",
                 )
+                active[env_idx] = (action, action_type)
+                if action_type == "ee":
+                    for robot in self.robot_manager.robot_list:
+                        if robot.type != "target":
+                            continue
+                        name = robot.arm_name.split("_")[0]
+                        key_name = f"{name}_ee_pose"
+                        obs_name = self.robot_manager.process_name(robot.arm_name)
+                        ik_requests.append(
+                            {
+                                "env_idx": env_idx,
+                                "robot": robot,
+                                "obs_name": obs_name,
+                                "target_pose": action[key_name],
+                            }
+                        )
+
+            # 批量 IK：按 robot 分组，一次求解该 robot 的所有 env。返回结果
+            # 与单 env solve_ik 返回结构一致（仅内部批量执行），IK 诊断记录
+            # （_record_ik_result）逐 env 保留。
+            ik_results = {}  # (env_idx, robot.arm_name) -> ik_result
+            if ik_requests:
+                for robot in {r["robot"] for r in ik_requests}:
+                    reqs = [r for r in ik_requests if r["robot"] is robot]
+                    results = self.robot_manager.solve_ik_batch(
+                        target_pose_list=[r["target_pose"] for r in reqs],
+                        env_idx_list=[r["env_idx"] for r in reqs],
+                        robot=robot,
+                    )
+                    for req, res in zip(reqs, results):
+                        ik_results[(req["env_idx"], robot.arm_name)] = res
+                        self._record_ik_result(
+                            env_idx=req["env_idx"],
+                            robot=robot,
+                            target_pose=req["target_pose"],
+                            ik_result=res,
+                        )
+
+            # 第二遍：逐 active env 组装 control_info（joint 直接取 action，
+            # ee 用批量 IK 结果填关节目标）。active 顺序与原逐 env 一致。
+            for env_idx, (action, action_type) in active.items():
                 control_info = dict()
                 if action_type == "joint":
                     for robot in self.robot_manager.robot_list:
@@ -397,73 +469,18 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
                         control_info[key_name] = {
                             "position": action[key_name],
                         }
-
-                        key_name = self.robot_manager.process_name(robot.gripper_name)
-                        if robot.ee_type == "gripper":
-                            val = deepcopy(action[key_name][0])
-                            val = np.clip(val, 0, 1)
-                            if robot.gripper_move["sign"] == 1:
-                                val = val * (robot.gripper_scale[1] - robot.gripper_scale[0]) + robot.gripper_scale[0]
-                            else:
-                                val = (1 - val) * (
-                                    robot.gripper_scale[1] - robot.gripper_scale[0]
-                                ) + robot.gripper_scale[0]
-                            vals = [
-                                val,
-                                val * robot.gripper_move["mimic"][1] + robot.gripper_move["mimic"][2],
-                            ]
-                            control_info[key_name] = {"position": vals}
-                        elif robot.ee_type == "hand":
-                            control_info[key_name] = {
-                                "position": action[key_name],
-                            }
-                        else:
-                            pass
+                        control_info.update(self._build_gripper_control(robot, action))
                 elif action_type == "ee":
                     for robot in self.robot_manager.robot_list:
                         if robot.type != "target":
                             continue
-                        name = robot.arm_name.split("_")[0]
-                        key_name = f"{name}_ee_pose"
                         obs_name = self.robot_manager.process_name(robot.arm_name)
-                        target_pose = action[key_name]
-                        ik_result = self.robot_manager.solve_ik(
-                            target_pose=target_pose,
-                            env_idx=env_idx,
-                            robot=robot,
-                        )
-                        self._record_ik_result(
-                            env_idx=env_idx,
-                            robot=robot,
-                            target_pose=target_pose,
-                            ik_result=ik_result,
-                        )
+                        ik_result = ik_results[(env_idx, robot.arm_name)]
                         if ik_result["status"] == "Success":
                             control_info[obs_name] = {
                                 "position": ik_result["joint_value"],
                             }
-
-                        key_name = self.robot_manager.process_name(robot.gripper_name)
-                        if robot.ee_type == "gripper":
-                            val = deepcopy(action[key_name][0])
-                            val = np.clip(val, 0, 1)
-                            if robot.gripper_move["sign"] == 1:
-                                val = val * (robot.gripper_scale[1] - robot.gripper_scale[0]) + robot.gripper_scale[0]
-                            else:
-                                val = (1 - val) * (
-                                    robot.gripper_scale[1] - robot.gripper_scale[0]
-                                ) + robot.gripper_scale[0]
-                            vals = [
-                                val,
-                                val * robot.gripper_move["mimic"][1] + robot.gripper_move["mimic"][2],
-                            ]
-                            control_info[key_name] = {"position": vals}
-                        elif robot.ee_type == "hand":
-                            control_info[key_name] = {
-                                "position": action[key_name],
-                            }
-                        else:
-                            pass
+                        control_info.update(self._build_gripper_control(robot, action))
                 control_seq = self.process_control_info(control_info, env_idx)
                 control_info_list.append(control_seq)
 

@@ -342,6 +342,46 @@ class RobotManager:
         robot_pose = deepcopy(robot.entity_origin_pose)
         return planner.solve_ik_to_joint(now_qpos, trans_target_pose, real_robot_pose=robot_pose)
 
+    def solve_ik_batch(
+        self,
+        target_pose_list: List[float],
+        env_idx_list,
+        robot,
+        trans: Literal["relative", "world"] = "world",
+    ):
+        """求解同一 robot 在多个 env 的 IK，一次批量读回 + 一次批量 curobo 调用。
+
+        单 env 版 ``solve_ik`` 保留（兼容单步/非批量路径）。批量版把 n 次
+        get_joint + n 次 .cpu() 同步（GPU 物理下每次同步都是等待 GPU flush）
+        合并为 1 次批量读回 + 1 次 solve_ik_to_joint_batch，消除阶段一
+        ik_solve 退化，见性能排查文档 3.0.8。
+
+        Args:
+            target_pose_list: 与 env_idx_list 对齐的每 env 目标 ee pose。
+            env_idx_list: 需要求解的 env 列表。
+            robot: 目标机器人（同一 robot 的 IK 才能共用同一 ik_solver 批量）。
+            trans: "world"（默认）或 "relative"。
+
+        Returns:
+            list[dict]，与 env_idx_list 对齐的每 env IK 结果。
+        """
+        now_qpos = self.get_joint(robot, env_idx_list=env_idx_list)
+        curr_qpos_list = [now_qpos[e] for e in env_idx_list]
+        if trans == "relative":
+            trans_target_pose_list = [
+                self._trans_from_endlink_to_gripper(target_pose, robot)
+                for target_pose in target_pose_list
+            ]
+        else:
+            trans_target_pose_list = target_pose_list
+        planner = self.ik_solver[robot.robot_name]
+        robot_pose = deepcopy(robot.entity_origin_pose)
+        return planner.solve_ik_to_joint_batch(
+            curr_qpos_list,
+            trans_target_pose_list,
+            real_robot_pose=robot_pose,
+        )
+
     def process_name(self, name):
         if name.endswith("_state"):
             return name
@@ -551,6 +591,7 @@ class RobotManager:
                 dt=self.dt,
                 yml_path=robot.curobo_yml_path,
                 table_height=0.74 - root_pose[2],
+                ik_batch_size=self.num_envs,
             )
             self.ik_solver[robot.robot_name] = self.planner[robot.robot_name]
 
