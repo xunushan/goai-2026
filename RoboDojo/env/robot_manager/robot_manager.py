@@ -176,6 +176,15 @@ class RobotManager:
         key = self.robot_key[self.robot_list.index(robot)]
         arm_indices = robot.arm_joint_indices
         joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
+        # 单 env 快路径：solve_ik 每 env 独立调用 get_joint([env_idx])，批量版对单 env
+        # 反而多 torch.tensor 分配 + 高级索引 + .copy()（阶段一实测 +13ms/步）。单 env
+        # 时走轻量读取（.cpu().numpy() 本身即独立副本，无需再 .copy()）。
+        if len(env_idx_list) == 1:
+            env_idx = env_idx_list[0]
+            joints = joint_state[env_idx][arm_indices].detach().cpu().numpy()
+            results = {idx: None for idx in range(self.num_envs)}
+            results[env_idx] = joints
+            return results
         env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=joint_state.device)
         selected = joint_state[env_ids][:, arm_indices].detach().cpu().numpy()  # 一次同步读回
         results = {idx: None for idx in range(self.num_envs)}
