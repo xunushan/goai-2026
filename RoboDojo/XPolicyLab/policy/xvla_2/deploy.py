@@ -132,3 +132,11 @@ def eval_one_episode_batch(TASK_ENV, model_client):
                 for env_idx, obs in zip(env_idx_list, next_obs, strict=True):
                     _log_step(step_counts.get(int(env_idx), 0), int(env_idx), obs)
             model_client.call(func_name="update_obs_batch", obs=next_obs)  # Update the observation
+
+
+# ===== 性能剖析钩子（默认注释；临时测量时取消注释，测完注释回去）=====
+# try:
+#     from . import profile_eval
+#     profile_eval.install()
+# except ImportError:
+#     pass
