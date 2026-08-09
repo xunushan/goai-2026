@@ -141,64 +141,60 @@ class RobotManager:
         if env_idx_list is None:
             env_idx_list = list(range(self.num_envs))
 
-        results = {}
         key = self.robot_key[self.robot_list.index(robot)]
         entity_link = key.body_names
-        env_origin_pos = deepcopy(self.scene.env_origins)
-        link_pose = key.data.body_link_pose_w.clone()
-
         if link_name not in entity_link:
             raise ValueError(f"Link name {link_name} not found in robot {robot.robot_name}")
 
+        # 批量读回：GPU 物理下每次 .cpu() 都是同步点（等待 GPU 排队工作 flush）。
+        # 对请求的 env 一次性读回，避免逐 env 多次 clone + .cpu() 同步（6env×2臂×2 读 = 24 次 → 2 次）。
+        results = {idx: None for idx in range(self.num_envs)}
         link_idx = entity_link.index(link_name)
-        for env_idx in range(self.num_envs):
-            if env_idx in env_idx_list:
-                pose = deepcopy(link_pose[env_idx][link_idx])
-                if not is_relative:
-                    results[env_idx] = np.array(pose.cpu())
-                else:
-                    origin_pos = env_origin_pos[env_idx]
-                    # pose: [x, y, z, qw, qx, qy, qz] in world frame
-                    # origin_pos: [x, y, z] of env origin in world frame
-                    # relative position = world_pos - origin_pos (origin has translation only)
-                    rel_pose = pose.clone()
-                    rel_pose[:3] = rel_pose[:3] - origin_pos
-                    results[env_idx] = np.array(rel_pose.cpu())
-
-            else:
-                results[env_idx] = None
+        link_pose = key.data.body_link_pose_w  # (num_envs, num_bodies, 7), device tensor
+        env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=link_pose.device)
+        selected = link_pose[env_ids, link_idx].detach().cpu().numpy()  # (len, 7), 一次同步读回
+        if is_relative:
+            # env_origin_pos: (num_envs, 3) env origin world-frame 位置
+            env_origin_pos = self.scene.env_origins.detach().cpu().numpy()
+            for i, env_idx in enumerate(env_idx_list):
+                origin_pos = env_origin_pos[env_idx]
+                # pose: [x, y, z, qw, qx, qy, qz] in world frame
+                # origin_pos: [x, y, z] of env origin in world frame
+                # relative position = world_pos - origin_pos (origin has translation only)
+                rel_pose = selected[i].copy()
+                rel_pose[:3] = rel_pose[:3] - origin_pos
+                results[env_idx] = rel_pose
+        else:
+            for i, env_idx in enumerate(env_idx_list):
+                results[env_idx] = selected[i].copy()
         return results
 
     def get_joint(self, robot, env_idx_list=None):
         if env_idx_list is None:
             env_idx_list = list(range(self.num_envs))
 
-        results = {}
         key = self.robot_key[self.robot_list.index(robot)]
         arm_indices = robot.arm_joint_indices
-        joint_state = key.data.joint_pos.clone()
-        for env_idx in range(self.num_envs):
-            if env_idx in env_idx_list:
-                joints = deepcopy(joint_state[env_idx][arm_indices])
-                results[env_idx] = np.array(joints.cpu())
-            else:
-                results[env_idx] = None
+        joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
+        env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=joint_state.device)
+        selected = joint_state[env_ids][:, arm_indices].detach().cpu().numpy()  # 一次同步读回
+        results = {idx: None for idx in range(self.num_envs)}
+        for i, env_idx in enumerate(env_idx_list):
+            results[env_idx] = selected[i].copy()
         return results
 
     def get_end_effector_real_val(self, robot, env_idx_list=None):
         if env_idx_list is None:
             env_idx_list = list(range(self.num_envs))
 
-        results = {}
         key = self.robot_key[self.robot_list.index(robot)]
         gripper_indices = robot.gripper_joint_indices
-        joint_state = key.data.joint_pos.clone()
-        for env_idx in range(self.num_envs):
-            if env_idx in env_idx_list:
-                joints = deepcopy(joint_state[env_idx][gripper_indices])
-                results[env_idx] = np.array(joints.cpu())
-            else:
-                results[env_idx] = None
+        joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
+        env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=joint_state.device)
+        selected = joint_state[env_ids][:, gripper_indices].detach().cpu().numpy()  # 一次同步读回
+        results = {idx: None for idx in range(self.num_envs)}
+        for i, env_idx in enumerate(env_idx_list):
+            results[env_idx] = selected[i].copy()
         return results
 
     def get_delta_endpose(self, robot, env_idx_list=None):
