@@ -4,9 +4,6 @@
 # MCP 配置
 .mcp.json
 
-# 文档
-docs/
-
 # 比赛数据示例
 data/
 

@@ -12,7 +12,7 @@ macOS，无 GPU，磁盘 63GB。用于代码编写、结果数据分析，所有
 goai_2026/
 ├── CLAUDE.md              # 项目规范（本文件）
 ├── RoboDojo/              # RoboDojo 代码仓库（submodule）
-├── docs/                  # 文档（.gitignore）
+├── docs/                  # 文档
 ├── data/                  # 比赛数据示例（.gitignore）
 ├── eval_results/          # 仿真评测结果及分析（.gitignore）
 ├── papers/                # 参考论文（.gitignore）
@@ -22,39 +22,22 @@ goai_2026/
 └── utils/                 # Python 工具库
 ```
 
-## 远程服务器操作纪律
+## 常用文档
 
-- **policy-server**：代码统一通过 git 获取和更新，禁止手动修改或非 git 方式更新代码
-- **issac-server**：未经授意确认，禁止更新代码、禁止在虚拟环境下执行安装命令（如 `pip install`、`conda install` 等）
+| 文档                                                     | 说明                             |
+| -------------------------------------------------------- | -------------------------------- |
+| [docs/私人hf仓库操作指南.md](docs/私人hf仓库操作指南.md) | 私人 HF 仓库，用于存放训练的模型 |
+| [docs/远程服务器详情.md](docs/远程服务器详情.md)         | 服务器配置、目录结构、操作规范   |
+| [docs/仿真环境配置指南.md](docs/仿真环境配置指南.md)     | 训练数据下载、仿真环境配置       |
+| [docs/仿真测试指南.md](docs/仿真测试指南.md)             | Isaac 仿真评测                   |
+| [docs/策略服务启动指南.md](docs/策略服务启动指南.md)     | 策略服务启动规范与命令           |
 
-## 远程服务器操作指南
 
-详见 [docs/远程服务器详情.md](docs/远程服务器详情.md)，包含 policy-server 和 issac-server 的配置、目录结构和操作规范。
 
-## 自训模型上传下载
+## 铁律
 
-在远程服务器上上传和下载自训模型，HF token 已配置。详见 [docs/模型上传下载指南.md](docs/模型上传下载指南.md)。
-
-**关键规则：远程服务器上模型统一下载到 `/data/checkpoints/` 目录下。**
-
-## 训练数据下载
-
-详见 [docs/仿真环境配置指南.md](docs/仿真环境配置指南.md) 中「LeRobot ee 数据下载」章节。
-
-**下载数据文件夹放置于远程服务器 `/data` 目录下。**
-
-## policy-server 服务日志规范
-
-每次启动或重启 policy-server 服务时，日志文件命名需包含 policy 目录名和时间戳，格式：
-
-```
-/data/outputs/<policy_dir名>_<YYYYMMDD_HHMMSS>.log
-```
-
-例如：`/data/outputs/X_VLA_20260730_112244.log`
-
-## Isaac 仿真评测
-
-详见 [docs/仿真测试指南.md](docs/仿真测试指南.md)。
-
-**注意：在 `RoboDojo/XPolicyLab/policy/` 下新增模型文件夹后，需要同步到 issac-server 服务器对应目录。**
+- 在进入服务器进行操作前，请阅读 [docs/远程服务器详情.md](docs/远程服务器详情.md)（服务器操作规范文档），务必按照文档规范操作。
+- 进行仿真评测前，请阅读 [docs/仿真测试指南.md](docs/仿真测试指南.md)，务必按照文档规范操作。
+- 启动策略服务务必阅读 [docs/策略服务启动指南.md](docs/策略服务启动指南.md)，务必按照文档规范操作。
+- 服务器中日志统一存放于 `/data/outputs` 下，且日志名称末尾需要带时间戳。
+- 如在服务器上无法拉取私人仓库，可使用本地 `~/Documents/token/github` 中 token，切忌明文使用。
