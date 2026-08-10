@@ -645,8 +645,6 @@ class Model(ModelTemplate):
                 gripper_threshold=self.gripper_threshold,
             )
             if self.log_io:
-                left_prob = raw_chunk[:, 9]
-                right_prob = raw_chunk[:, 19]
                 summary = {
                     "event": "server_actions",
                     "request": self._request_index,
@@ -655,32 +653,6 @@ class Model(ModelTemplate):
                     "execute_steps": int(executed_chunk.shape[0]),
                     "gripper_mode": self.gripper_mode,
                     "gripper_threshold": self.gripper_threshold,
-                    "left_gripper_probability": {
-                        "min": float(np.min(left_prob)),
-                        "max": float(np.max(left_prob)),
-                        "executed": executed_chunk[:, 9].tolist(),
-                        "command": [
-                            float(action["left_ee_joint_state"][0])
-                            for action in actions
-                        ],
-                    },
-                    "right_gripper_probability": {
-                        "min": float(np.min(right_prob)),
-                        "max": float(np.max(right_prob)),
-                        "executed": executed_chunk[:, 19].tolist(),
-                        "command": [
-                            float(action["right_ee_joint_state"][0])
-                            for action in actions
-                        ],
-                    },
-                    "left_xyz": {
-                        "min": np.min(executed_chunk[:, 0:3], axis=0).tolist(),
-                        "max": np.max(executed_chunk[:, 0:3], axis=0).tolist(),
-                    },
-                    "right_xyz": {
-                        "min": np.min(executed_chunk[:, 10:13], axis=0).tolist(),
-                        "max": np.max(executed_chunk[:, 10:13], axis=0).tolist(),
-                    },
                     "actions_16d": [
                         np.concatenate(
                             [
