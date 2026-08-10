@@ -196,10 +196,16 @@ class XVLA(PreTrainedModel):
         domain_id: torch.LongTensor,
         proprio: torch.Tensor,
         steps: int = 10,
+        generator: torch.Generator | None = None,
     ) -> torch.Tensor:
         """
         Iterative denoising (linear schedule).
         Applies action_space.postprocess at the end (e.g., sigmoid on gripper).
+
+        Args:
+            generator: optional RNG for the initial flow-matching noise x1.
+                When provided, the same seed reproduces the same noise sequence;
+                when None, sampling uses the process-global RNG as before.
         """
         self.eval()
         enc = self.forward_vlm(input_ids, image_input, image_mask)
@@ -207,7 +213,14 @@ class XVLA(PreTrainedModel):
         B = input_ids.shape[0]
         D = self.action_space.dim_action
 
-        x1 = torch.randn(B, self.num_actions, D, device=proprio.device, dtype=proprio.dtype)
+        x1 = torch.randn(
+            B,
+            self.num_actions,
+            D,
+            device=proprio.device,
+            dtype=proprio.dtype,
+            generator=generator,
+        )
         action = torch.zeros_like(x1)
 
         steps = max(1, int(steps))

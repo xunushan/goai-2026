@@ -17,13 +17,16 @@ prompt: null
 model_path: null
 processor_path: checkpoints/shared/X-VLA-Pt
 lora_path: null
-domain_id: 0
+domain_id: 6
 # Flow-matching denoising iterations. This is not the number of simulator
 # actions executed before the next inference.
 steps: 10
+# Flow-noise 的评测复现 seed：相同 (layout, policy, ckpt) 可复现轨迹。
+# 正式测评前删除本行（或置 null）即恢复原始随机噪声，无需改代码。
+policy_seed: 42
 # The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
-actions_per_chunk: 30
+actions_per_chunk: 25
 gripper_mode: continuous
 gripper_threshold: 0.7
 task_prompt_map:

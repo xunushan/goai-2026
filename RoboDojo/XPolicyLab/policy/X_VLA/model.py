@@ -419,13 +419,26 @@ class Model(ModelTemplate):
                 f"steps must be at least 1, got {self.denoise_steps}"
             )
         self._request_index = 0
+        # 评测复现用的 flow-noise seed。None / 未配置 = 关闭（保持原始随机行为，
+        # 正式测评时直接删除 deploy.yml 的 policy_seed 行即可）；配置数值后每次
+        # episode reset 都从固定序列起点开始，相同 (layout, policy, ckpt) 可复现。
+        policy_seed_cfg = self.model_cfg.get("policy_seed")
+        self.policy_seed: int | None = (
+            None
+            if policy_seed_cfg is None
+            or str(policy_seed_cfg).strip().lower() in {"", "none", "null"}
+            else int(policy_seed_cfg)
+        )
+        self._policy_generators: dict[int, torch.Generator] = {}
+        self._policy_noise_draws: dict[int, int] = {}
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
             f"execute_steps={self.actions_per_chunk} "
             f"denoise_steps={self.denoise_steps} "
             f"gripper_mode={self.gripper_mode} "
-            f"gripper_threshold={self.gripper_threshold}",
+            f"gripper_threshold={self.gripper_threshold} "
+            f"policy_seed={self.policy_seed}",
             flush=True,
         )
 
@@ -575,7 +588,12 @@ class Model(ModelTemplate):
             zip(self._latest_env_idx_list, obs_list, strict=True)
         )
 
-    def infer(self, observation: dict[str, Any], steps: int | None = None):
+    def infer(
+        self,
+        observation: dict[str, Any],
+        steps: int | None = None,
+        generator: torch.Generator | None = None,
+    ):
         pil_images = [Image.fromarray(image) for image in observation["images"]]
         prompt = resolve_prompt(observation, self.default_prompt)
         inputs = self.processor(images=pil_images, language_instruction=prompt)
@@ -600,8 +618,29 @@ class Model(ModelTemplate):
         if denoise_steps < 1:
             raise ValueError(f"steps must be at least 1, got {denoise_steps}")
         with torch.no_grad():
-            action = self.model.generate_actions(**inputs, steps=denoise_steps)
+            action = self.model.generate_actions(
+                **inputs,
+                steps=denoise_steps,
+                generator=generator,
+            )
         return action.squeeze(0).float().cpu().numpy()
+
+    def _get_policy_generator(self, env_idx: int) -> torch.Generator | None:
+        """每个 env 一个独立 generator，保证 env 间噪声序列互不干扰。
+
+        policy_seed 未配置时返回 None（infer 保持原始随机行为）。
+        env_seed = policy_seed + 1_000_003 * env_idx，大质数间隔分隔不同环境；
+        某环境提前结束不会改变其他环境的噪声序列。
+        """
+        if self.policy_seed is None:
+            return None
+        env_idx = int(env_idx)
+        if env_idx not in self._policy_generators:
+            generator = torch.Generator(device=self.device)
+            generator.manual_seed(self.policy_seed + 1_000_003 * env_idx)
+            self._policy_generators[env_idx] = generator
+            self._policy_noise_draws[env_idx] = 0
+        return self._policy_generators[env_idx]
 
     def get_action(self, **kwargs):
         action_list = self.get_action_batch(env_idx_list=[self._latest_env_idx_list[0]], **kwargs)
@@ -626,7 +665,11 @@ class Model(ModelTemplate):
                 encoded_obs,
                 resolved_env_idx,
             )
-            raw_chunk = self.infer(encoded_obs)
+            generator = self._get_policy_generator(resolved_env_idx)
+            raw_chunk = self.infer(encoded_obs, generator=generator)
+            if generator is not None:
+                # 记录为「本次采样后累计次数」（1-based）：env 首次重规划为 1
+                self._policy_noise_draws[resolved_env_idx] += 1
             if raw_chunk.ndim != 2 or raw_chunk.shape[1] < 20:
                 raise ValueError(
                     f"Expected X-VLA action chunk [T,>=20], got {raw_chunk.shape}"
@@ -653,6 +696,12 @@ class Model(ModelTemplate):
                     "execute_steps": int(executed_chunk.shape[0]),
                     "gripper_mode": self.gripper_mode,
                     "gripper_threshold": self.gripper_threshold,
+                    "policy_seed": self.policy_seed,
+                    "policy_noise_draw": (
+                        self._policy_noise_draws[resolved_env_idx]
+                        if self.policy_seed is not None
+                        else None
+                    ),
                     "actions_16d": [
                         np.concatenate(
                             [
@@ -680,3 +729,6 @@ class Model(ModelTemplate):
         self._raw_by_env = {}
         self._latest_by_env = {}
         self._request_index = 0
+        # episode 开始：清空生成器，使每个 episode 从固定噪声序列起点重新开始
+        self._policy_generators = {}
+        self._policy_noise_draws = {}
