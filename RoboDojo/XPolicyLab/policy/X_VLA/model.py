@@ -681,6 +681,17 @@ class Model(ModelTemplate):
                         "min": np.min(executed_chunk[:, 10:13], axis=0).tolist(),
                         "max": np.max(executed_chunk[:, 10:13], axis=0).tolist(),
                     },
+                    "actions_16d": [
+                        np.concatenate(
+                            [
+                                action["left_ee_pose"],
+                                action["left_ee_joint_state"],
+                                action["right_ee_pose"],
+                                action["right_ee_joint_state"],
+                            ]
+                        ).astype(np.float32).tolist()
+                        for action in actions
+                    ],
                 }
                 print(
                     "[x_vla][io] "
