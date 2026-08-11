@@ -27,6 +27,8 @@ from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim
 from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
 
+from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
+
 
 def extract_image(observation, candidate_names):
     vision = observation.get("vision", {})
@@ -412,6 +414,15 @@ class Model(ModelTemplate):
                 "gripper_threshold must be within [0,1], got "
                 f"{self.gripper_threshold}"
             )
+        # 夹爪迟滞（闭环改造方案 3.2 节 D4）：执行层后处理，作用于最终返回的
+        # 16 维动作（ee-dict list）的夹爪维、6D→四元数转换之后。enabled=false 跳过。
+        self._hysteresis_cfg = HysteresisConfig.from_model_cfg(self.model_cfg)
+        if self._hysteresis_cfg.enabled and self.gripper_mode != "continuous":
+            raise ValueError(
+                "gripper hysteresis requires gripper_mode='continuous' "
+                f"(got {self.gripper_mode!r}); hysteresis takes over the gripper "
+                "output."
+            )
         self.log_io = bool(self.model_cfg.get("log_io", True))
         self.denoise_steps = int(self.model_cfg.get("steps", 10))
         if self.denoise_steps < 1:
@@ -438,6 +449,7 @@ class Model(ModelTemplate):
             f"denoise_steps={self.denoise_steps} "
             f"gripper_mode={self.gripper_mode} "
             f"gripper_threshold={self.gripper_threshold} "
+            f"hysteresis={self._hysteresis_cfg.mode if self._hysteresis_cfg.enabled else 'off'} "
             f"policy_seed={self.policy_seed}",
             flush=True,
         )
@@ -687,6 +699,19 @@ class Model(ModelTemplate):
                 gripper_mode=self.gripper_mode,
                 gripper_threshold=self.gripper_threshold,
             )
+            # 夹爪迟滞（执行层后处理，D4）：作用于最终 16 维动作的夹爪维、
+            # 6D→四元数转换之后。latch 每次由当前 obs 的真实夹爪位置初始化，
+            # 无跨请求状态；enabled=false 跳过。
+            if self._hysteresis_cfg.enabled:
+                obs_state = self._raw_by_env[resolved_env_idx]["state"]
+                apply_gripper_hysteresis(
+                    actions,
+                    left_init=float(obs_state["left_ee_joint_state"][-1]),
+                    right_init=float(obs_state["right_ee_joint_state"][-1]),
+                    lo=self._hysteresis_cfg.lo,
+                    hi=self._hysteresis_cfg.hi,
+                    mode=self._hysteresis_cfg.mode,
+                )
             if self.log_io:
                 summary = {
                     "event": "server_actions",
@@ -696,6 +721,11 @@ class Model(ModelTemplate):
                     "execute_steps": int(executed_chunk.shape[0]),
                     "gripper_mode": self.gripper_mode,
                     "gripper_threshold": self.gripper_threshold,
+                    "hysteresis": (
+                        self._hysteresis_cfg.mode
+                        if self._hysteresis_cfg.enabled
+                        else None
+                    ),
                     "policy_seed": self.policy_seed,
                     "policy_noise_draw": (
                         self._policy_noise_draws[resolved_env_idx]
