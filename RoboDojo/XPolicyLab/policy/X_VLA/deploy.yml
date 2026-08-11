@@ -26,11 +26,21 @@ steps: 10
 policy_seed: 42
 # The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
-actions_per_chunk: 25
+actions_per_chunk: 30
 gripper_mode: continuous
 gripper_threshold: 0.7
+# 夹爪迟滞（闭环执行改造方案 3.2 节 D4）。enabled=false 完全旁路（与现状逐帧一致）；
+# 启用时保持 gripper_mode: continuous，迟滞接管夹爪输出，不需要 gripper_threshold。
+hysteresis:
+  enabled: false
+  mode: direction_latch   # binary（离散 0/1 迟滞）| direction_latch（连续迟滞）
+  lo: 0.3
+  hi: 0.7
+# 指令实验（候选 A）：key 必须与 sim 端 task.gen_instruction 发送的指令逐字符一致
+# （含句号），值才是实际喂给模型的 prompt；用 task name 作 key 不会命中 resolve_prompt。
+# 改动内容：保留原句 + 澄清竖向堆叠 + 补充"回家"（对齐成功判据 all_robot_back_to_origin）。
 task_prompt_map:
-  stack_blocks: "Stack the three blocks with different textures."
+  "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
 log_io: true
