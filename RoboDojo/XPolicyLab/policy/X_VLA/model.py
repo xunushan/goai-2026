@@ -45,6 +45,29 @@ def extract_image(observation, candidate_names):
     raise KeyError(f"Could not find any image for candidates: {candidate_names}")
 
 
+def extract_named_image(observation, camera_name):
+    """按精确相机名从 observation['vision'] 提取单路图像（无候选回退）。
+
+    多视角 camera_names 配置专用：找不到相机、或相机缺 color/rgb 字段直接报错，
+    避免静默落到错误视角。与 extract_image 的候选回退语义互补。
+    """
+    vision = observation.get("vision", {})
+    if camera_name not in vision:
+        raise KeyError(
+            f"camera {camera_name!r} not found in observation['vision'] "
+            f"(available: {sorted(vision)})"
+        )
+    image = vision[camera_name]
+    if isinstance(image, dict):
+        for image_key in ("color", "rgb"):
+            if image_key in image:
+                return image[image_key]
+        raise KeyError(
+            f"camera {camera_name!r} has no color/rgb field: {sorted(image)}"
+        )
+    return image
+
+
 def ensure_hwc_uint8(image):
     if isinstance(image, (bytes, bytearray, memoryview)):
         image = decode_compressed_image(np.frombuffer(bytes(image), dtype=np.uint8))
@@ -292,7 +315,20 @@ def build_xvla_proprio(observation: dict[str, Any]) -> np.ndarray:
     ).astype(np.float32)
 
 
-def encode_obs(observation, default_prompt, task_prompt_map=None):
+def encode_obs(observation, default_prompt, task_prompt_map=None, camera_names=None):
+    if camera_names:
+        # 多视角：按 camera_names 顺序逐路提取，与模型训练视角顺序严格一致。
+        images = [
+            ensure_hwc_uint8(extract_named_image(observation, name))
+            for name in camera_names
+        ]
+        prompt = resolve_prompt(observation, default_prompt, task_prompt_map)
+        return {
+            "images": images,
+            "proprio": build_xvla_proprio(observation),
+            "prompt": prompt,
+            "output_format": "xpolicylab",
+        }
     if "images" in observation and "state" in observation:
         head = ensure_hwc_uint8(observation["images"]["cam_high"])
         prompt = resolve_prompt(observation, default_prompt, task_prompt_map)
@@ -429,6 +465,23 @@ class Model(ModelTemplate):
             raise ValueError(
                 f"steps must be at least 1, got {self.denoise_steps}"
             )
+        # 多视角图像：按顺序指定送入模型的相机（1~3 路，默认顺序 cam_head →
+        # cam_left_wrist → cam_right_wrist）。不配置（或空）时保持原单路行为
+        # （encode_obs 走 legacy 候选回退，取 cam_head）。
+        raw_camera_names = self.model_cfg.get("camera_names") or []
+        self.camera_names = [
+            str(name).strip()
+            for name in raw_camera_names
+            if str(name).strip()
+        ]
+        if self.camera_names:
+            processor_views = int(getattr(self.processor, "num_views", 3) or 3)
+            if len(self.camera_names) > processor_views:
+                raise ValueError(
+                    f"camera_names has {len(self.camera_names)} entries but the "
+                    f"model processor supports num_views={processor_views}; "
+                    f"configure at most {processor_views} cameras."
+                )
         self._request_index = 0
         # 评测复现用的 flow-noise seed。None / 未配置 = 关闭（保持原始随机行为，
         # 正式测评时直接删除 deploy.yml 的 policy_seed 行即可）；配置数值后每次
@@ -447,6 +500,7 @@ class Model(ModelTemplate):
             f"model_chunk_size={self.model_chunk_size} "
             f"execute_steps={self.actions_per_chunk} "
             f"denoise_steps={self.denoise_steps} "
+            f"camera_names={self.camera_names or 'legacy(1-view)'} "
             f"gripper_mode={self.gripper_mode} "
             f"gripper_threshold={self.gripper_threshold} "
             f"hysteresis={self._hysteresis_cfg.mode if self._hysteresis_cfg.enabled else 'off'} "
@@ -590,7 +644,7 @@ class Model(ModelTemplate):
             for index, obs in enumerate(obs_list)
         ]
         self.observation_window = [
-            encode_obs(obs, self.default_prompt, self.task_prompt_map)
+            encode_obs(obs, self.default_prompt, self.task_prompt_map, self.camera_names)
             for obs in obs_list
         ]
         self._latest_by_env = dict(

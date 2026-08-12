@@ -15,9 +15,9 @@ obs_transform_pipeline: null
 action_type: ee
 prompt: null
 model_path: null
-processor_path: checkpoints/shared/X-VLA-Pt
+processor_path: /data/checkpoints/ckpt/RoboDojo/X_VLA/RoboDojo-sim-arx_x5-ee-0/ckpt-100000
 lora_path: null
-domain_id: 6
+domain_id: 0
 # Flow-matching denoising iterations. This is not the number of simulator
 # actions executed before the next inference.
 steps: 10
@@ -29,6 +29,10 @@ policy_seed: 42
 actions_per_chunk: 30
 gripper_mode: continuous
 gripper_threshold: 0.7
+# 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。
+# 支持 1~3 路（processor num_views=3）；不配置（或空）时保持原单路
+# cam_head 行为（encode_obs 走 legacy 候选回退）。
+camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
 # 夹爪迟滞（闭环执行改造方案 3.2 节 D4）。enabled=false 完全旁路（与现状逐帧一致）；
 # 启用时保持 gripper_mode: continuous，迟滞接管夹爪输出，不需要 gripper_threshold。
 hysteresis:
