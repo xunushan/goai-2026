@@ -285,19 +285,20 @@ class ArticulationObject(SingleArticulation):
             _FAR_CENTER[1] + random.uniform(-_FAR_JITTER, _FAR_JITTER),
             _FAR_CENTER[2] + random.uniform(-_FAR_JITTER, _FAR_JITTER),
         )
-        # GPU 物理下 close() 清理场景时 rigid 对象已删除，physics.tensors view 被
-        # invalidated，set_joint_positions/_apply_default_velocities 走 view 会崩溃。
-        # close 阶段对象即将被移走销毁，joint/velocity 设置失败不影响已保存结果，故容错跳过；
+        # GPU 物理下 close() 清理场景时 rigid 对象已删除，physics.tensors view 被 invalidated，
+        # set_joint_positions/_apply_default_velocities/set_local_pose/set_local_scale 均走
+        # physics view（set_local_pose 内部经 set_world_poses→get_root_transforms 读 view）会崩溃。
+        # close 阶段对象即将被销毁，物理操作失败不影响已保存结果，故整体容错跳过；
         # 正常运行阶段 view 有效，行为不变。
         try:
             self.set_current_joint_positions(self.initial_joint_positions)
+            ori = self.default_ori
+            scale = self.init_scale
+            self.set_local_pose(pos, ori)
+            self.set_local_scale(np.array(scale))
             self._apply_default_velocities()
         except Exception as e:
             print(f"Warning: relocate_offscreen physics view unavailable for {self._prim_path}: {e}")
-        ori = self.default_ori
-        scale = self.init_scale
-        self.set_local_pose(pos, ori)
-        self.set_local_scale(np.array(scale))
         self.app.update()
         visible = self.visual_cfg.get("visible", True)
         imageable = UsdGeom.Imageable(self.prim)
