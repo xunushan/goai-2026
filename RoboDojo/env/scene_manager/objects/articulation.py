@@ -232,8 +232,11 @@ class ArticulationObject(SingleArticulation):
     def initialize(self):
         self.physics_sim_view = SimulationManager.get_physics_sim_view()
         super().initialize(physics_sim_view=self.physics_sim_view)
-        self.upper_joint_positions = self.dof_properties["upper"].copy()
-        self.lower_joint_positions = self.dof_properties["lower"].copy()
+        # GPU 物理下 dof_properties 内部会把 CUDA tensor 转 numpy 崩溃（single_articulation.py dof_properties），
+        # 改用 get_dof_limits()（shape (count, max_dofs, 2)，[:, 0]=lower、[:, 1]=upper）并显式 .cpu()。
+        dof_limits = self._articulation_view.get_dof_limits()[0]
+        self.upper_joint_positions = dof_limits[:, 1].detach().cpu().numpy()
+        self.lower_joint_positions = dof_limits[:, 0].detach().cpu().numpy()
         self.initial_joint_positions = self.get_current_joint_positions()
         self.app = omni.kit.app.get_app()
         self.app.update()
