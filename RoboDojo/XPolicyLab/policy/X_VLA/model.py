@@ -669,6 +669,8 @@ class Model(ModelTemplate):
             "event": "client_observation",
             "request": self._request_index,
             "env_idx": env_idx,
+            "episode_idx": observation.get("episode_idx"),
+            "task_name": observation.get("task_name"),
             "instruction": str(observation.get("instruction", ""))[:200],
             "model_prompt": resolve_prompt(
                 encoded_observation,
@@ -848,6 +850,9 @@ class Model(ModelTemplate):
                     "event": "server_actions",
                     "request": self._request_index,
                     "env_idx": resolved_env_idx,
+                    "episode_idx": self._raw_by_env[resolved_env_idx].get(
+                        "episode_idx"
+                    ),
                     "model_chunk_size": int(raw_chunk.shape[0]),
                     "execute_steps": int(executed_chunk.shape[0]),
                     "gripper_mode": self.gripper_mode,

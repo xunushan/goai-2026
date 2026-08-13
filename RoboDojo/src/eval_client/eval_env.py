@@ -4,6 +4,7 @@ import importlib
 import inspect
 import json
 import os
+import uuid
 
 from client_server.ws.model_client import WsModelClient
 import numpy as np
@@ -130,6 +131,9 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
             self.success_nums = 0
             self.fail_nums = 0
             self.total_score = 0
+            # 每个 episode 一个 8 位 uuid：随 obs 发给 server 写入日志，
+            # 同时用于视频命名（episode_<uuid>_cam_*.mp4）。
+            self.current_episode_uuid: dict[int, str] = {}
 
             self.abandoned_seeds: set[int] = set()
             self.current_env_seed_map: dict[int, int] = {}
@@ -230,6 +234,10 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
             self._abort_video_writers()
             self.episode_nums = len(real_indices)
             self.unstable_envs = set()
+            # 为本次 batch 中每个将运行的 env 分配独立 episode uuid。
+            # PhysX 坏 env 重试会重新 reset，生成新 uuid，保证不冲突。
+            for env_idx in real_indices:
+                self.current_episode_uuid[env_idx] = uuid.uuid4().hex[:8]
 
             self.current_env_seed_map = {}
             for idx in range(self.num_envs):
@@ -296,6 +304,12 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
                         if isinstance(attr_val, np.ndarray):
                             cam_val[attr_key] = attr_val.copy()
                 env_data["env_idx"] = env_idx
+                env_data["episode_idx"] = self.current_episode_uuid.get(
+                    env_idx, uuid.uuid4().hex[:8]
+                )
+                # 精确任务名（含 _random 后缀），作为独立字段传给 server；
+                # 不混入 instruction，便于日志区分 base/random。
+                env_data["task_name"] = self.task_name
                 data_list.append(env_data)
             return data_list
 
@@ -989,12 +1003,18 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
                 # layout id. Since init_eval populates seed_list as
                 # range(N_layouts), seed == layout_id by construction; use
                 # env_seeds[env_idx] directly.
+                episode_uuid = self.current_episode_uuid.get(
+                    env_idx, uuid.uuid4().hex[:8]
+                )
                 self.eval_result["details"][index] = {
                     "layout_id": int(self.env_seeds[env_idx]),
                     "success": bool(self.success[env_idx]),
                     "score": episode_score,
+                    "episode_idx": episode_uuid,
                 }
-                video_path = os.path.join(self.save_dir, f"episode_{index:07d}.mp4")
+                # 视频按 episode 的 uuid 命名，与 server 日志里的
+                # episode_idx 完全一致，便于日志↔视频↔结果对齐。
+                video_path = os.path.join(self.save_dir, f"episode_{episode_uuid}.mp4")
                 self.save_video(env_idx, video_path, tag)
 
             # Drop streams for envs not saved this batch (e.g. unstable ones).
