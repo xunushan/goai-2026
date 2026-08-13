@@ -18,10 +18,10 @@ conda activate XVLA
 hf download RoboDojo-Benchmark/RoboDojo \
   --repo-type dataset \
   --include "ckpt/RoboDojo/X_VLA/RoboDojo-sim-arx_x5-ee-0/ckpt-100000/*" \
-  --local-dir /data/checkpoints/x_vla/robodojo
+  --local-dir /data/checkpoints/xvla/
 ```
 
-下载 processor/tokenizer：
+下载 processor/tokenizer（仅作为训练/微调时复制到 checkpoint 的基座来源；部署时 processor 从模型 checkpoint 目录加载，无需单独指定）：
 
 ```bash
 hf download 2toINF/X-VLA-Pt \

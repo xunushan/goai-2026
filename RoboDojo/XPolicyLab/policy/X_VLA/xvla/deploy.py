@@ -26,8 +26,8 @@ import sys
 def main():
     parser = argparse.ArgumentParser(description="Launch XVLA inference FastAPI server")
     parser.add_argument("--model_path", type=str, required=True,
-                        help="Path to the pretrained XVLA model directory")
-    parser.add_argument('--processor_path', type=str, default=None)
+                        help="Path to the pretrained XVLA model directory "
+                             "(also holds the processor/tokenizer files)")
     parser.add_argument('--LoRA_path', type=str, default=None)
     parser.add_argument("--output_dir", type=str, default="./logs",
                         help="Directory to save runtime info (info.json)")
@@ -57,13 +57,12 @@ def main():
     print(f"🧠 Using device: {device}")
 
     # --------------------------------------------------------------------------
-    # Load processor (if available)
+    # Load processor from the model directory (co-located with the model)
     # --------------------------------------------------------------------------
     processor = None
     try:
         print("\n🧩 Loading XVLAProcessor...")
-        processor_path = args.processor_path if args.processor_path else args.model_path
-        processor =  XVLAProcessor.from_pretrained(processor_path)
+        processor = XVLAProcessor.from_pretrained(args.model_path)
         print("✅ XVLAProcessor loaded successfully.")
     except Exception as e:
         print(f"⚠️ No processor found or failed to load: {e}")

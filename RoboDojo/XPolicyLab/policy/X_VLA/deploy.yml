@@ -14,8 +14,10 @@ obs_transform_pipeline: null
 # Model / action configuration
 action_type: ee
 prompt: null
+# 模型路径即 checkpoint 目录（包含 config.json / model.safetensors 与
+# preprocessor_config.json / tokenizer 等 processor 文件）；processor 随模型加载，
+# 不再需要单独的 processor_path。
 model_path: null
-processor_path: /data/checkpoints/ckpt/RoboDojo/X_VLA/RoboDojo-sim-arx_x5-ee-0/ckpt-100000
 lora_path: null
 domain_id: 0
 # Flow-matching denoising iterations. This is not the number of simulator

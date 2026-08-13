@@ -155,10 +155,9 @@ def _resolve_path(value: str | None) -> Path | None:
 def _resolve_checkpoint_root(model_cfg: dict[str, Any]) -> Path | None:
     # Shared precedence: explicit path keys > ckpt_name-as-path > 5-tuple
     # concat under checkpoints/ > checkpoints/<ckpt_name> verbatim. The
-    # within-root step-dir discovery and the processor/base-model candidate
-    # discovery (_build_candidate_dirs) are preserved. processor_path is the
-    # base-model fallback, not a run-dir override, so it is only used when no
-    # ckpt_name / model_path / checkpoint_path was given.
+    # within-root step-dir discovery (_build_candidate_dirs) is preserved.
+    # The processor is co-located with the model in the checkpoint dir, so it is
+    # loaded from the resolved model path rather than a separate processor_path.
     explicit_keys = ("model_path", "checkpoint_path")
     if model_cfg.get("ckpt_name") or any(model_cfg.get(key) for key in explicit_keys):
         checkpoint_root = resolve_checkpoint_root(
@@ -200,7 +199,8 @@ def _resolve_checkpoint_root(model_cfg: dict[str, Any]) -> Path | None:
             return max(numeric_dirs, key=lambda candidate: _extract_step_number(candidate.name) or -1)
         return candidate_dirs[0]
 
-    return _resolve_path(model_cfg.get("processor_path"))
+    # No explicit path / ckpt_name was given; model loading will raise its own error.
+    return None
 
 
 def _build_candidate_dirs(checkpoint_root: Path | None, *explicit_paths: str | None) -> list[Path]:
@@ -514,23 +514,24 @@ class Model(ModelTemplate):
         return torch.device(device_arg)
 
     def _load_processor(self, model_cfg):
+        # Processor 与模型同目录（checkpoint 目录含 preprocessor_config.json 等
+        # processor 文件），随模型路径一起解析，不再有独立的 processor_path。
         checkpoint_root = _resolve_checkpoint_root(model_cfg)
         candidate_paths = _build_candidate_dirs(
             checkpoint_root,
-            model_cfg.get("processor_path"),
             model_cfg.get("model_path"),
             model_cfg.get("checkpoint_path"),
         )
-        
+
         processor_path = None
         for candidate in candidate_paths:
             if (candidate / "preprocessor_config.json").exists():
                 processor_path = str(candidate)
                 break
         if processor_path is None:
-            searched = ", ".join(str(path) for path in candidate_paths)
+            searched = ", ".join(str(path) for path in candidate_paths) or "none"
             raise FileNotFoundError(
-                "Could not find XVLA processor files. "
+                "Could not find XVLA processor files (preprocessor_config.json). "
                 f"Searched: {searched}"
             )
         return XVLAProcessor.from_pretrained(processor_path)

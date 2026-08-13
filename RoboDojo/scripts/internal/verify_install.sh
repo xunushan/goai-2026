@@ -172,17 +172,17 @@ import yaml
 
 policy_dir = Path("${policy_dir}")
 cfg = yaml.safe_load((policy_dir / "deploy.yml").read_text()) or {}
-processor = cfg.get("processor_path")
-if processor:
-    path = Path(processor).expanduser()
+model = cfg.get("model_path")
+if model:
+    path = Path(model).expanduser()
     if not path.is_absolute():
         path = policy_dir / path
     if not path.exists():
-        raise SystemExit(f"missing processor_path: {path}")
+        raise SystemExit(f"missing model_path: {path}")
 PY
-  record "PASS" "policy processor" "deploy.yml processor_path exists"
+  record "PASS" "policy model path" "deploy.yml model_path exists"
 else
-  record "FAIL" "policy processor" "deploy.yml processor_path is missing"
+  record "FAIL" "policy model path" "deploy.yml model_path is missing"
 fi
 else
   record "WARN" "policy processor" "skipped; pass --policy-dir to validate"

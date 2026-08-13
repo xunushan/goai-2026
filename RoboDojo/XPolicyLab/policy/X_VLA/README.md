@@ -175,8 +175,7 @@ Policy-specific `deploy.yml` keys worth checking before evaluation:
 | `checkpoint_num` | Runtime or checkpoint option consumed by this adapter. |
 | `obs_transform_pipeline` | Runtime or checkpoint option consumed by this adapter. |
 | `prompt` | Runtime or checkpoint option consumed by this adapter. |
-| `model_path` | Runtime or checkpoint option consumed by this adapter. |
-| `processor_path` | Base model or checkpoint directory containing processor/tokenizer files. Defaults to `checkpoints/shared/X-VLA-Pt`; update it if your base model lives elsewhere. |
+| `model_path` | Checkpoint directory holding the model and co-located processor/tokenizer files (`preprocessor_config.json`, `tokenizer_config.json`, ...). The processor is loaded from this path; no separate `processor_path` is needed. |
 | `lora_path` | Runtime or checkpoint option consumed by this adapter. |
 | `domain_id` | Runtime or checkpoint option consumed by this adapter. |
 | `steps` | Runtime or checkpoint option consumed by this adapter. |
@@ -202,6 +201,6 @@ Frequently used environment variables detected in the adapter scripts:
 ## Notes
 
 - Keep `ckpt_name` stable between training and evaluation. For data-size ablations, encode the subset in `ckpt_name` such as `stack_bowls_50ep`.
-- If a checkpoint directory lacks processor/tokenizer files, set `processor_path` in `deploy.yml` to the base model directory before evaluation.
+- The processor is loaded from the checkpoint/model directory itself (see `model_path` above). If a checkpoint directory lacks processor/tokenizer files, copy them from the base model into that directory before evaluation.
 - `task_name` is only the evaluation task; multi-task checkpoints can be evaluated on different tasks without renaming the checkpoint directory.
 - Prefer running `setup_eval_policy_server.sh` and `setup_eval_env_client.sh` separately when debugging dependency, CUDA, or model-loading issues.

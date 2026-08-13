@@ -40,10 +40,8 @@ overrides=(
 )
 
 if [[ -n "${XVLA_MODEL_PATH:-}" ]]; then
+    # Processor 与模型同目录，随模型路径加载；无需单独的 processor_path。
     overrides+=(model_path="${XVLA_MODEL_PATH}")
-fi
-if [[ -n "${XVLA_PROCESSOR_PATH:-}" ]]; then
-    overrides+=(processor_path="${XVLA_PROCESSOR_PATH}")
 fi
 
 exec env \
