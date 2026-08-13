@@ -30,8 +30,12 @@ policy_seed: 42
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
 actions_per_chunk: 30
 # 在线 temporal ensemble（ACT 式，参照 act_lerobot）。coefficient=null 关闭
-# （保持整段 chunk 执行）；启用时必须同时把 actions_per_chunk 改为 1 —— 每次
-# get_action 返回恰好一个对齐后的 ensembled action，客户端每个仿真步重新规划。
+# （保持整段 chunk 执行）。启用时按 actions_per_chunk 滑动窗口对齐多条预测做
+# 指数加权平均：每个仿真步不再重新推理，而是每隔 actions_per_chunk 步重规划
+# 一次、一次返回该段 K 个 ensembled action，推理成本为官方整段的 1/K。
+# 要求 actions_per_chunk < temporal_ensemble_horizon（相邻重规划窗口有重叠才有
+# 平滑意义）；actions_per_chunk == horizon（含 30 整段直出）时 ensemble 退化为
+# 直通，不产生额外计算。示例：actions_per_chunk: 5 + coeff: 0.01。
 # horizon 默认取 model_chunk_size（即 ckpt 的 num_actions=30），须在 [2, 30]。
 temporal_ensemble_coeff: null
 temporal_ensemble_horizon: null

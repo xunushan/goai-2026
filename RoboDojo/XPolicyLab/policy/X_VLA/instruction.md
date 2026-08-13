@@ -73,18 +73,21 @@ log_io: true
 ### Temporal ensemble（在线动作集成，参照 act_lerobot）
 
 默认 `actions_per_chunk: 30` 是「一次推理执行整段 30 步」的官方对齐行为。启用
-temporal ensemble 后改为**每个仿真步重新规划一次**，并对齐多条预测做指数加权平均，
-可提升动作平滑度（ACT 式，LeRobot 默认系数 0.01，正值更信任更早的预测）：
+temporal ensemble 后按 **actions_per_chunk 滑动窗口**对齐多条预测做指数加权平均，
+可提升动作平滑度（ACT 式，LeRobot 默认系数 0.01，正值更信任更早的预测）。推理
+成本为官方整段的 1/K：每隔 K 步才重规划一次，一次返回 K 个 ensembled action：
 
 ```yaml
-actions_per_chunk: 1     # 必须改为 1：每次 get_action 只返回一个 ensembled action
+actions_per_chunk: 5     # 每隔 5 步重规划一次，一次返回 5 个 ensembled action
 temporal_ensemble_coeff: 0.01
 temporal_ensemble_horizon: null   # 默认取 ckpt 的 num_actions=30，范围 [2, 30]
 ```
 
 - `temporal_ensemble_coeff: null`（默认）关闭，恢复整段 chunk 执行；
-- 启用时 `actions_per_chunk` 必须为 `1`，否则启动报错；
-- 每次推理仍产出完整 30 步 chunk，仅取其中对齐到当前时刻的一个 action 返回。
+- 启用时要求 `actions_per_chunk < temporal_ensemble_horizon`（相邻重规划的预测
+  窗口在时间上有重叠才有平滑意义）；`actions_per_chunk == horizon`（含 30 整段
+  直出）时 ensemble 自动退化为直通，不产生额外计算；
+- 每次推理仍产出完整 30 步 chunk，按时间对齐做指数加权平均后返回前 K 个动作。
 
 夹爪连续值直出（默认，推荐先测试）：
 

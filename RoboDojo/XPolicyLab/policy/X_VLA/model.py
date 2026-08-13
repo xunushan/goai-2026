@@ -28,6 +28,7 @@ from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
 
 from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
+from temporal_ensemble import ServerTemporalEnsembler
 
 
 def extract_image(observation, candidate_names):
@@ -222,71 +223,6 @@ def _build_candidate_dirs(checkpoint_root: Path | None, *explicit_paths: str | N
             if candidate not in candidates:
                 candidates.append(candidate)
     return candidates
-
-
-class _ServerTemporalEnsembler:
-    """Online ACT temporal ensemble for one simulator environment.
-
-    At simulator time t, the action for t combines predictions aligned to t:
-    chunk_t[0], chunk_{t-1}[1], ..., chunk_{t-k}[k], weighted by
-    w_i = exp(-coefficient * i) with w_0 the oldest prediction (older actions are
-    weighted more highly for positive coefficient, matching LeRobot's
-    ACTTemporalEnsembler / the original ACT implementation).
-
-    Operates on the raw model action chunk [T, D] (numpy), before the
-    rotate6d->quaternion conversion and gripper post-processing. The policy-server
-    response is exactly one ensembled action per request, so this mode requires
-    actions_per_chunk=1.
-    """
-
-    def __init__(self, coefficient: float, chunk_size: int):
-        self.coefficient = float(coefficient)
-        self.chunk_size = int(chunk_size)
-        self.actions: np.ndarray | None = None
-        self.counts: np.ndarray | None = None
-        self.last_prediction_count = 0
-
-    def reset(self) -> None:
-        self.actions = None
-        self.counts = None
-        self.last_prediction_count = 0
-
-    def update(self, chunk: np.ndarray) -> np.ndarray:
-        chunk = np.asarray(chunk, dtype=np.float32)
-        if chunk.ndim != 2 or chunk.shape[0] != self.chunk_size:
-            raise ValueError(
-                "Temporal ensemble expects one [T,D] chunk per environment, "
-                f"got {tuple(chunk.shape)} (chunk_size={self.chunk_size})"
-            )
-
-        weights = np.exp(-self.coefficient * np.arange(self.chunk_size))
-        cumulative_weights = np.cumsum(weights)
-
-        if self.actions is None:
-            self.actions = chunk.copy()
-            self.counts = np.ones((self.chunk_size, 1), dtype=np.int64)
-        else:
-            assert self.counts is not None
-            # self.actions holds weighted averages from older chunks aligned to
-            # the current and future simulator times. The new chunk's last entry
-            # has no older prediction after the queue is shifted, so update the
-            # T-1 aligned entries and append it separately.
-            previous_count = self.counts
-            self.actions *= cumulative_weights[previous_count - 1]
-            self.actions += chunk[:-1] * weights[previous_count]
-            self.actions /= cumulative_weights[previous_count]
-            self.counts = np.clip(previous_count + 1, 1, self.chunk_size)
-            self.actions = np.concatenate((self.actions, chunk[-1:]), axis=0)
-            self.counts = np.concatenate(
-                (self.counts, np.ones_like(self.counts[-1:])), axis=0
-            )
-
-        assert self.counts is not None
-        self.last_prediction_count = int(self.counts[0, 0])
-        action = self.actions[0]
-        self.actions = self.actions[1:]
-        self.counts = self.counts[1:]
-        return action
 
 
 def quat_to_rotate6d(quat: np.ndarray) -> np.ndarray:
@@ -499,9 +435,12 @@ class Model(ModelTemplate):
                 "actions_per_chunk must be within "
                 f"[1,{self.model_chunk_size}], got {self.actions_per_chunk}"
             )
-        # 在线 temporal ensemble（ACT 式）。每次 get_action 返回恰好一个对齐后的
-        # ensembled action，因此要求 actions_per_chunk=1（客户端每个仿真步重新
-        # 规划一次）。coeff=null 表示关闭（保持原始整段 chunk 执行行为）。
+        # 在线 temporal ensemble（ACT 式，参照 act_lerobot）。每次重规划产出完整
+        # chunk，按 actions_per_chunk 滑动窗口对齐多条预测做指数加权平均。coeff=null
+        # 表示关闭（保持原始整段 chunk 执行行为）。启用时要求
+        # actions_per_chunk < temporal_ensemble_horizon：相邻重规划的预测窗口存在
+        # 时间重叠才有平滑意义；actions_per_chunk >= horizon（含等于 30 整段直出）
+        # 时 ensemble 退化为直通，无需额外计算。
         requested_ensemble = self.model_cfg.get("temporal_ensemble_coeff")
         self.temporal_ensemble_coeff = (
             None if requested_ensemble is None else float(requested_ensemble)
@@ -511,15 +450,7 @@ class Model(ModelTemplate):
             and not np.isfinite(self.temporal_ensemble_coeff)
         ):
             raise ValueError("temporal_ensemble_coeff must be finite or null")
-        if (
-            self.temporal_ensemble_coeff is not None
-            and self.actions_per_chunk != 1
-        ):
-            raise ValueError(
-                "server-side temporal ensemble requires actions_per_chunk=1 "
-                "because it consumes exactly one aligned action per observation"
-            )
-        self._temporal_ensemblers: dict[int, _ServerTemporalEnsembler] = {}
+        self._temporal_ensemblers: dict[int, ServerTemporalEnsembler] = {}
         self.temporal_ensemble_horizon: int | None = None
         if self.temporal_ensemble_coeff is not None:
             if self.model_chunk_size < 2:
@@ -537,6 +468,13 @@ class Model(ModelTemplate):
                     f"[2,{self.model_chunk_size}], got "
                     f"{self.temporal_ensemble_horizon}"
                 )
+        # ensemble 是否实际生效：coeff 已设置 且 actions_per_chunk 小于 horizon
+        # （相邻重规划的预测窗口存在时间重叠）。否则 ensemble 无平滑意义，直接
+        # 按 actions_per_chunk 取 chunk 段直出。
+        self.temporal_ensemble_active = bool(
+            self.temporal_ensemble_coeff is not None
+            and self.actions_per_chunk < self.temporal_ensemble_horizon
+        )
         self.gripper_mode = str(
             self.model_cfg.get("gripper_mode", "continuous")
         ).lower()
@@ -609,6 +547,7 @@ class Model(ModelTemplate):
             f"hysteresis={self._hysteresis_cfg.mode if self._hysteresis_cfg.enabled else 'off'} "
             f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
+            f"temporal_ensemble_active={self.temporal_ensemble_active} "
             f"policy_seed={self.policy_seed}",
             flush=True,
         )
@@ -854,23 +793,32 @@ class Model(ModelTemplate):
                     f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
                 )
             temporal_ensemble_diagnostics = None
-            if self.temporal_ensemble_coeff is not None:
+            if self.temporal_ensemble_active:
+                assert self.temporal_ensemble_coeff is not None
                 assert self.temporal_ensemble_horizon is not None
                 ensembler = self._temporal_ensemblers.get(resolved_env_idx)
                 if ensembler is None:
-                    ensembler = _ServerTemporalEnsembler(
+                    ensembler = ServerTemporalEnsembler(
                         self.temporal_ensemble_coeff,
                         self.temporal_ensemble_horizon,
                     )
                     self._temporal_ensemblers[resolved_env_idx] = ensembler
                 pre_ensemble_action = raw_chunk[0].copy()
-                executed_chunk = ensembler.update(
-                    raw_chunk[: self.temporal_ensemble_horizon]
-                )[None, :]
+                # 每次重规划喂入完整 horizon 段，随后弹出 actions_per_chunk 个
+                # 对齐后的 ensembled action（滑动窗口：相邻重规划的预测窗口在
+                # 时间上重叠，重叠步取指数加权平均）。
+                ensembler.update(raw_chunk[: self.temporal_ensemble_horizon])
+                first_action = ensembler.pop()
+                aligned_prediction_count = ensembler.last_prediction_count
+                executed = [first_action] + [
+                    ensembler.pop()
+                    for _ in range(self.actions_per_chunk - 1)
+                ]
+                executed_chunk = np.stack(executed, axis=0)
                 temporal_ensemble_diagnostics = {
                     "enabled": True,
                     "coefficient": self.temporal_ensemble_coeff,
-                    "aligned_prediction_count": ensembler.last_prediction_count,
+                    "aligned_prediction_count": aligned_prediction_count,
                     "horizon": self.temporal_ensemble_horizon,
                     "model_chunk_size": int(raw_chunk.shape[0]),
                     "pre_ensemble_action": pre_ensemble_action.tolist(),
