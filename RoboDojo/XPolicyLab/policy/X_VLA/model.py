@@ -224,6 +224,71 @@ def _build_candidate_dirs(checkpoint_root: Path | None, *explicit_paths: str | N
     return candidates
 
 
+class _ServerTemporalEnsembler:
+    """Online ACT temporal ensemble for one simulator environment.
+
+    At simulator time t, the action for t combines predictions aligned to t:
+    chunk_t[0], chunk_{t-1}[1], ..., chunk_{t-k}[k], weighted by
+    w_i = exp(-coefficient * i) with w_0 the oldest prediction (older actions are
+    weighted more highly for positive coefficient, matching LeRobot's
+    ACTTemporalEnsembler / the original ACT implementation).
+
+    Operates on the raw model action chunk [T, D] (numpy), before the
+    rotate6d->quaternion conversion and gripper post-processing. The policy-server
+    response is exactly one ensembled action per request, so this mode requires
+    actions_per_chunk=1.
+    """
+
+    def __init__(self, coefficient: float, chunk_size: int):
+        self.coefficient = float(coefficient)
+        self.chunk_size = int(chunk_size)
+        self.actions: np.ndarray | None = None
+        self.counts: np.ndarray | None = None
+        self.last_prediction_count = 0
+
+    def reset(self) -> None:
+        self.actions = None
+        self.counts = None
+        self.last_prediction_count = 0
+
+    def update(self, chunk: np.ndarray) -> np.ndarray:
+        chunk = np.asarray(chunk, dtype=np.float32)
+        if chunk.ndim != 2 or chunk.shape[0] != self.chunk_size:
+            raise ValueError(
+                "Temporal ensemble expects one [T,D] chunk per environment, "
+                f"got {tuple(chunk.shape)} (chunk_size={self.chunk_size})"
+            )
+
+        weights = np.exp(-self.coefficient * np.arange(self.chunk_size))
+        cumulative_weights = np.cumsum(weights)
+
+        if self.actions is None:
+            self.actions = chunk.copy()
+            self.counts = np.ones((self.chunk_size, 1), dtype=np.int64)
+        else:
+            assert self.counts is not None
+            # self.actions holds weighted averages from older chunks aligned to
+            # the current and future simulator times. The new chunk's last entry
+            # has no older prediction after the queue is shifted, so update the
+            # T-1 aligned entries and append it separately.
+            previous_count = self.counts
+            self.actions *= cumulative_weights[previous_count - 1]
+            self.actions += chunk[:-1] * weights[previous_count]
+            self.actions /= cumulative_weights[previous_count]
+            self.counts = np.clip(previous_count + 1, 1, self.chunk_size)
+            self.actions = np.concatenate((self.actions, chunk[-1:]), axis=0)
+            self.counts = np.concatenate(
+                (self.counts, np.ones_like(self.counts[-1:])), axis=0
+            )
+
+        assert self.counts is not None
+        self.last_prediction_count = int(self.counts[0, 0])
+        action = self.actions[0]
+        self.actions = self.actions[1:]
+        self.counts = self.counts[1:]
+        return action
+
+
 def quat_to_rotate6d(quat: np.ndarray) -> np.ndarray:
     quat = np.asarray(quat, dtype=np.float32)
     if quat.shape[-1] != 4:
@@ -434,6 +499,44 @@ class Model(ModelTemplate):
                 "actions_per_chunk must be within "
                 f"[1,{self.model_chunk_size}], got {self.actions_per_chunk}"
             )
+        # 在线 temporal ensemble（ACT 式）。每次 get_action 返回恰好一个对齐后的
+        # ensembled action，因此要求 actions_per_chunk=1（客户端每个仿真步重新
+        # 规划一次）。coeff=null 表示关闭（保持原始整段 chunk 执行行为）。
+        requested_ensemble = self.model_cfg.get("temporal_ensemble_coeff")
+        self.temporal_ensemble_coeff = (
+            None if requested_ensemble is None else float(requested_ensemble)
+        )
+        if (
+            self.temporal_ensemble_coeff is not None
+            and not np.isfinite(self.temporal_ensemble_coeff)
+        ):
+            raise ValueError("temporal_ensemble_coeff must be finite or null")
+        if (
+            self.temporal_ensemble_coeff is not None
+            and self.actions_per_chunk != 1
+        ):
+            raise ValueError(
+                "server-side temporal ensemble requires actions_per_chunk=1 "
+                "because it consumes exactly one aligned action per observation"
+            )
+        self._temporal_ensemblers: dict[int, _ServerTemporalEnsembler] = {}
+        self.temporal_ensemble_horizon: int | None = None
+        if self.temporal_ensemble_coeff is not None:
+            if self.model_chunk_size < 2:
+                raise ValueError(
+                    "temporal ensemble needs model_chunk_size >= 2, got "
+                    f"{self.model_chunk_size}"
+                )
+            requested_horizon = self.model_cfg.get(
+                "temporal_ensemble_horizon", self.model_chunk_size
+            )
+            self.temporal_ensemble_horizon = int(requested_horizon)
+            if not 2 <= self.temporal_ensemble_horizon <= self.model_chunk_size:
+                raise ValueError(
+                    "temporal_ensemble_horizon must be within "
+                    f"[2,{self.model_chunk_size}], got "
+                    f"{self.temporal_ensemble_horizon}"
+                )
         self.gripper_mode = str(
             self.model_cfg.get("gripper_mode", "continuous")
         ).lower()
@@ -504,6 +607,8 @@ class Model(ModelTemplate):
             f"gripper_mode={self.gripper_mode} "
             f"gripper_threshold={self.gripper_threshold} "
             f"hysteresis={self._hysteresis_cfg.mode if self._hysteresis_cfg.enabled else 'off'} "
+            f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
+            f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"policy_seed={self.policy_seed}",
             flush=True,
         )
@@ -748,7 +853,30 @@ class Model(ModelTemplate):
                     "X-VLA returned an unexpected chunk length: "
                     f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
                 )
-            executed_chunk = raw_chunk[: self.actions_per_chunk]
+            temporal_ensemble_diagnostics = None
+            if self.temporal_ensemble_coeff is not None:
+                assert self.temporal_ensemble_horizon is not None
+                ensembler = self._temporal_ensemblers.get(resolved_env_idx)
+                if ensembler is None:
+                    ensembler = _ServerTemporalEnsembler(
+                        self.temporal_ensemble_coeff,
+                        self.temporal_ensemble_horizon,
+                    )
+                    self._temporal_ensemblers[resolved_env_idx] = ensembler
+                pre_ensemble_action = raw_chunk[0].copy()
+                executed_chunk = ensembler.update(
+                    raw_chunk[: self.temporal_ensemble_horizon]
+                )[None, :]
+                temporal_ensemble_diagnostics = {
+                    "enabled": True,
+                    "coefficient": self.temporal_ensemble_coeff,
+                    "aligned_prediction_count": ensembler.last_prediction_count,
+                    "horizon": self.temporal_ensemble_horizon,
+                    "model_chunk_size": int(raw_chunk.shape[0]),
+                    "pre_ensemble_action": pre_ensemble_action.tolist(),
+                }
+            else:
+                executed_chunk = raw_chunk[: self.actions_per_chunk]
             actions = action_chunk_to_ee_dict_list(
                 executed_chunk,
                 gripper_mode=self.gripper_mode,
@@ -781,6 +909,7 @@ class Model(ModelTemplate):
                         if self._hysteresis_cfg.enabled
                         else None
                     ),
+                    "temporal_ensemble": temporal_ensemble_diagnostics,
                     "policy_seed": self.policy_seed,
                     "policy_noise_draw": (
                         self._policy_noise_draws[resolved_env_idx]
@@ -817,3 +946,6 @@ class Model(ModelTemplate):
         # episode 开始：清空生成器，使每个 episode 从固定噪声序列起点重新开始
         self._policy_generators = {}
         self._policy_noise_draws = {}
+        # episode 开始：清空 temporal ensemble 状态，每个 episode 从新的预测
+        # 序列起点开始对齐
+        self._temporal_ensemblers = {}

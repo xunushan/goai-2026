@@ -70,6 +70,22 @@ log_io: true
 - `task_prompt_map`：将仿真 task name 映射为模型输入的完整自然语言指令，
   未命中的 instruction 保持原样。
 
+### Temporal ensemble（在线动作集成，参照 act_lerobot）
+
+默认 `actions_per_chunk: 30` 是「一次推理执行整段 30 步」的官方对齐行为。启用
+temporal ensemble 后改为**每个仿真步重新规划一次**，并对齐多条预测做指数加权平均，
+可提升动作平滑度（ACT 式，LeRobot 默认系数 0.01，正值更信任更早的预测）：
+
+```yaml
+actions_per_chunk: 1     # 必须改为 1：每次 get_action 只返回一个 ensembled action
+temporal_ensemble_coeff: 0.01
+temporal_ensemble_horizon: null   # 默认取 ckpt 的 num_actions=30，范围 [2, 30]
+```
+
+- `temporal_ensemble_coeff: null`（默认）关闭，恢复整段 chunk 执行；
+- 启用时 `actions_per_chunk` 必须为 `1`，否则启动报错；
+- 每次推理仍产出完整 30 步 chunk，仅取其中对齐到当前时刻的一个 action 返回。
+
 夹爪连续值直出（默认，推荐先测试）：
 
 ```yaml

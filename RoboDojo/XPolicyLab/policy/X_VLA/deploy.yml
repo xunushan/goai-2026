@@ -29,6 +29,12 @@ policy_seed: 42
 # The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
 actions_per_chunk: 30
+# 在线 temporal ensemble（ACT 式，参照 act_lerobot）。coefficient=null 关闭
+# （保持整段 chunk 执行）；启用时必须同时把 actions_per_chunk 改为 1 —— 每次
+# get_action 返回恰好一个对齐后的 ensembled action，客户端每个仿真步重新规划。
+# horizon 默认取 model_chunk_size（即 ckpt 的 num_actions=30），须在 [2, 30]。
+temporal_ensemble_coeff: null
+temporal_ensemble_horizon: null
 gripper_mode: continuous
 gripper_threshold: 0.7
 # 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。
