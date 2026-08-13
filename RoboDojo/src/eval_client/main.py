@@ -9,6 +9,20 @@ from isaaclab.app import AppLauncher
 
 MAX_INPROC_RESTARTS = 3
 
+# GPU 物理（sim_config device=cuda:0）下这些任务的物理对象（Articulation/Garment/Fluid）
+# 走 GPU physics view 会崩溃（见 docs/X-VLA仿真GPU物理失败根因分析与修复方案.md），
+# 已确认在 CPU 物理（device=cpu）下可正常跑，故按任务覆盖为 CPU。
+CPU_DEVICE_TASKS = {
+    "make_toast",
+    "make_toast_random",
+    "store_laptop_and_headphones",
+    "store_laptop_and_headphones_random",
+    "fold_clothes",
+    "fold_clothes_random",
+    "pour_liquid_into_cup",
+    "pour_liquid_into_cup_random",
+}
+
 parser = argparse.ArgumentParser()
 parser.add_argument("--task_name", type=str)
 parser.add_argument("--num_envs", type=int, default=1, help="Number of environments to spawn.")
@@ -303,6 +317,9 @@ def main():
             "deploy_cfg": deploy_cfg,
         }
     )
+    if task_name in CPU_DEVICE_TASKS:
+        print(f"[main] task {task_name} in CPU_DEVICE_TASKS, override sim.device -> cpu")
+        env_cfg.sim.device = "cpu"
     capped_num_envs = resolve_random_task_num_envs(task_name, num_envs, env_cfg.sim)
     if capped_num_envs != num_envs:
         print(
