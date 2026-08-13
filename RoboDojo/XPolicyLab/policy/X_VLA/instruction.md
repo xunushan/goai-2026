@@ -79,11 +79,12 @@ temporal ensemble 后按 **actions_per_chunk 滑动窗口**对齐多条预测做
 
 ```yaml
 actions_per_chunk: 5     # 每隔 5 步重规划一次，一次返回 5 个 ensembled action
-temporal_ensemble_coeff: 0.01
-temporal_ensemble_horizon: null   # 默认取 ckpt 的 num_actions=30，范围 [2, 30]
+temporal_ensemble_coeff: 0.01   # horizon 默认取 ckpt 的 num_actions=30，无需配置
 ```
 
 - `temporal_ensemble_coeff: null`（默认）关闭，恢复整段 chunk 执行；
+- `temporal_ensemble_horizon` 可选，缺省即 ckpt 的 `num_actions=30`（整段长度），
+  通常无需配置，仅在需要缩小平滑窗口时设置（范围 `[2, 30]`）；
 - 启用时要求 `actions_per_chunk < temporal_ensemble_horizon`（相邻重规划的预测
   窗口在时间上有重叠才有平滑意义）；`actions_per_chunk == horizon`（含 30 整段
   直出）时 ensemble 自动退化为直通，不产生额外计算；

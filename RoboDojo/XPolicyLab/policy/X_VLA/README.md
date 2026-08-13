@@ -181,7 +181,7 @@ Policy-specific `deploy.yml` keys worth checking before evaluation:
 | `steps` | Runtime or checkpoint option consumed by this adapter. |
 | `device` | Runtime or checkpoint option consumed by this adapter. |
 | `temporal_ensemble_coeff` | Exponential weighting coefficient for online ACT temporal ensemble. `null` (default) disables it and executes the whole chunk; a finite value enables a sliding-window ensemble: the server re-plans once per `actions_per_chunk` steps and returns that many aligned ensembled actions, so inference cost is 1/K of official chunked execution. Requires `actions_per_chunk < temporal_ensemble_horizon` (consecutive re-plans must overlap in time); otherwise the ensemble degenerates to direct chunk execution. Positive values weight older predictions more (LeRobot default 0.01). |
-| `temporal_ensemble_horizon` | Number of chunk steps the ensemble averages over. Defaults to the checkpoint's `num_actions`; must be within `[2, num_actions]` when ensemble is enabled. |
+| `temporal_ensemble_horizon` | Optional override for the ensemble window length. Absent (default) uses the checkpoint's `num_actions`; when set, must be within `[2, num_actions]`. |
 
 Frequently used environment variables detected in the adapter scripts:
 

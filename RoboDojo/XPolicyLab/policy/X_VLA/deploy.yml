@@ -36,9 +36,9 @@ actions_per_chunk: 30
 # 要求 actions_per_chunk < temporal_ensemble_horizon（相邻重规划窗口有重叠才有
 # 平滑意义）；actions_per_chunk == horizon（含 30 整段直出）时 ensemble 退化为
 # 直通，不产生额外计算。示例：actions_per_chunk: 5 + coeff: 0.01。
-# horizon 默认取 model_chunk_size（即 ckpt 的 num_actions=30），须在 [2, 30]。
+# horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
+# 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
 temporal_ensemble_coeff: null
-temporal_ensemble_horizon: null
 gripper_mode: continuous
 gripper_threshold: 0.7
 # 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。

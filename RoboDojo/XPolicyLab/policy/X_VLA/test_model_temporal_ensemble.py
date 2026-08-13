@@ -295,6 +295,17 @@ def test_disabled_default():
     return True
 
 
+def test_horizon_absent_defaults_to_num_actions():
+    # temporal_ensemble_horizon not configured: defaults to model_chunk_size.
+    m = make_model({"actions_per_chunk": 5, "temporal_ensemble_coeff": 0.01})
+    assert m.temporal_ensemble_horizon == 30, m.temporal_ensemble_horizon
+    assert m.temporal_ensemble_active is True
+    out = run_sliding(m, 2)
+    assert np.allclose(out[0], [0, 1, 2, 3, 4]), "K=5 with default horizon"
+    print("[PASS] horizon absent -> defaults to num_actions=30, ensemble active")
+    return True
+
+
 def test_reset_clears():
     m = make_model({
         "actions_per_chunk": 5,
@@ -337,6 +348,7 @@ def main():
     ok &= test_no_overlap_direct()
     ok &= test_horizon_less_than_chunk()
     ok &= test_disabled_default()
+    ok &= test_horizon_absent_defaults_to_num_actions()
     ok &= test_reset_clears()
     ok &= test_counts_ramp()
     print("ALL INTEGRATION TESTS PASSED" if ok else "SOME INTEGRATION TESTS FAILED")
