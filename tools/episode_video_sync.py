@@ -62,10 +62,14 @@ PLOTLY_URL = "https://cdn.plot.ly/plotly-2.35.2.min.js"
 # ---------------------------------------------------------------------------
 
 def compose_mosaic_video(
-    data_root: Path, video_info: dict, from_ts: float, dur: float,
-    out_path: Path, fps: int = 25,
+    data_root: Path, video_segs: dict, out_path: Path, fps: int = 25,
 ) -> None:
-    """三路相机视频合成 640x720 马赛克 (H.264, -g 5)。"""
+    """三路相机视频合成 640x720 马赛克 (H.264, -g 5)。
+
+    video_segs: {key: (path, from_ts, dur)}，每路相机用各自的 from_ts 截取——
+    同一 episode 在三路相机文件中的起始时间戳不同（见 CSV *_from_timestamp），
+    统一用 high 的 from_ts 会导致三路画面不同步/不是同一 episode。
+    """
     filter_complex = (
         "[0:v]scale=640:480,setsar=1[top];"
         "[1:v]scale=320:240,setsar=1[left];"
@@ -75,8 +79,9 @@ def compose_mosaic_video(
     )
     cmd = ["ffmpeg", "-hide_banner", "-y"]
     for key in ("high", "left", "right"):
-        src = data_root / video_info[key]
-        cmd += ["-ss", f"{from_ts:.4f}", "-t", f"{dur:.4f}", "-i", str(src)]
+        path, from_ts, dur = video_segs[key]
+        cmd += ["-ss", f"{from_ts:.4f}", "-t", f"{dur:.4f}", "-i",
+                str(data_root / path)]
     cmd += [
         "-filter_complex", filter_complex,
         "-map", "[out]",
@@ -384,11 +389,18 @@ def main() -> None:
         if mp4.is_file() and not args.regen_video:
             continue
         row = df[df["episode_index"] == ep].iloc[0]
-        vid = {k: str(row[f"{v}_path"]) for k, v in VIDEO_COLS.items()}
-        from_ts = float(row["high_video_from_timestamp"])
-        to_ts = float(row["high_video_to_timestamp"])
-        print(f"  compose ep {ep:3d} ({slug}) {from_ts:.2f}s..{to_ts:.2f}s ...")
-        compose_mosaic_video(data_root, vid, from_ts, to_ts - from_ts, mp4)
+        # 每路相机用各自 from/to 截取 (三路时间戳不同, 统一用 high 会错位)
+        segs = {}
+        for key, prefix in VIDEO_COLS.items():
+            segs[key] = (
+                str(row[f"{prefix}_path"]),
+                float(row[f"{prefix}_from_timestamp"]),
+                float(row[f"{prefix}_to_timestamp"]) - float(row[f"{prefix}_from_timestamp"]),
+            )
+        print(f"  compose ep {ep:3d} ({slug}) "
+              f"high={segs['high'][1]:.2f} left={segs['left'][1]:.2f} "
+              f"right={segs['right'][1]:.2f}s ...")
+        compose_mosaic_video(data_root, segs, mp4)
 
     # 2) 组装数据
     tasks = {}
