@@ -245,7 +245,7 @@ function vlineShape(k){ return { type:"line", x0:k, x1:k, yref:"paper", y0:0, y1
 function setFrame(k){
   const d = EPS[cur];
   k = Math.max(0, Math.min(d.frames-1, k|0));
-  const t = d.from + k/d.fps;
+  const t = k/d.fps;   // 马赛克视频时间轴从 0 开始 (ffmpeg -ss 前置截取重置了 PTS)
   if (Math.abs(video.currentTime - t) > 0.1) video.currentTime = t;
   slider.value = k;
   frameLabel.textContent = k;
@@ -261,7 +261,10 @@ function loadEpisode(ep){
   info.textContent = d.frames + " frames · " + d.fps + " fps · from " + d.from.toFixed(2) + "s";
   renderPlots(d);
   video.pause(); btn.textContent = "▶ 播放";
-  setFrame(0);
+  // 等新源 metadata 加载后再定位 (切换 src 后立即 seek 会因未加载而失败)
+  const seek = () => setFrame(0);
+  if (video.readyState >= 1) seek();
+  else video.addEventListener("loadedmetadata", seek, { once: true });
 }
 
 // ---------- 选择器 ----------
@@ -294,7 +297,7 @@ video.addEventListener("ended", () => { btn.textContent = "▶ 播放"; });
 video.addEventListener("timeupdate", () => {
   if (!dragging && cur) {
     const d = EPS[cur];
-    const k = Math.round((video.currentTime - d.from) * d.fps);
+    const k = Math.round(video.currentTime * d.fps);
     if (k >= 0 && k < d.frames) {
       slider.value = k; frameLabel.textContent = k;
       PLOT_IDS.forEach(id => Plotly.relayout(id, { shapes:[vlineShape(k)] }));
