@@ -234,7 +234,9 @@ function renderPlots(d){
   const lineTr = (y, c, name) => ({ x:fr, y, type:"scatter", mode:"lines",
     line:{color:c, width:1.4}, name });
   const lay = (title, yt, extra={}) => Object.assign({}, layoutBase,
-    { title, yaxis:Object.assign({}, layoutBase.yaxis, {title:yt}) }, extra);
+    { title,
+      xaxis:Object.assign({}, layoutBase.xaxis, { range:[0, d.frames-1] }),
+      yaxis:Object.assign({}, layoutBase.yaxis, {title:yt, autorange:true}) }, extra);
   Plotly.react("p-l",   xyzTr("L", d.xyz_l), lay("Left arm: position xyz", "position (m)"));
   Plotly.react("p-r",   xyzTr("R", d.xyz_r), lay("Right arm: position xyz", "position (m)"));
   Plotly.react("p-rot", [lineTr(d.rot_l, C.l, "Left arm"), lineTr(d.rot_r, C.r, "Right arm")],
