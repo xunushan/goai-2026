@@ -1,0 +1,52 @@
+# Basic experiment configuration
+policy_name: patch_policy
+protocol: ws
+host: localhost
+bench_name: null
+task_name: null
+env_cfg_type: null
+seed: null
+eval_batch: true
+
+action_type: ee
+
+# flow_policy checkpoint（单个 .pt 文件：torch.load 得到含 model_state_dict 的 dict）
+# 可由 robodojo.sh --ckpt 传入覆盖（走 ckpt_name 分支，也接受绝对路径）。
+ckpt_path: /data/goai_800/checkpoints/ckpt-5000.pt
+ckpt_name: null
+
+# 模型超参 —— 必须与训练配置 flow_policy/configs/train.yaml 的 model 段一致。
+model:
+  dim_action: 20
+  dim_propio: 20
+  cond_dim: 384
+  n_patches: 256
+  views: 3
+  num_actions: 30
+  n_obs_steps: 1
+  n_layer: 12
+  n_head: 12
+  n_embd: 768
+  p_drop_emb: 0.0
+  p_drop_attn: 0.1
+
+# Flow-matching 去噪迭代次数（不是实际执行的动作数）。
+steps: 10
+# 一次重规划后真正执行的动作数（1..num_actions）。30 = 整段 chunk 直出（官方对齐）。
+actions_per_chunk: 30
+
+# 夹爪：continuous 直出 [0,1]（1=开）；threshold 用 gripper_threshold 二值化。
+gripper_mode: continuous
+gripper_threshold: 0.7
+
+# 相机顺序与训练视角一致（训练 cam_high -> 仿真端 cam_head）。默认按此 3 路顺序。
+camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
+
+log_io: true
+device: cuda
+
+# 推理耗时可能超过 WebSocket 默认保活窗口；应用层已检测断连，禁用协议级 ping。
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
+
+port: 6000
