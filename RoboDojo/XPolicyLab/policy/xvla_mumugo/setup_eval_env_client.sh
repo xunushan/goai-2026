@@ -1,7 +1,5 @@
 #!/bin/bash
-# xvla_2 仿真端 client 启动脚本（robodojo.sh eval 调用；转发到 XPolicyLab/utils）。
 set -euo pipefail
-
 bench_name=$1
 task_name=$2
 ckpt_name=$3

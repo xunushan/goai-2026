@@ -1,8 +1,4 @@
 #!/bin/bash
-# xvla_2 eval 编排脚本（robodojo.sh eval 调用，契约与官方 policy eval.sh 一致）：
-#   1. 后台启动策略服务器（setup_eval_policy_server.sh，ws）；
-#   2. 等待服务器端口就绪（wait_for_policy_server.sh）；
-#   3. 启动仿真端 client（setup_eval_env_client.sh）。
 set -euo pipefail
 bench_name=$1
 task_name=$2
@@ -15,7 +11,7 @@ env_gpu_id=$8
 policy_conda_env=$9
 eval_env_conda_env=${10}
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" # Current Dir
 XPL_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 UTILS_DIR="${XPL_ROOT}/utils"
 

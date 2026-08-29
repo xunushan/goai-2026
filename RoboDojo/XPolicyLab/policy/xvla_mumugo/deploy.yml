@@ -1,0 +1,68 @@
+# Basic experiment configuration
+policy_name: xvla_mumugo
+protocol: ws
+host: localhost
+bench_name: null
+task_name: null
+env_cfg_type: null
+seed: null
+eval_batch: true
+
+checkpoint_num: null
+obs_transform_pipeline: null
+
+# Model / action configuration
+action_type: ee
+prompt: null
+# 模型路径即 checkpoint 目录（包含 config.json / model.safetensors 与
+# preprocessor_config.json / tokenizer 等 processor 文件）；processor 随模型加载，
+# 不再需要单独的 processor_path。
+model_path: null
+lora_path: null
+domain_id: 0
+# Flow-matching denoising iterations. This is not the number of simulator
+# actions executed before the next inference.
+steps: 10
+# Flow-noise 的评测复现 seed：null 为官方评测标准行为（原始随机噪声），
+# 请勿修改为其它值。
+policy_seed: null
+# The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
+# requesting a fresh observation. Keep 30 for official-aligned evaluation.
+actions_per_chunk: 30
+# 在线 temporal ensemble（ACT 式，参照 act_lerobot）。coefficient=null 关闭
+# （保持整段 chunk 执行）。启用时按 actions_per_chunk 滑动窗口对齐多条预测做
+# 指数加权平均：每个仿真步不再重新推理，而是每隔 actions_per_chunk 步重规划
+# 一次、一次返回该段 K 个 ensembled action，推理成本为官方整段的 1/K。
+# 要求 actions_per_chunk < temporal_ensemble_horizon（相邻重规划窗口有重叠才有
+# 平滑意义）；actions_per_chunk == horizon（含 30 整段直出）时 ensemble 退化为
+# 直通，不产生额外计算。示例：actions_per_chunk: 5 + coeff: 0.01。
+# horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
+# 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
+temporal_ensemble_coeff: null
+gripper_mode: continuous
+gripper_threshold: 0.7
+# 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。
+# 支持 1~3 路（processor num_views=3）；不配置（或空）时保持原单路
+# cam_head 行为（encode_obs 走 legacy 候选回退）。
+camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
+# 夹爪迟滞（闭环执行改造方案 3.2 节 D4）。enabled=false 完全旁路（与现状逐帧一致）；
+# 启用时保持 gripper_mode: continuous，迟滞接管夹爪输出，不需要 gripper_threshold。
+hysteresis:
+  enabled: false
+  mode: direction_latch   # binary（离散 0/1 迟滞）| direction_latch（连续迟滞）
+  lo: 0.3
+  hi: 0.7
+# 指令改写实验关闭：null = 原样使用评测端下发的指令（官方评测标准行为），请勿修改。
+task_prompt_map: null
+# Log action ranges plus raw/thresholded gripper values; image pixels are never
+# printed.
+log_io: true
+device: cuda
+
+# X-VLA inference can take longer than the WebSocket library's default
+# keepalive window. Application requests already detect a dead connection, so
+# disable protocol-level pings to avoid disconnecting a healthy long inference.
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
+
+port: 6000
