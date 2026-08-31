@@ -146,6 +146,7 @@ def create_empty_dataset(
     mode: Literal["video", "image"] = "image",
     *,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
+    streaming_encoding: bool = True,
 ) -> LeRobotDataset:
 
     features = {
@@ -182,6 +183,7 @@ def create_empty_dataset(
         image_writer_processes=dataset_config.image_writer_processes,
         image_writer_threads=dataset_config.image_writer_threads,
         video_backend=dataset_config.video_backend,
+        streaming_encoding=streaming_encoding and mode == "video",
     )
 
 
