@@ -24,6 +24,9 @@ fi
 if [[ -n "${raw_task_dirs}" ]]; then
   py_args+=("${raw_task_dirs}")
 fi
+if [[ -n "${OPENPI_REPO_ID:-}" ]]; then
+  py_args+=(--repo_id "${OPENPI_REPO_ID}")
+fi
 
 cd "${POLICY_DIR}/openpi"
 python scripts/process_data.py "${py_args[@]}"
