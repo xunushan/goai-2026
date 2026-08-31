@@ -85,7 +85,7 @@ def create_empty_dataset(
         fps=fps,
         robot_type=robot_type,
         features=features,
-        use_videos=dataset_config.use_videos,
+        use_videos=dataset_config.use_videos or mode == "video",
         tolerance_s=dataset_config.tolerance_s,
         image_writer_processes=dataset_config.image_writer_processes,
         image_writer_threads=dataset_config.image_writer_threads,
