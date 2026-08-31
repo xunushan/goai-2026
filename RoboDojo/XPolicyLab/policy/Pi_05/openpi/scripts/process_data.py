@@ -18,6 +18,10 @@ from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 ROOT_PATH = Path(__file__).parent.parent.parent.parent.parent
 
+# 数据与配置根目录可通过环境变量覆盖（默认仍为 XPolicyLab/data 与 XPolicyLab/env_cfg）
+DATA_ROOT = Path(os.environ.get("XDATA_ROOT", str(ROOT_PATH / "data")))
+ENV_CFG_ROOT = Path(os.environ.get("XENV_CFG_ROOT", str(ROOT_PATH / "env_cfg")))
+
 CAMERA_ALIASES = {
     "cam_head": "cam_high",
     "cam_left_wrist": "cam_left_wrist",
@@ -186,10 +190,10 @@ def main():
             raw_task_dirs_arg = args.expert_data_num
     raw_task_dirs = [item.strip() for item in (raw_task_dirs_arg or ckpt_name).split(",") if item.strip()]
 
-    env_cfg = load_yaml(os.path.join(ROOT_PATH, "./env_cfg", f"{env_cfg_type}.yml"))
+    env_cfg = load_yaml(os.path.join(ENV_CFG_ROOT, f"{env_cfg_type}.yml"))
     robot_type = env_cfg['config']['robot']
 
-    robot_action_dim_info = robot_action_dim_info = load_json(os.path.join(ROOT_PATH, "env_cfg/robot", "_robot_info.json"))[robot_type]
+    robot_action_dim_info = robot_action_dim_info = load_json(os.path.join(ENV_CFG_ROOT, "robot", "_robot_info.json"))[robot_type]
 
     dataset = create_empty_dataset(
         repo_id=repo_id,
@@ -202,7 +206,7 @@ def main():
 
     episode_files = []
     for raw_task_dir in raw_task_dirs:
-        load_data_dir = Path(ROOT_PATH) / "data" / str(bench_name) / raw_task_dir / str(env_cfg_type)
+        load_data_dir = DATA_ROOT / str(bench_name) / raw_task_dir / str(env_cfg_type)
         task_episode_files = sorted(load_data_dir.glob("data/episode_*.hdf5"))
         if not task_episode_files:
             task_episode_files = sorted(load_data_dir.glob("*.hdf5"))
