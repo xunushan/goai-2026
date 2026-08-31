@@ -239,12 +239,21 @@ def main():
                     frame[f"observation.images.{camera_name}"] = images[i]
 
                 dataset.add_frame(frame)
-            
+
             dataset.save_episode()
             dataset.hf_dataset = dataset.create_hf_dataset()
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
+
+    # 清理 video 模式下残留的空 images/ 目录（对齐官方结构：无 images/）
+    images_dir = dataset.root / "images"
+    if images_dir.exists():
+        for p in sorted(images_dir.rglob("*"), reverse=True):
+            if p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+        if images_dir.exists() and not any(images_dir.iterdir()):
+            images_dir.rmdir()
 
 if __name__ == "__main__":
     main()
