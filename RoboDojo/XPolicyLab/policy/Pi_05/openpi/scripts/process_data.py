@@ -93,7 +93,9 @@ def create_empty_dataset(
     )
 
 def _load_compressed_images(group: h5py.Group, key: str) -> np.ndarray:
-    return np.asarray(decode_image_bit(group[key]))
+    # h5py Dataset 不是 numpy 数组，先转成 ndarray 再交给 decode_image_bit
+    # （colors 为 (T,) 的 |S* 字节串数组，转 numpy 后 dtype.kind='S'，走 sequence 分支）
+    return np.asarray(decode_image_bit(np.asarray(group[key])))
 
 def _make_action_from_state(state: np.ndarray) -> np.ndarray:
     action = np.empty_like(state, dtype=np.float32)
