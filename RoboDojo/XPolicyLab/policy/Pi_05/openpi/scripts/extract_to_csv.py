@@ -88,6 +88,7 @@ def main():
 
     total_frames = 0
     total_episodes = 0
+    epi_counter = 0  # 全局 episode_index（与 process_data 的 save_episode 全局递增语义一致）
     with open(out_path, "w", newline="") as f:
         writer = csv.writer(f)
         writer.writerow(CSV_COLUMNS)
@@ -100,8 +101,8 @@ def main():
             if args.max_episodes is not None:
                 ep_files = ep_files[: args.max_episodes]
             for ep_file in ep_files:
-                ep_index = int(ep_file.stem.split("_")[-1])
-                n = extract_episode(ep_file, schema, task, ep_index, writer)
+                n = extract_episode(ep_file, schema, task, epi_counter, writer)
+                epi_counter += 1
                 total_frames += n
                 total_episodes += 1
                 if total_episodes % 50 == 0:
