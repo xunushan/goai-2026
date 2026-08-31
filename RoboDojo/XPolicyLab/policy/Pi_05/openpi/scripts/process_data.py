@@ -1,3 +1,4 @@
+import gc
 import os
 import numpy as np
 import shutil
@@ -380,10 +381,13 @@ def main():
                 dataset.add_frame(frame)
 
             dataset.save_episode()
-            dataset.hf_dataset = dataset.create_hf_dataset()
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
+        finally:
+            # 释放本 episode 解码的全部图像（3.5GB），避免下个 episode load_data 时峰值叠加触发 cgroup OOM
+            data = None
+            gc.collect()
 
     # 清理 video 模式下残留的空 images/ 目录（对齐官方结构：无 images/）
     images_dir = dataset.root / "images"
