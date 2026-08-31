@@ -7,7 +7,6 @@ import h5py
 import dataclasses
 from pathlib import Path
 from typing import Any, Literal
-import random
 from tqdm import tqdm
 
 from XPolicyLab.utils.load_file import load_yaml, load_json
@@ -49,11 +48,11 @@ def create_empty_dataset(
     robot_action_dim_info: dict = None,
 ) -> LeRobotDataset:
     
+    # 关节命名对齐官方 GOAI-2026 lerobot_v30_joint：
+    # 每臂 7 维（6 关节 + 1 末端执行器），命名 left_joint_0..6 / right_joint_0..6
     MOTORS = [
-        *[f"left_{i}" for i in range(robot_action_dim_info["arm_dim"][0])],
-        *[f"left_ee_{i}" for i in range(robot_action_dim_info["ee_dim"][0])],
-        *[f"right_{i}" for i in range(robot_action_dim_info["arm_dim"][1])],
-        *[f"right_ee_{i}" for i in range(robot_action_dim_info["ee_dim"][1])]
+        *[f"left_joint_{i}" for i in range(robot_action_dim_info["arm_dim"][0] + robot_action_dim_info["ee_dim"][0])],
+        *[f"right_joint_{i}" for i in range(robot_action_dim_info["arm_dim"][1] + robot_action_dim_info["ee_dim"][1])]
     ]
 
     features = {
@@ -73,7 +72,7 @@ def create_empty_dataset(
         features[f"observation.images.{camera_name}"] = {
             "dtype": mode,
             "shape": (3, 480, 640),
-            "names": ["height", "width", "channels"],
+            "names": ["channels", "height", "width"],
         }
 
     output_path = HF_LEROBOT_HOME / repo_id
@@ -124,10 +123,14 @@ def load_data(ep_path) -> dict[str, Any]:
         for source_name, output_name in CAMERA_ALIASES.items():
             if source_name in ep["vision"]:
                 images[output_name] = _load_compressed_images(ep["vision"][source_name], "colors")
-        try:
-            instructions = ep["instructions"]
-        except KeyError:
-            instructions = None
+        # hdf5 实际字段为 "instruction"（单数，标量 bytes）；兼容老数据保留 "instructions" 复数
+        raw_instruction = None
+        for key in ("instruction", "instructions"):
+            if key in ep:
+                raw_instruction = ep[key][()]
+                break
+        if isinstance(raw_instruction, bytes):
+            raw_instruction = raw_instruction.decode("utf-8")
 
     return {
         "images": images,
@@ -136,7 +139,7 @@ def load_data(ep_path) -> dict[str, Any]:
         "velocity": None,
         "effort": None,
         "timestamps": None,
-        "instructions": instructions,
+        "instructions": raw_instruction,
     }
 
 def main():
@@ -172,13 +175,19 @@ def main():
         default="Do your job.",
         help="Default instruction when not present in HDF5",
     )
+    parser.add_argument(
+        "--repo_id",
+        type=str,
+        default=None,
+        help="Override dataset repo_id (default: {bench_name}-{ckpt_name}-{env_cfg_type}-{action_type})",
+    )
     args = parser.parse_args()
 
     bench_name = args.bench_name
     ckpt_name = args.ckpt_name
     env_cfg_type = args.env_cfg_type
     action_type = args.action_type
-    repo_id = f"{bench_name}-{ckpt_name}-{env_cfg_type}-{action_type}"
+    repo_id = args.repo_id or f"{bench_name}-{ckpt_name}-{env_cfg_type}-{action_type}"
     mode = args.mode
     instruction = args.instruction
     expert_data_num = None
@@ -200,7 +209,7 @@ def main():
     dataset = create_empty_dataset(
         repo_id=repo_id,
         robot_type=robot_type,
-        fps=50, # pi default to 50
+        fps=25,  # 真实采集帧率：hdf5 additional_info/frequency=25，官方 lerobot_v30_joint 亦为 25
         mode=mode,
         dataset_config=DEFAULT_DATASET_CONFIG,
         robot_action_dim_info=robot_action_dim_info,
@@ -224,7 +233,7 @@ def main():
                 frame = {
                     "observation.state": data["state"][i],
                     "action": data["action"][i],
-                    "task": instruction if data["instructions"] is None else random.choice(data["instructions"]),
+                    "task": instruction if data["instructions"] is None else data["instructions"],
                 }
                 for camera_name, images in data["images"].items():
                     frame[f"observation.images.{camera_name}"] = images[i]
