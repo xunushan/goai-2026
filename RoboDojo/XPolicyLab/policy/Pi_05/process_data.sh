@@ -28,9 +28,6 @@ py_args+=(--mode "${mode}")
 if [[ -n "${OPENPI_REPO_ID:-}" ]]; then
   py_args+=(--repo_id "${OPENPI_REPO_ID}")
 fi
-if [[ "${OPENPI_SKIP_VIDEOS:-0}" == "1" ]]; then
-  py_args+=(--skip_videos)
-fi
 
 cd "${POLICY_DIR}/openpi"
 python scripts/process_data.py "${py_args[@]}"
