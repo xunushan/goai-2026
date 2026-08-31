@@ -188,12 +188,6 @@ def create_empty_dataset(
     )
 
 
-def _load_compressed_images(dataset: h5py.Dataset) -> np.ndarray:
-    # h5py Dataset 不是 numpy 数组，先转成 ndarray 再交给 decode_image_bit
-    # （colors 为 (T,) 的 |S* 字节串数组，转 numpy 后 dtype.kind='S'，走 sequence 分支）
-    return np.asarray(decode_image_bit(np.asarray(dataset)))
-
-
 def _make_action_from_state(state: np.ndarray) -> np.ndarray:
     action = np.empty_like(state, dtype=np.float32)
     if len(state) == 1:
@@ -234,23 +228,31 @@ def _extract_arm_parts(ep: h5py.File, parts) -> np.ndarray:
     return np.concatenate(pieces, axis=1)
 
 
-def load_data(ep_path: Path, schema: dict, action_type: str) -> dict[str, Any]:
+def load_data(ep_path: Path, schema: dict, action_type: str, block_size: int = 256) -> dict[str, Any]:
+    """加载单 episode。
+
+    图像按 block_size 帧分批解码（生成器逐个 yield），避免一次性解码整 episode
+    的 ~3.5GB 图像占用内存——连续转换多 episode 时，峰值叠加会触发服务器
+    cgroup OOM。数值列（state/action）小，全量驻留内存。
+    """
     parts_key = "state_parts_ee" if action_type == "ee" else "state_parts_joint"
     parts = schema[parts_key]
     if parts is None:
         raise ValueError(f"action_type='{action_type}' not supported by schema {schema!r}")
 
-    with h5py.File(ep_path, "r") as ep:
+    ep = h5py.File(ep_path, "r")
+    try:
         left = _extract_arm_parts(ep, parts[0])
         right = _extract_arm_parts(ep, parts[1])
         state = np.concatenate([left, right], axis=1).astype(np.float32)
         action = _make_action_from_state(state)
 
-        images = {}
+        # 只持有压缩字节（JPEG 共 ~几十 MB），解码在生成器里分块做
+        images_compressed = {}
         for source_keys, output_name in schema["cameras"].items():
             source = _get_nested(ep, *source_keys)
             if source is not None:
-                images[output_name] = _load_compressed_images(source)
+                images_compressed[output_name] = np.asarray(source)
 
         raw_instruction = None
         if schema["instruction"] == "hdf5":
@@ -261,9 +263,28 @@ def load_data(ep_path: Path, schema: dict, action_type: str) -> dict[str, Any]:
                     break
             if isinstance(raw_instruction, bytes):
                 raw_instruction = raw_instruction.decode("utf-8")
+    except Exception:
+        ep.close()
+        raise
+
+    num_frames = state.shape[0]
+
+    def gen_blocks():
+        try:
+            for s in range(0, num_frames, block_size):
+                e = min(s + block_size, num_frames)
+                block = {
+                    output_name: np.asarray(decode_image_bit(bits[s:e]))
+                    for output_name, bits in images_compressed.items()
+                }
+                yield s, block
+                del block
+        finally:
+            ep.close()
 
     return {
-        "images": images,
+        "image_blocks": gen_blocks(),
+        "num_frames": num_frames,
         "state": state,
         "action": action,
         "velocity": None,
@@ -362,30 +383,32 @@ def main():
     for raw_task_dir, ep_file in tqdm(episode_files, desc="Processing episodes", unit="episode"):
         try:
             data = load_data(ep_file, schema, action_type)
-            num_frames = data["state"].shape[0]
+            num_frames = data["num_frames"]
 
             if schema["instruction"] == "task_desc":
                 instruction = REAL_TASK_DESCRIPTIONS.get(raw_task_dir, instruction)
             elif data["instructions"] is not None:
                 instruction = data["instructions"]
 
-            for i in range(num_frames):
-                frame = {
-                    "observation.state": data["state"][i],
-                    "action": data["action"][i],
-                    "task": instruction,
-                }
-                for camera_name, images in data["images"].items():
-                    frame[f"observation.images.{camera_name}"] = images[i]
+            for start, block_images in data["image_blocks"]:
+                for i in range(len(next(iter(block_images.values())))):
+                    idx = start + i
+                    frame = {
+                        "observation.state": data["state"][idx],
+                        "action": data["action"][idx],
+                        "task": instruction,
+                    }
+                    for camera_name, images in block_images.items():
+                        frame[f"observation.images.{camera_name}"] = images[i]
 
-                dataset.add_frame(frame)
+                    dataset.add_frame(frame)
 
             dataset.save_episode()
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
         finally:
-            # 释放本 episode 解码的全部图像（3.5GB），避免下个 episode load_data 时峰值叠加触发 cgroup OOM
+            # 关闭图像块生成器（触发 hdf5 句柄关闭），释放本 episode 内存
             data = None
             gc.collect()
 
