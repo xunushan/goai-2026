@@ -13,8 +13,8 @@ from tqdm import tqdm
 from XPolicyLab.utils.load_file import load_yaml, load_json
 from XPolicyLab.utils.process_data import decode_image_bit
 
-from lerobot.common.datasets.lerobot_dataset import HF_LEROBOT_HOME
-from lerobot.common.datasets.lerobot_dataset import LeRobotDataset
+from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
+from lerobot.datasets.lerobot_dataset import LeRobotDataset
 
 ROOT_PATH = Path(__file__).parent.parent.parent.parent.parent
 
