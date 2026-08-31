@@ -350,16 +350,17 @@ def main():
         dataset_config=DEFAULT_DATASET_CONFIG,
     )
 
-    # 收集 episode 文件，带任务名（real 的 instruction 需按任务查表）
+    # 收集 episode 文件，带任务名（real 的 instruction 需按任务查表）。
+    # expert_data_num 按任务切片：全局切片会导致只有第一个任务被转换。
     episode_files = []  # (task_dir, path)
     for raw_task_dir in raw_task_dirs:
         load_data_dir = DATA_ROOT / str(bench_name) / raw_task_dir / str(env_cfg_type)
         task_episode_files = sorted(load_data_dir.glob("data/episode_*.hdf5"))
         if not task_episode_files:
             task_episode_files = sorted(load_data_dir.glob("*.hdf5"))
+        if expert_data_num is not None:
+            task_episode_files = task_episode_files[:expert_data_num]
         episode_files.extend((raw_task_dir, ep_file) for ep_file in task_episode_files)
-    if expert_data_num is not None:
-        episode_files = episode_files[:expert_data_num]
 
     for raw_task_dir, ep_file in tqdm(episode_files, desc="Processing episodes", unit="episode"):
         try:
