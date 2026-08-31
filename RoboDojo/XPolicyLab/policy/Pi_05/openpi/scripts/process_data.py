@@ -231,7 +231,7 @@ def _extract_arm_parts(ep: h5py.File, parts) -> np.ndarray:
     return np.concatenate(pieces, axis=1)
 
 
-def load_data(ep_path: Path, schema: dict, action_type: str) -> dict[str, Any]:
+def load_data(ep_path: Path, schema: dict, action_type: str, skip_videos: bool = False) -> dict[str, Any]:
     parts_key = "state_parts_ee" if action_type == "ee" else "state_parts_joint"
     parts = schema[parts_key]
     if parts is None:
@@ -244,10 +244,11 @@ def load_data(ep_path: Path, schema: dict, action_type: str) -> dict[str, Any]:
         action = _make_action_from_state(state)
 
         images = {}
-        for source_keys, output_name in schema["cameras"].items():
-            source = _get_nested(ep, *source_keys)
-            if source is not None:
-                images[output_name] = _load_compressed_images(source)
+        if not skip_videos:
+            for source_keys, output_name in schema["cameras"].items():
+                source = _get_nested(ep, *source_keys)
+                if source is not None:
+                    images[output_name] = _load_compressed_images(source)
 
         raw_instruction = None
         if schema["instruction"] == "hdf5":
@@ -364,7 +365,7 @@ def main():
 
     for raw_task_dir, ep_file in tqdm(episode_files, desc="Processing episodes", unit="episode"):
         try:
-            data = load_data(ep_file, schema, action_type)
+            data = load_data(ep_file, schema, action_type, skip_videos=args.skip_videos)
             num_frames = data["state"].shape[0]
 
             if schema["instruction"] == "task_desc":
