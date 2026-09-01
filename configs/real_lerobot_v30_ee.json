@@ -1,0 +1,20 @@
+{
+  "csv": "data/real_lerobot_v30_ee.csv",
+  "tasks_parquet": "data/real_lerobot_v30_ee/meta/tasks.parquet",
+  "task_slugs": {
+    "0": "fill_pen_holder",
+    "1": "put_objects_into_basket",
+    "2": "stack_and_cover_blocks",
+    "3": "stack_bowls",
+    "4": "stand_up_bottles",
+    "5": "insert_charger"
+  },
+  "episodes": [
+    0, 1, 2, 3, 4, 5,
+    100, 101, 102, 103, 104, 105,
+    278, 279, 280, 281, 282, 283,
+    300, 301, 302, 303, 304, 305,
+    490, 491, 492, 493, 494, 495,
+    500, 501, 502, 503, 504, 505
+  ]
+}

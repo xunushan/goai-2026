@@ -9,11 +9,17 @@
    episode 切换时重载视频与轨迹, 视频播完自动暂停, 可拖动回看。
 
 用法:
-    python tools/episode_video_sync.py                      # 每任务随机选 3 个有视频的 episode
-    python tools/episode_video_sync.py --episodes 85,83,86  # 只处理指定的 episode 白名单
-    python tools/episode_video_sync.py --per-task 5 --seed 0
-    python tools/episode_video_sync.py --regen-video        # 强制重合成视频
-    python tools/episode_video_sync.py --out outputs/episode_insight/interactive
+    python tools/episode_video_sync.py --csv data/lerobot_v30_ee.csv   # 每任务随机选 3 个有视频的 episode
+    python tools/episode_video_sync.py --csv ... --episodes 85,83,86   # 只处理指定的 episode 白名单
+    python tools/episode_video_sync.py --config config.json            # 用数据集配置文件 (推荐)
+
+数据集配置 JSON 示例 (task_slugs 用于马赛克文件名; tasks.parquet 缺省取
+<csv目录>/<csv名>/meta/tasks.parquet):
+    {
+      "csv": "data/real_lerobot_v30_ee.csv",
+      "task_slugs": {"0": "fill_pen_holder", "1": "put_objects_into_basket"},
+      "episodes": [0, 1, 2, 300, 301, 302]
+    }
 """
 
 from __future__ import annotations
@@ -21,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -36,7 +43,6 @@ from tools.episode_state_insight import (  # noqa: E402
     DEFAULT_CSV,
     QUAT_L,
     QUAT_R,
-    TASK_SLUGS,
     load_tasks,
     episode_state,
 )
@@ -325,9 +331,29 @@ window.addEventListener("load", fillEpisodes);
 # main
 # ---------------------------------------------------------------------------
 
+def build_slug_map(task_names: dict[int, str], custom: dict) -> dict[int, str]:
+    """task_index -> slug (用于马赛克视频文件名)。
+
+    优先级: 1) --config task_slugs 里的显式映射; 2) 任务名自动派生
+    (小写、非字母数字->下划线、去首尾下划线); 3) 回退 task_{idx:03d}。
+    """
+    slugs = {}
+    for idx, name in task_names.items():
+        s = custom.get(str(idx), custom.get(idx))
+        if not s:
+            s = re.sub(r"[^a-z0-9]+", "_", str(name).lower()).strip("_")[:40]
+        slugs[idx] = s or f"task_{idx:03d}"
+    return slugs
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--csv", default=str(DEFAULT_CSV))
+    parser.add_argument("--config", default=None,
+                        help="数据集配置 JSON, 可含 csv / tasks_parquet / task_slugs / "
+                             "episodes / per_task / seed (命令行参数优先)")
+    parser.add_argument("--csv", default=None)
+    parser.add_argument("--tasks-parquet", default=None,
+                        help="tasks.parquet 路径; 缺省取 <csv目录>/<csv名>/meta/tasks.parquet")
     parser.add_argument("--out", default=str(ROOT / "outputs" / "episode_insight" / "interactive"))
     parser.add_argument("--regen-video", action="store_true", help="强制重合成马赛克视频")
     parser.add_argument("--episodes", default=None,
@@ -337,14 +363,30 @@ def main() -> None:
     parser.add_argument("--seed", type=int, default=0, help="随机种子(可复现)")
     args = parser.parse_args()
 
-    data_root = Path(args.csv).parent / Path(args.csv).stem
+    # 配置优先级: 命令行 > --config JSON > 默认
+    cfg: dict = {}
+    if args.config:
+        cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+
+    csv_path = args.csv or cfg.get("csv") or str(DEFAULT_CSV)
+    if args.episodes is None and cfg.get("episodes"):
+        args.episodes = ",".join(str(e) for e in cfg["episodes"])
+    if args.per_task == 3 and cfg.get("per_task"):
+        args.per_task = int(cfg["per_task"])
+    if args.seed == 0 and cfg.get("seed"):
+        args.seed = int(cfg["seed"])
+
+    data_root = Path(csv_path).parent / Path(csv_path).stem
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     video_dir = out_dir / "videos"
 
-    task_names = load_tasks(ROOT / "data" / "lerobot_v30_ee" / "meta" / "tasks.parquet")
+    tasks_parquet = Path(args.tasks_parquet or cfg.get("tasks_parquet")
+                         or data_root / "meta" / "tasks.parquet")
+    task_names = load_tasks(tasks_parquet) if tasks_parquet.is_file() else {}
+    slug_map = build_slug_map(task_names, cfg.get("task_slugs", {}))
     df = pd.read_csv(
-        args.csv,
+        csv_path,
         usecols=["episode_index", "task_index", "frame_index", "length",
                  "observation.state", "high_video_path", "left_video_path", "right_video_path",
                  "high_video_from_timestamp", "left_video_from_timestamp", "right_video_from_timestamp",
@@ -384,7 +426,7 @@ def main() -> None:
     videos = {}
     for ep in sorted(ok_episodes):
         task_idx = int(df[df["episode_index"] == ep]["task_index"].iloc[0])
-        slug = TASK_SLUGS.get(task_idx, f"task_{task_idx:03d}")
+        slug = slug_map.get(task_idx, f"task_{task_idx:03d}")
         mp4 = video_dir / f"{slug}_{ep:03d}.mp4"
         # 相对 HTML (out_dir) 的路径, 便于 HTML 目录整体移动
         videos[str(ep)] = os.path.relpath(mp4, out_dir)
@@ -409,7 +451,7 @@ def main() -> None:
     eps = {}
     for ep in sorted(ok_episodes):
         task_idx = int(df[df["episode_index"] == ep]["task_index"].iloc[0])
-        slug = TASK_SLUGS.get(task_idx, f"task_{task_idx:03d}")
+        slug = slug_map.get(task_idx, f"task_{task_idx:03d}")
         key = str(task_idx)
         if key not in tasks:
             tasks[key] = {

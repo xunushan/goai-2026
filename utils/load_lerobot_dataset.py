@@ -371,32 +371,47 @@ def load_lerobot_as_dataframe(
 # =============================================================================
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) < 2:
-        print("用法: python load_lerobot_dataset.py <dataset_path> [n_episodes|ratio]")
-        print("示例: python load_lerobot_dataset.py data/lerobot_v30_ee 100")
-        print("示例: python load_lerobot_dataset.py data/lerobot_v30_ee 0.1")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="LeRobot v3.0 数据集 -> pandas DataFrame 宽表, 可选保存 CSV",
+    )
+    parser.add_argument("dataset_path", help="数据集根目录, 如 data/lerobot_v30_ee")
+    parser.add_argument("n_or_ratio", nargs="?", default=None,
+                        help="抽取数量(整数)或比例(浮点, 0~1); 缺省加载全部 episode")
+    parser.add_argument("--output", default=None,
+                        help="保存 CSV 路径 (如 data/real_lerobot_v30_ee.csv); "
+                             "缺省只打印摘要")
+    parser.add_argument("--episodes", default=None,
+                        help="只加载这些 episode (逗号分隔白名单), 与 n_or_ratio 互斥")
+    parser.add_argument("--seed", type=int, default=42, help="随机种子")
+    args = parser.parse_args()
 
-    dataset_path = sys.argv[1]
+    # 解析抽取参数
+    if args.episodes is not None:
+        want = [int(e) for e in args.episodes.split(",") if e.strip()]
 
-    # 解析命令行参数
-    n_or_ratio = None
-    if len(sys.argv) > 2:
-        val = sys.argv[2]
+        def load(dataset_path, **kwargs):
+            df = load_lerobot_as_dataframe(dataset_path, **kwargs)
+            return df[df["episode_index"].isin(want)].reset_index(drop=True)
+
+    elif args.n_or_ratio is not None:
+        val = args.n_or_ratio
         if "." in val:
-            n_or_ratio = float(val)  # ratio
+            load = lambda p, **k: load_lerobot_as_dataframe(p, ratio=float(val), **k)
         else:
-            n_or_ratio = int(val)  # n_episodes
-
-    # 调用主函数
-    if n_or_ratio is None:
-        df = load_lerobot_as_dataframe(dataset_path)
-    elif isinstance(n_or_ratio, float):
-        df = load_lerobot_as_dataframe(dataset_path, ratio=n_or_ratio)
+            load = lambda p, **k: load_lerobot_as_dataframe(p, n_episodes=int(val), **k)
     else:
-        df = load_lerobot_as_dataframe(dataset_path, n_episodes=n_or_ratio)
+        load = load_lerobot_as_dataframe
+
+    df = load(args.dataset_path, seed=args.seed)
+
+    # 保存 CSV
+    if args.output:
+        out = Path(args.output)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        df.to_csv(out, index=False)
+        print(f"\nCSV 已保存 -> {out}  ({out.stat().st_size / 1e6:.1f} MB)")
 
     # 打印结果摘要
     print(f"DataFrame shape: {df.shape}")
