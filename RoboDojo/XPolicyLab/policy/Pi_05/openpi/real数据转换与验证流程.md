@@ -8,7 +8,7 @@
   - 6 任务 × 100 episode = 600 episode，666,002 帧
 - **输出**：lerobot v3.0 数据集两种 action 类型
   - `real_lerobot_v30_joint`：state/action 14 维（左右各 7：6 关节 + 1 gripper）
-  - `real_lerobot_v30_ee`：state/action 16 维（左右各 8：x,y,z,qw,qx,qy,qz,g）
+  - `real_lerobot_v30_ee`：state/action 16 维（左右各 8：x,y,z,qx,qy,qz,qw,g，四元数 xyzw）
   - 两数据集**视频逐帧相同**，ee 通过软链接复用 joint 的视频
 - **上传目标**：HuggingFace `tianSeconds/goai_2026_lerobot`（一个仓库两个子文件夹）
 
