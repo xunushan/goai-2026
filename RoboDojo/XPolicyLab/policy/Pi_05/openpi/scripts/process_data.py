@@ -1,5 +1,11 @@
 import gc
 import os
+
+# 必须在 PIL/cv2/lerobot 之前导入 torchcodec（触发 libtorchcodec_coreN 加载）。
+# 若在 PIL 之后导入：Pillow 内嵌的 libjpeg.so.8 抢占绑定，conda libtiff.so.6 的
+# jpeg12_write_raw_data@LIBJPEG_8.0 符号无法解析 → "Could not load libtorchcodec"。
+import torchcodec  # noqa: F401
+
 import numpy as np
 import shutil
 import argparse
