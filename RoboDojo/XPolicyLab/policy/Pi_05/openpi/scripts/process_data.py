@@ -188,7 +188,7 @@ def create_empty_dataset(
     video_codec: str = "h264",
     crf: int | None = 25,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
-    streaming_encoding: bool = False,
+    streaming_encoding: bool = True,
 ) -> LeRobotDataset:
 
     features = {
@@ -422,11 +422,12 @@ def main():
         ),
     )
     parser.add_argument(
-        "--streaming-encoding",
+        "--no-streaming-encoding",
         action="store_true",
         help=(
-            "启用实时流式视频编码（lerobot 0.6.0 有界队列在重载下会静默丢帧）。"
-            "离线转换默认关闭（非 streaming 逐帧写临时图、save_episode 统一编码，不丢帧）。"
+            "关闭流式视频编码：逐帧写临时 PNG、save_episode 统一编码（不丢帧，但会短暂占用 images/ 临时目录）。"
+            "默认流式（与 lerobot 0.4.4 历史行为一致；0.6.0 单数据集 3 编码器实测不丢帧）。"
+            "仅 --resize 双数据集并发（6 编码器）时 0.6.0 有界队列可能静默丢帧，帧数校验不符时用此开关回退。"
         ),
     )
     args = parser.parse_args()
@@ -475,7 +476,7 @@ def main():
         video_codec=args.video_codec,
         crf=args.crf,
         dataset_config=DEFAULT_DATASET_CONFIG,
-        streaming_encoding=args.streaming_encoding,
+        streaming_encoding=not args.no_streaming_encoding,
     )
 
     # 额外生成一份按 pi0.5 letterbox resize 的数据集（pi0.5 用）；原分辨率数据集保留（xvla 用）
@@ -492,7 +493,7 @@ def main():
             video_codec=args.video_codec,
             crf=args.crf,
             dataset_config=DEFAULT_DATASET_CONFIG,
-            streaming_encoding=args.streaming_encoding,
+            streaming_encoding=not args.no_streaming_encoding,
         )
 
     # 收集 episode 文件，带任务名（real 的 instruction 需按任务查表）。
