@@ -549,9 +549,12 @@ def main():
                             frame_r[f"observation.images.{camera_name}"] = imgs[i]
                         dataset_resized.add_frame(frame_r)
 
-            dataset.save_episode()
+            # parallel_encoding=False：避免 save_episode 内 multiprocessing fork 与
+            # 已初始化的多线程 JAX（--resize 时）冲突导致死锁（RuntimeWarning 提示），
+            # 顺序编码输出与并行完全一致，仅转换耗时略增
+            dataset.save_episode(parallel_encoding=False)
             if dataset_resized is not None:
-                dataset_resized.save_episode()
+                dataset_resized.save_episode(parallel_encoding=False)
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
