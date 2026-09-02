@@ -398,9 +398,9 @@ def main():
         type=str,
         default=None,
         help=(
-            "额外生成一份按 pi0.5（openpi resize_with_pad）letterbox 方式 resize 的数据集，"
-            "repo_id 加后缀 '-<H>x<W>'；原分辨率数据集仍会生成（xvla 使用）。"
-            "取值如 '224'（224x224）或 '224x168'。"
+            "源图像按 pi0.5（openpi resize_with_pad）letterbox 方式 resize 后编码成视频，"
+            "只输出一份 resize 数据集（单数据集=3 编码器，无并发丢帧风险），"
+            "repo_id 加后缀 '-<H>x<W>'（需要原分辨率时另行不带 --resize 转换）。取值如 '224' 或 '224x168'。"
         ),
     )
     parser.add_argument(
@@ -466,35 +466,27 @@ def main():
         else:
             raise ValueError(f"Invalid --resize value: {args.resize!r} (use '224' or '224x168')")
 
+    # --resize 语义：源图像 resize 后编码成视频，只输出一份 resize 数据集（单数据集=3 编码器）。
+    if resize_size is not None:
+        effective_repo_id = f"{repo_id}-{resize_size[0]}x{resize_size[1]}"
+        image_shape = resize_size
+    else:
+        effective_repo_id = repo_id
+        image_shape = (480, 640)
+
     dataset = create_empty_dataset(
-        repo_id=repo_id,
+        repo_id=effective_repo_id,
         robot_type=robot_type,
         fps=fps,
         motors=motors,
         camera_names=list(schema["cameras"].values()),
         mode=mode,
+        image_shape=image_shape,
         video_codec=args.video_codec,
         crf=args.crf,
         dataset_config=DEFAULT_DATASET_CONFIG,
         streaming_encoding=not args.no_streaming_encoding,
     )
-
-    # 额外生成一份按 pi0.5 letterbox resize 的数据集（pi0.5 用）；原分辨率数据集保留（xvla 用）
-    dataset_resized = None
-    if resize_size is not None:
-        dataset_resized = create_empty_dataset(
-            repo_id=f"{repo_id}-{resize_size[0]}x{resize_size[1]}",
-            robot_type=robot_type,
-            fps=fps,
-            motors=motors,
-            camera_names=list(schema["cameras"].values()),
-            mode=mode,
-            image_shape=resize_size,
-            video_codec=args.video_codec,
-            crf=args.crf,
-            dataset_config=DEFAULT_DATASET_CONFIG,
-            streaming_encoding=not args.no_streaming_encoding,
-        )
 
     # 收集 episode 文件，带任务名（real 的 instruction 需按任务查表）。
     # expert_data_num 按任务切片：全局切片会导致只有第一个任务被转换。
@@ -519,43 +511,31 @@ def main():
                 instruction = data["instructions"]
 
             for start, block_images in data["image_blocks"]:
-                # 整块批量 resize（每相机一次 openpi resize_with_pad 调用），
-                # 避免逐帧触发 jax 编译/调度开销
-                block_resized = None
-                if dataset_resized is not None:
+                # --resize 时整块批量 resize（每相机一次 openpi resize_with_pad 调用），
+                # 避免逐帧触发 jax 编译/调度开销；否则直接用原始分辨率
+                images_to_feed = block_images
+                if resize_size is not None:
                     r_h, r_w = resize_size
-                    block_resized = {
+                    images_to_feed = {
                         cam: resize_with_pad(np.asarray(imgs), r_h, r_w)
                         for cam, imgs in block_images.items()
                     }
 
-                for i in range(len(next(iter(block_images.values())))):
+                for i in range(len(next(iter(images_to_feed.values())))):
                     idx = start + i
                     frame = {
                         "observation.state": data["state"][idx],
                         "action": data["action"][idx],
                         "task": instruction,
                     }
-                    for camera_name, images in block_images.items():
+                    for camera_name, images in images_to_feed.items():
                         frame[f"observation.images.{camera_name}"] = images[i]
                     dataset.add_frame(frame)
-
-                    if block_resized is not None:
-                        frame_r = {
-                            "observation.state": data["state"][idx],
-                            "action": data["action"][idx],
-                            "task": instruction,
-                        }
-                        for camera_name, imgs in block_resized.items():
-                            frame_r[f"observation.images.{camera_name}"] = imgs[i]
-                        dataset_resized.add_frame(frame_r)
 
             # parallel_encoding=False：避免 save_episode 内 multiprocessing fork 与
             # 已初始化的多线程 JAX（--resize 时）冲突导致死锁（RuntimeWarning 提示），
             # 顺序编码输出与并行完全一致，仅转换耗时略增
             dataset.save_episode(parallel_encoding=False)
-            if dataset_resized is not None:
-                dataset_resized.save_episode(parallel_encoding=False)
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
@@ -565,16 +545,13 @@ def main():
             gc.collect()
 
     # 清理 video 模式下残留的空 images/ 目录（对齐官方结构：无 images/）
-    for d in (dataset, dataset_resized):
-        if d is None:
-            continue
-        images_dir = d.root / "images"
-        if images_dir.exists():
-            for p in sorted(images_dir.rglob("*"), reverse=True):
-                if p.is_dir() and not any(p.iterdir()):
-                    p.rmdir()
-            if images_dir.exists() and not any(images_dir.iterdir()):
-                images_dir.rmdir()
+    images_dir = dataset.root / "images"
+    if images_dir.exists():
+        for p in sorted(images_dir.rglob("*"), reverse=True):
+            if p.is_dir() and not any(p.iterdir()):
+                p.rmdir()
+        if images_dir.exists() and not any(images_dir.iterdir()):
+            images_dir.rmdir()
 
 
 if __name__ == "__main__":
