@@ -1,8 +1,15 @@
 #!/usr/bin/env python3
-"""gripper 分析共享工具 (开发期放 tools/, 收尾再决定去留/归位)。
+"""gripper(爪夹)数据通用工具库 (全部置于 tools/, 可直接复用)。
 
-集中: state 16 维常量、CSV 加载、时间归一化插值、matplotlib 中文字体配置。
-供 tools/gripper_interp_viz.py 与 tools/gripper_cluster.py 复用。
+集中 state 16 维常量、CSV 加载、时间归一化插值(核心: interp_100 /
+episode_feature_L100_R100)、分层抽样配额分配(alloc_proportional)、matplotlib
+中文字体配置。三个业务脚本 import 本模块实现可复用:
+
+    tools/gripper_interp_viz.py  (插值前后画图)
+    tools/gripper_cluster.py     (自动选 K 聚类 + 画图)
+    tools/gripper_select_val.py  (分层抽样选取验证集)
+
+选验证集的完整方法与调用方式见 tools/gripper_val_selection_guide.md。
 """
 
 from __future__ import annotations
@@ -103,3 +110,20 @@ def interp_100(x: np.ndarray, n: int = N_DIM) -> np.ndarray:
 def episode_feature_L100_R100(grip_L: np.ndarray, grip_R: np.ndarray) -> np.ndarray:
     """把单个 episode 的左右 gripper 拼成聚类特征: [L100(100), R100(100)] -> 200 维。"""
     return np.concatenate([interp_100(grip_L), interp_100(grip_R)])
+
+
+def alloc_proportional(counts: list[int], target: int) -> list[int]:
+    """最大余数法: 把 target 个名额按 counts 占比分配到各类, 合计恰为 target。
+
+    用于按聚类占比做分层抽样时的各类配额。tie-break: 余数大者优先, 再按类规模。
+    """
+    tot = sum(counts)
+    shares = [c / tot * target for c in counts]
+    base = [int(s) for s in shares]
+    rem = [s - b for s, b in zip(shares, base)]
+    take = target - sum(base)
+    order = sorted(range(len(counts)), key=lambda i: (-rem[i], -counts[i]))
+    out = base[:]
+    for i in order[:take]:
+        out[i] += 1
+    return out
