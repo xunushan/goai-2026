@@ -11,6 +11,7 @@ import shutil
 import argparse
 import cv2
 import h5py
+import inspect
 import dataclasses
 from pathlib import Path
 from typing import Any, Literal
@@ -145,6 +146,32 @@ class DatasetConfig:
 
 DEFAULT_DATASET_CONFIG = DatasetConfig()
 
+
+def resize_with_pad(
+    images: np.ndarray,
+    height: int,
+    width: int,
+) -> np.ndarray:
+    """按 pi0.5（openpi）的 resize_with_pad 做**位级一致**的 letterbox resize。
+
+    直接调用 openpi/shared/image_tools.py::resize_with_pad——即 pi0.5 训练时
+    ResizeImages(224,224) 数据变换所用的同一个函数（见 training/config.py），
+    保证转换产物与 pi0.5 训练实际看到的像素完全一致，无任何复刻偏差。
+
+    依赖（使用 --resize 时才需要）：
+      - `pip install "jax[cpu]"`（openpi 的 resize_with_pad 基于 jax.image.resize）
+      - openpi 可导入：将 openpi/src 加入 PYTHONPATH，或 `pip install -e Pi_05/openpi`
+      - torch / beartype / jaxtyping：openpi 导入链需要（lerobot 环境通常已含 torch）
+    """
+    import jax.numpy as jnp
+    import openpi.shared.image_tools as _openpi_image_tools
+
+    if images.shape[1:3] == (height, width):
+        return images
+    resized = _openpi_image_tools.resize_with_pad(jnp.asarray(images), height, width)
+    return np.asarray(resized)
+
+
 def create_empty_dataset(
     repo_id: str,
     robot_type: str,
@@ -153,6 +180,9 @@ def create_empty_dataset(
     camera_names: list[str],
     mode: Literal["video", "image"] = "image",
     *,
+    image_shape: tuple[int, int] = (480, 640),
+    video_codec: str = "h264",
+    crf: int | None = 25,
     dataset_config: DatasetConfig = DEFAULT_DATASET_CONFIG,
     streaming_encoding: bool = True,
 ) -> LeRobotDataset:
@@ -173,7 +203,7 @@ def create_empty_dataset(
     for camera_name in camera_names:
         features[f"observation.images.{camera_name}"] = {
             "dtype": mode,
-            "shape": (3, 480, 640),
+            "shape": (3, *image_shape),
             "names": ["channels", "height", "width"],
         }
 
@@ -181,7 +211,7 @@ def create_empty_dataset(
     if output_path.exists():
         shutil.rmtree(output_path)
 
-    return LeRobotDataset.create(
+    create_kwargs = dict(
         repo_id=repo_id,
         fps=fps,
         robot_type=robot_type,
@@ -193,6 +223,25 @@ def create_empty_dataset(
         video_backend=dataset_config.video_backend,
         streaming_encoding=streaming_encoding and mode == "video",
     )
+
+    # 按 lerobot 版本选择视频编码参数传入方式（GOP 两版本均保持默认 2，不做改动）：
+    #   - lerobot 0.6.0：create(..., rgb_encoder=RGBEncoderConfig(vcodec=..., crf=...))，crf 可调
+    #   - lerobot 0.4.4：仅 create 的 vcodec 参数可传；crf 硬编码 30、GOP=2，不可调整，保持不动
+    create_params = inspect.signature(LeRobotDataset.create).parameters
+    if "rgb_encoder" in create_params:
+        from lerobot.configs import RGBEncoderConfig
+
+        create_kwargs["rgb_encoder"] = RGBEncoderConfig(vcodec=video_codec, crf=crf)
+    elif "vcodec" in create_params:
+        create_kwargs["vcodec"] = video_codec
+        if crf not in (None, 30):
+            print(f"[lerobot 0.4.x] create 的 crf 硬编码为 30 无法调整，忽略 --crf={crf}")
+    else:
+        print(
+            f"[lerobot] 当前版本不支持自定义视频编码，忽略 vcodec={video_codec} crf={crf}"
+        )
+
+    return LeRobotDataset.create(**create_kwargs)
 
 
 def _make_action_from_state(state: np.ndarray) -> np.ndarray:
@@ -340,6 +389,34 @@ def main():
         default=None,
         help="Override dataset repo_id (default: {bench_name}-{ckpt_name}-{env_cfg_type}-{action_type})",
     )
+    parser.add_argument(
+        "--resize",
+        type=str,
+        default=None,
+        help=(
+            "额外生成一份按 pi0.5（openpi resize_with_pad）letterbox 方式 resize 的数据集，"
+            "repo_id 加后缀 '-<H>x<W>'；原分辨率数据集仍会生成（xvla 使用）。"
+            "取值如 '224'（224x224）或 '224x168'。"
+        ),
+    )
+    parser.add_argument(
+        "--video-codec",
+        type=str,
+        default="h264",
+        help=(
+            "视频编码格式。lerobot 0.6.0 走 rgb_encoder.vcodec；0.4.4 走 create(vcodec=)。"
+            "默认 h264。"
+        ),
+    )
+    parser.add_argument(
+        "--crf",
+        type=int,
+        default=25,
+        help=(
+            "视频编码质量（仅 lerobot 0.6.0 生效；0.4.4 的 create 硬编码 crf=30 无法调整）。"
+            "默认 25。"
+        ),
+    )
     args = parser.parse_args()
 
     bench_name = args.bench_name
@@ -365,6 +442,17 @@ def main():
     fps = schema["fps"]
     motors = build_motors(schema, action_type)
 
+    # 解析 --resize 目标尺寸："224" -> (224,224)，"224x168" -> (224,168)
+    resize_size: tuple[int, int] | None = None
+    if args.resize:
+        parts = [p for p in args.resize.lower().split("x") if p]
+        if len(parts) == 1:
+            resize_size = (int(parts[0]), int(parts[0]))
+        elif len(parts) == 2:
+            resize_size = (int(parts[0]), int(parts[1]))
+        else:
+            raise ValueError(f"Invalid --resize value: {args.resize!r} (use '224' or '224x168')")
+
     dataset = create_empty_dataset(
         repo_id=repo_id,
         robot_type=robot_type,
@@ -372,8 +460,26 @@ def main():
         motors=motors,
         camera_names=list(schema["cameras"].values()),
         mode=mode,
+        video_codec=args.video_codec,
+        crf=args.crf,
         dataset_config=DEFAULT_DATASET_CONFIG,
     )
+
+    # 额外生成一份按 pi0.5 letterbox resize 的数据集（pi0.5 用）；原分辨率数据集保留（xvla 用）
+    dataset_resized = None
+    if resize_size is not None:
+        dataset_resized = create_empty_dataset(
+            repo_id=f"{repo_id}-{resize_size[0]}x{resize_size[1]}",
+            robot_type=robot_type,
+            fps=fps,
+            motors=motors,
+            camera_names=list(schema["cameras"].values()),
+            mode=mode,
+            image_shape=resize_size,
+            video_codec=args.video_codec,
+            crf=args.crf,
+            dataset_config=DEFAULT_DATASET_CONFIG,
+        )
 
     # 收集 episode 文件，带任务名（real 的 instruction 需按任务查表）。
     # expert_data_num 按任务切片：全局切片会导致只有第一个任务被转换。
@@ -398,6 +504,16 @@ def main():
                 instruction = data["instructions"]
 
             for start, block_images in data["image_blocks"]:
+                # 整块批量 resize（每相机一次 openpi resize_with_pad 调用），
+                # 避免逐帧触发 jax 编译/调度开销
+                block_resized = None
+                if dataset_resized is not None:
+                    r_h, r_w = resize_size
+                    block_resized = {
+                        cam: resize_with_pad(np.asarray(imgs), r_h, r_w)
+                        for cam, imgs in block_images.items()
+                    }
+
                 for i in range(len(next(iter(block_images.values())))):
                     idx = start + i
                     frame = {
@@ -407,10 +523,21 @@ def main():
                     }
                     for camera_name, images in block_images.items():
                         frame[f"observation.images.{camera_name}"] = images[i]
-
                     dataset.add_frame(frame)
 
+                    if block_resized is not None:
+                        frame_r = {
+                            "observation.state": data["state"][idx],
+                            "action": data["action"][idx],
+                            "task": instruction,
+                        }
+                        for camera_name, imgs in block_resized.items():
+                            frame_r[f"observation.images.{camera_name}"] = imgs[i]
+                        dataset_resized.add_frame(frame_r)
+
             dataset.save_episode()
+            if dataset_resized is not None:
+                dataset_resized.save_episode()
             tqdm.write(f"Finished {ep_file.name} with {num_frames} frames")
         except Exception as e:
             tqdm.write(f"Error processing episode {ep_file}: {e}")
@@ -420,13 +547,16 @@ def main():
             gc.collect()
 
     # 清理 video 模式下残留的空 images/ 目录（对齐官方结构：无 images/）
-    images_dir = dataset.root / "images"
-    if images_dir.exists():
-        for p in sorted(images_dir.rglob("*"), reverse=True):
-            if p.is_dir() and not any(p.iterdir()):
-                p.rmdir()
-        if images_dir.exists() and not any(images_dir.iterdir()):
-            images_dir.rmdir()
+    for d in (dataset, dataset_resized):
+        if d is None:
+            continue
+        images_dir = d.root / "images"
+        if images_dir.exists():
+            for p in sorted(images_dir.rglob("*"), reverse=True):
+                if p.is_dir() and not any(p.iterdir()):
+                    p.rmdir()
+            if images_dir.exists() and not any(images_dir.iterdir()):
+                images_dir.rmdir()
 
 
 if __name__ == "__main__":
