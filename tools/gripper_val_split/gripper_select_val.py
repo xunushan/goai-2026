@@ -10,8 +10,8 @@
     val_manifest.csv           三任务合并清单 (val 段集中)
 
 用法:
-    python tools/gripper_select_val.py
-    python tools/gripper_select_val.py --n-val 10 --seed 42
+    python tools/gripper_val_split/gripper_select_val.py
+    python tools/gripper_val_split/gripper_select_val.py --n-val 10 --seed 42
 """
 
 from __future__ import annotations
@@ -23,11 +23,13 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve()
+while not (ROOT / "CLAUDE.md").is_file() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.gripper_common import alloc_proportional  # noqa: E402
+from tools.gripper_val_split.gripper_common import alloc_proportional  # noqa: E402
 
 
 def select_val(df_ep_cluster: pd.DataFrame, n_val: int, seed: int) -> pd.DataFrame:

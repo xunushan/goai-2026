@@ -4,7 +4,17 @@
 > 目标: 每个任务从 100 个 episode 中按**爪夹开合行为**分层选出 10 个验证集,
 > 使验证集覆盖该任务不同的左右手分工/操作时序风格。
 
-所有代码位于 `tools/`, 共享逻辑集中在 `tools/gripper_common.py`, 均可用 `python tools/<脚本>.py` 运行。
+本文件夹 `tools/gripper_val_split/` 为全部代码与文档, 运行均在**仓库根目录**执行:
+
+```
+tools/gripper_val_split/
+├── gripper_common.py      # 共享原语: 常量/加载/插值/特征/配额分配/中文字体
+├── gripper_interp_viz.py  # ① 插值前后可视化
+├── gripper_cluster.py     # ②③ 自动选K聚类 + 画图
+├── gripper_select_val.py  # ④ 分层抽样验证集
+├── gripper_build_split.py # ⑤ 从CSV单命令生成 train/val 划分 JSON
+└── README.md              # 本文档
+```
 
 ---
 
@@ -24,29 +34,29 @@ gripper 取值 0(闭)~1(开)。三个任务的指令见 `data/sim_lerobot_v30_ee
 
 | 步骤 | 脚本 | 做什么 | 产物 |
 |---|---|---|---|
-| ① 插值前/后可视化 | `tools/gripper_interp_viz.py` | 每 episode 左右爪夹各插值到 100 点, 出图确认方法忠实 | `outputs/gripper_interp_viz/*.png` |
-| ② 单任务聚类演示 | `tools/gripper_cluster.py --task 0` | KMeans + 轮廓系数自动选 K, 出二维分布/每类曲线图 | `outputs/gripper_cluster/task0/*` |
-| ③ 全部任务聚类 | `tools/gripper_cluster.py --tasks 0 1 2` | 同上推广到其余任务 | `outputs/gripper_cluster/task{1,2}/*` |
-| ④ 分层抽样验证集 | `tools/gripper_select_val.py` | 每任务 10 个名额按类占比分配, 类内固定种子随机抽 | `outputs/val_sets/task*_val_manifest.csv`, `val_manifest.csv` |
-| ⑤ 生成划分 JSON | `tools/gripper_build_split.py` | 从 CSV 一步复现聚类+抽样, 组装正式 JSON | `data/sim_lerobot_v30_ee/train_val_split.json` |
+| ① 插值前/后可视化 | `tools/gripper_val_split/gripper_interp_viz.py` | 每 episode 左右爪夹各插值到 100 点, 出图确认方法忠实 | `outputs/gripper_interp_viz/*.png` |
+| ② 单任务聚类演示 | `gripper_cluster.py --task 0` | KMeans + 轮廓系数自动选 K, 出二维分布/每类曲线图 | `outputs/gripper_cluster/task0/*` |
+| ③ 全部任务聚类 | `gripper_cluster.py --tasks 0 1 2` | 同上推广到其余任务 | `outputs/gripper_cluster/task{1,2}/*` |
+| ④ 分层抽样验证集 | `gripper_select_val.py` | 每任务 10 个名额按类占比分配, 类内固定种子随机抽 | `outputs/val_sets/task*_val_manifest.csv`, `val_manifest.csv` |
+| ⑤ 生成划分 JSON | `gripper_build_split.py` | 从 CSV 一步复现聚类+抽样, 组装正式 JSON | `data/sim_lerobot_v30_ee/train_val_split.json` |
 
 > ③④⑤ 均为**确定性可复现**: 聚类 seed=0, 抽样 seed=42。
 > ④的结果不落盘也没关系——⑤会从原始 CSV 重算并产出同一套划分。
 
-### 常用命令
+### 常用命令（仓库根目录执行）
 
 ```bash
 # ① 插值前后对比图（默认读 data/sim_lerobot_v30_ee.csv）
-python tools/gripper_interp_viz.py
+python tools/gripper_val_split/gripper_interp_viz.py
 
 # ③ 聚类全部任务（task0 演示: --task 0）
-python tools/gripper_cluster.py --tasks 0 1 2
+python tools/gripper_val_split/gripper_cluster.py --tasks 0 1 2
 
 # ④ 分层抽样验证集（读 outputs/gripper_cluster/task*/clusters.csv）
-python tools/gripper_select_val.py --n-val 10 --seed 42
+python tools/gripper_val_split/gripper_select_val.py --n-val 10 --seed 42
 
 # ⑤ 生成 train/val 划分 JSON（单命令复现全部）
-python tools/gripper_build_split.py --n-val 10 --val-seed 42
+python tools/gripper_val_split/gripper_build_split.py --n-val 10 --val-seed 42
 #    --out-json 默认 data/sim_lerobot_v30_ee/train_val_split.json
 ```
 
@@ -81,6 +91,11 @@ python tools/gripper_build_split.py --n-val 10 --val-seed 42
 }
 ```
 
+`seed` 字段含义（保证整条链路可复现）:
+- `"cluster": 0` —— KMeans 聚类中心初始化的 `random_state`（聚类分配可复现）。
+- `"val_sampling": 42` —— 类内随机抽哪些 episode 作验证集的随机种子
+  （`np.random.default_rng(42)`）。
+
 验证集选取逻辑: 每任务各类取 `n=min(10, 类样本数)`, 用**最大余数法**把 10 个名额按
 类占比分配到各类, 各类内**随机**抽满（固定 seed）, 保证每类至少覆盖 1 个。
 
@@ -88,11 +103,17 @@ python tools/gripper_build_split.py --n-val 10 --val-seed 42
 
 ## 3. 代码复用方式
 
-共享库 `tools/gripper_common.py`（数据/数学原语, 其它脚本 import 它）:
+共享库 `tools/gripper_val_split/gripper_common.py`（数据/数学原语, 其它脚本 import 它）:
 
 ```python
-import sys; sys.path.insert(0, ".")
-from tools.gripper_common import (
+import sys
+from pathlib import Path
+ROOT = Path(__file__).resolve()
+while not (ROOT / "CLAUDE.md").is_file() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
+sys.path.insert(0, str(ROOT))
+
+from tools.gripper_val_split.gripper_common import (
     interp_100,                 # 任意长序列 -> 100 维 (np.interp)
     episode_feature_L100_R100,  # 左右爪夹 -> 200 维特征 [L100, R100]
     load_grippers,              # CSV -> DataFrame(每episode一行: grip_L/grip_R 序列)
@@ -101,10 +122,10 @@ from tools.gripper_common import (
 )
 ```
 
-`tools/gripper_cluster.py` 提供**聚类与画图**函数: `auto_kmeans(X,kmax,seed)`、
+聚类/画图: `tools.gripper_val_split/gripper_cluster.py` 的 `auto_kmeans(X,kmax,seed)`、
 `plot_silhouette(...)`、`plot_2d(...)`、`plot_cluster_curves(...)`、`cluster_and_plot(...)`。
-`tools/gripper_select_val.py` 提供 `select_val(df_ep_cluster, n_val, seed)`（分层抽样）。
-`tools/gripper_build_split.py` 提供 `build_split(csv, meta, ...)`（返回完整 JSON dict）。
+分层抽样: `gripper_select_val.py::select_val(df_ep_cluster, n_val, seed)`。
+生成 JSON: `gripper_build_split.py::build_split(csv, meta, ...)`（返回完整 JSON dict）。
 
 ---
 

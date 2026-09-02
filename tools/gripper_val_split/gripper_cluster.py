@@ -16,8 +16,8 @@
     clusters.csv (episode -> cluster 映射, 供 gripper_select_val.py 分层抽样)。
 
 CLI 用法:
-    python tools/gripper_cluster.py --task 0          # 单任务
-    python tools/gripper_cluster.py --tasks 0 1 2     # 多任务
+    python tools/gripper_val_split/gripper_cluster.py --task 0      # 单任务
+    python tools/gripper_val_split/gripper_cluster.py --tasks 0 1 2 # 多任务
 """
 
 from __future__ import annotations
@@ -36,11 +36,13 @@ from sklearn.decomposition import PCA
 from sklearn.manifold import TSNE
 from sklearn.metrics import silhouette_score
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve()
+while not (ROOT / "CLAUDE.md").is_file() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.gripper_common import (  # noqa: E402
+from tools.gripper_val_split.gripper_common import (  # noqa: E402
     N_DIM,
     episode_feature_L100_R100,
     interp_100,

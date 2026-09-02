@@ -12,9 +12,9 @@ data/sim_lerobot_v30_ee.csv 为遥操数据（每行一帧）, state 16 维:
     2) *_interp_overlay.png   全部 100 个 episode 插值到 100 维后的叠画。
 
 用法:
-    python tools/gripper_interp_viz.py
-    python tools/gripper_interp_viz.py --csv data/sim_lerobot_v30_ee.csv \
-        --out outputs/gripper_interp_viz --n-examples 6 --seed 0
+    python tools/gripper_val_split/gripper_interp_viz.py
+    python tools/gripper_val_split/gripper_interp_viz.py --csv data/sim_lerobot_v30_ee.csv \
+        --out outputs/gripper_interp_viz --n-examples 6
 """
 
 from __future__ import annotations
@@ -29,9 +29,14 @@ import numpy as np
 import pandas as pd
 
 import sys
-sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # 保证仓库根在 sys.path
 
-from tools.gripper_common import (  # noqa: E402
+ROOT = Path(__file__).resolve()
+while not (ROOT / "CLAUDE.md").is_file() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from tools.gripper_val_split.gripper_common import (  # noqa: E402
     C_L,
     C_R,
     N_DIM,

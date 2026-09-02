@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""gripper(爪夹)数据通用工具库 (全部置于 tools/, 可直接复用)。
+"""gripper(爪夹)数据通用工具库 (本文件夹 tools/gripper_val_split/ 的共享库)。
 
 集中 state 16 维常量、CSV 加载、时间归一化插值(核心: interp_100 /
 episode_feature_L100_R100)、分层抽样配额分配(alloc_proportional)、matplotlib
-中文字体配置。三个业务脚本 import 本模块实现可复用:
+中文字体配置。同目录业务脚本 import 本模块实现可复用:
 
-    tools/gripper_interp_viz.py  (插值前后画图)
-    tools/gripper_cluster.py     (自动选 K 聚类 + 画图)
-    tools/gripper_select_val.py  (分层抽样选取验证集)
+    gripper_interp_viz.py   (插值前后画图)
+    gripper_cluster.py      (自动选 K 聚类 + 画图)
+    gripper_select_val.py   (分层抽样选取验证集)
+    gripper_build_split.py  (生成 train/val 划分 JSON)
 
-选验证集的完整方法与调用方式见 tools/gripper_val_selection_guide.md。
+选验证集的完整方法与调用方式见同目录 README.md。
 """
 
 from __future__ import annotations

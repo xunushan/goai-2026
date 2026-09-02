@@ -14,9 +14,9 @@ JSON 结构 (字段可依评审反馈调整):
     }
 
 用法:
-    python tools/gripper_build_split.py
-    python tools/gripper_build_split.py --out-json data/sim_lerobot_v30_ee/train_val_split.json \
-        --n-val 10 --val-seed 42
+    python tools/gripper_val_split/gripper_build_split.py
+    python tools/gripper_val_split/gripper_build_split.py \
+        --out-json data/sim_lerobot_v30_ee/train_val_split.json --n-val 10 --val-seed 42
 """
 
 from __future__ import annotations
@@ -28,17 +28,19 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(__file__).resolve()
+while not (ROOT / "CLAUDE.md").is_file() and ROOT.parent != ROOT:
+    ROOT = ROOT.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from tools.gripper_common import (  # noqa: E402
+from tools.gripper_val_split.gripper_common import (  # noqa: E402
     episode_feature_L100_R100,
     load_grippers,
     load_tasks,
 )
-from tools.gripper_cluster import auto_kmeans  # noqa: E402
-from tools.gripper_select_val import select_val  # noqa: E402
+from tools.gripper_val_split.gripper_cluster import auto_kmeans  # noqa: E402
+from tools.gripper_val_split.gripper_select_val import select_val  # noqa: E402
 
 
 def _per_task_entry(t: int, g, instruction: str, n_val: int,
