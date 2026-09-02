@@ -1,15 +1,15 @@
-"""3 任务 × 6 episode 的最少视频文件联合优化。
+"""多任务 × 每任务 N episode 的最少视频文件联合优化。
 
 每个 episode 在 3 路相机各对应一个文件, 三元组 (high,left,right)。
-一致 episode 集合 = 每个任务选 6 个 episode, 下载文件 = 这 18 个 episode 三路文件的并集。
+一致 episode 集合 = 每个任务选 per_task 个 episode, 下载文件 = 这些 episode 三路文件的并集。
 
 对每任务: 统计 (high,left,right) 三元组 -> episode 列表。
-若某任务存在含 >=6 episode 的三元组, 则该任务可用 3 个文件覆盖 6 个 episode。
-联合优化: 每任务挑一个三元组, 使三任务文件并集最小。
+若某任务存在含 >=per_task episode 的三元组, 则该任务可用 3 个文件覆盖 per_task 个 episode。
+联合优化: 每任务挑一个三元组, 使任务间文件并集最小。
 
-用法:
-    conda run -n lerobot python scripts/minimize_videos_joint.py
-    conda run -n lerobot python scripts/minimize_videos_joint.py --tasks 0,3,5
+用法 (默认 data/real_lerobot_v30_ee; 其他数据集用 --data 指定):
+    conda run -n lerobot python scripts/minimize_videos_joint.py --tasks 0,1,2,3,4,5
+    conda run -n lerobot python scripts/minimize_videos_joint.py --data data/sim_lerobot_v30_ee --tasks 0,1,2
 """
 from __future__ import annotations
 
@@ -20,12 +20,12 @@ from pathlib import Path
 
 import pyarrow.parquet as pq
 
-BASE = Path("data/real_lerobot_v30_ee")
+CAM_KEYS = ["high", "left_wrist", "right_wrist"]
 
 
-def load() -> tuple[dict, dict]:
-    meta = pq.read_table(str(BASE / "meta" / "episodes" / "chunk-000" / "file-000.parquet")).to_pandas()
-    data = pq.read_table(str(BASE / "data" / "chunk-000" / "file-000.parquet")).to_pandas()
+def load(base: Path) -> tuple[dict, dict]:
+    meta = pq.read_table(str(base / "meta" / "episodes" / "chunk-000" / "file-000.parquet")).to_pandas()
+    data = pq.read_table(str(base / "data" / "chunk-000" / "file-000.parquet")).to_pandas()
     ep_task = {int(e): int(g) for e, g in data.groupby("episode_index")["task_index"].first().items()}
     cams = ["high", "left_wrist", "right_wrist"]
     ep_files = {}
@@ -41,12 +41,15 @@ def load() -> tuple[dict, dict]:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data", default="data/real_lerobot_v30_ee",
+                        help="数据集根目录 (含 meta/ 与 data/)")
     parser.add_argument("--tasks", default=None,
-                        help="要覆盖的任务 (如 0,3,5 或 0,1,2,3,4,5); 缺省遍历全部 3 任务组合")
+                        help="要覆盖的任务 (如 0,1,2 或 0,1,2,3,4,5); 缺省遍历全部 3 任务组合")
     parser.add_argument("--per-task", type=int, default=6)
     args = parser.parse_args()
 
-    ep_task, ep_files = load()
+    base = Path(args.data)
+    ep_task, ep_files = load(base)
     all_tasks = sorted(set(ep_task.values()))
 
     # 每任务: 三元组 -> episodes
@@ -67,9 +70,6 @@ def main() -> None:
         }
 
     combos = [tuple(int(x) for x in args.tasks.split(","))] if args.tasks else list(combinations(all_tasks, 3))
-
-    # 三元组中的相机索引顺序: high, left_wrist, right_wrist
-    CAM_KEYS = ["high", "left_wrist", "right_wrist"]
 
     results = []
     for combo in combos:

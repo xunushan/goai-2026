@@ -1,4 +1,4 @@
-"""分析 real_lerobot_v30_ee 元数据：任务分布、episode 覆盖的视频文件，及最小视频集合。
+"""分析 lerobot 数据集元数据：任务分布、episode 覆盖的视频文件，及最小视频集合。
 
 步骤:
 1. 打印 info.json / tasks.parquet 摘要
@@ -6,9 +6,9 @@
 3. 找出指定任务集合的指定数量 episode，映射到三路相机视频文件
 4. 用贪心/精确法计算覆盖这些 episode 所需的最少视频文件集合
 
-用法:
-    conda run -n lerobot python scripts/analyze_real_lerobot.py
-    conda run -n lerobot python scripts/analyze_real_lerobot.py --tasks 8,9,11 --per-task 6
+用法 (默认 data/real_lerobot_v30_ee; 其他数据集用 --data 指定):
+    conda run -n lerobot python scripts/analyze_real_lerobot.py --tasks 0,1,2,3,4,5
+    conda run -n lerobot python scripts/analyze_real_lerobot.py --data data/sim_lerobot_v30_ee --tasks 0,1,2 --per-task 6
 """
 from __future__ import annotations
 
@@ -39,12 +39,15 @@ def load_episode_meta() -> dict:
 
 
 def main() -> None:
+    global BASE
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--data", default=str(BASE), help="数据集根目录")
     parser.add_argument("--tasks", default=None,
                         help="要分析的任务索引, 逗号分隔 (默认: 打印全部)")
     parser.add_argument("--per-task", type=int, default=6, help="每任务 episode 数")
     args = parser.parse_args()
 
+    BASE = Path(args.data)
     info = json.load(open(BASE / "meta" / "info.json"))
     print("=== info.json ===")
     for k in ["total_episodes", "total_frames", "total_tasks", "fps"]:

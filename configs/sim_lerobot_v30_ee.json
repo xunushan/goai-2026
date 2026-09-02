@@ -1,0 +1,14 @@
+{
+  "csv": "data/sim_lerobot_v30_ee.csv",
+  "tasks_parquet": "data/sim_lerobot_v30_ee/meta/tasks.parquet",
+  "task_slugs": {
+    "0": "fill_pen_holder",
+    "1": "plug_in_charger",
+    "2": "stack_bowls"
+  },
+  "episodes": [
+    0, 1, 2, 3, 4, 5,
+    145, 146, 147, 148, 149, 150,
+    200, 201, 202, 203, 204, 205
+  ]
+}
