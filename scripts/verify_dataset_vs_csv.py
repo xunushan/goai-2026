@@ -1,7 +1,10 @@
 """验证本地 lerobot 数据集 CSV 与权威基准 CSV (extract 自 hdf5) 的一致性。
 
-任务 A (逐帧对比): 每任务随机选 per-task 个 episode, 逐帧对比 state/action 每个维度。
-任务 B (视频帧数):  统计已下载视频覆盖 episode 的三路相机帧数, 与基准 CSV 帧数对比。
+检查1 CSV 逐帧一致性: 确认 lerobot 导出的本地 CSV 与权威基准 CSV 完全一致。
+    不依赖视频, 默认对 CSV 中的全部 episode 全量逐帧对比 state/action 每个维度
+    (含帧数/任务归属); 开发期可用 --per-task N 每任务随机抽 N 个 episode 快速抽查。
+检查2 视频帧数核对:   确认视频实际帧数与 CSV 中该 episode 帧数一致 (需要视频)。
+    对已下载视频覆盖的 episode, 统计三路相机解码帧数, 与基准 CSV 帧数对比。
 
 约定:
 - 基准 CSV (sim_all.csv 等) 为权威提取, episode_index 全局递增。
@@ -11,17 +14,22 @@
   sim 及后续更新的数据集均为该表示, 不支持 6 维欧拉角。
 
 用法:
-    # sim 数据集 (3 任务)
+    # sim 数据集: 全量 CSV 对比 (检查1) + 视频帧数核对 (检查2, 需已下载视频)
     conda run -n lerobot python scripts/verify_dataset_vs_csv.py \
         --ref-csv data/sim_all.csv --local-csv data/sim_lerobot_v30_ee.csv \
         --data-root data/sim_lerobot_v30_ee \
-        --config configs/sim_lerobot_v30_ee.json --seed 42 --per-task 3
+        --config configs/sim_lerobot_v30_ee.json
 
     # real 数据集 (6 任务, 同样为 7 维四元数 wxyz)
     conda run -n lerobot python scripts/verify_dataset_vs_csv.py \
         --ref-csv data/real_all.csv --local-csv data/real_lerobot_v30_ee.csv \
         --data-root data/real_lerobot_v30_ee \
-        --config configs/real_lerobot_v30_ee.json --seed 42 --per-task 3
+        --config configs/real_lerobot_v30_ee.json
+
+    # 只做 CSV 全量对比 (不碰视频): 加 --skip-video-check
+    conda run -n lerobot python scripts/verify_dataset_vs_csv.py \
+        --ref-csv data/sim_all.csv --local-csv data/sim_lerobot_v30_ee.csv \
+        --skip-video-check
 """
 from __future__ import annotations
 
@@ -75,60 +83,83 @@ def derive_task_ranges(ref: pd.DataFrame) -> dict[int, tuple[int, str]]:
     return {i: (int(r["min"]), int(r["max"]), name) for i, (name, r) in enumerate(grp.iterrows())}
 
 
-def verify_task_a(ref_csv: Path, local_csv: Path, seed: int, per_task: int) -> None:
-    """每任务随机选 per_task 个 episode, 逐帧对比 state/action 与基准 CSV。"""
+def verify_csv_consistency(ref_csv: Path, local_csv: Path,
+                           per_task: int | None = None, seed: int = 42) -> None:
+    """检查1: 逐帧对比本地 CSV 的 state/action 与权威基准 CSV (纯数据, 不依赖视频)。
+
+    默认对 CSV 中的全部 episode 做全量逐帧对比; 传 --per-task N 时每任务随机
+    抽 N 个 episode 做快速抽查 (供开发期 smoke)。
+    """
     print("=" * 76)
-    print(f"[任务A] 每任务随机选 {per_task} 个 episode, 逐帧对比 state/action (seed={seed})")
+    print("[检查1 · CSV逐帧一致性] 本地 CSV vs 权威基准 CSV (不依赖视频)")
     print("=" * 76)
 
     ref = pd.read_csv(ref_csv)  # 全量列
     task_map = derive_task_ranges(ref)
     print("任务范围:", {t: (name, lo, hi) for t, (lo, hi, name) in task_map.items()})
 
-    rng = random.Random(seed)
-    selected: dict[int, list[int]] = {}
-    all_eps: set[int] = set()
-    for tidx, (lo, hi, _name) in task_map.items():
-        picked = sorted(rng.sample(list(range(lo, hi + 1)), per_task))
-        selected[tidx] = picked
-        all_eps.update(picked)
-    print("选中 episodes:", {t: e for t, e in selected.items()})
+    if per_task:
+        rng = random.Random(seed)
+        selected: dict[int, list[int]] = {}
+        for tidx, (lo, hi, _name) in task_map.items():
+            selected[tidx] = sorted(rng.sample(list(range(lo, hi + 1)), per_task))
+        eps_all = sorted(e for v in selected.values() for e in v)
+        print(f"抽查模式: 每任务随机选 {per_task} 个 episode -> {sorted(selected.items())}")
+    else:
+        # 全量: 对比基准 CSV 中的全部 episode (本地 CSV 应有同样全量数据)
+        selected = {t: list(range(lo, hi + 1)) for t, (lo, hi, _n) in task_map.items()}
+        eps_all = sorted(e for v in selected.values() for e in v)
+        print(f"全量模式: 对比全部 {len(eps_all)} 个 episode (每任务 {len(eps_all)//max(len(task_map),1)} 个)")
 
-    local = load_local_csv(local_csv, all_eps)
+    local = load_local_csv(local_csv, set(eps_all))
     local = local.sort_values(["episode_index", "frame_index"]).reset_index(drop=True)
 
-    # 准备每 episode 的 ee 数值矩阵 (基准侧, 均为 7 维四元数 wxyz)
+    # 基准 ee 数值矩阵 (7 维四元数 wxyz + gripper)
     ref_ee = ref[["episode_index", "frame_index"] + EE_COLS].copy()
 
-    grand_s_mis = grand_a_mis = 0
+    # 一次解析本地 state/action 为 (N,16) 矩阵
+    l_ep = local["episode_index"].to_numpy()
+    l_state = np.vstack([np.asarray(parse_state(v), dtype=float) for v in local["observation.state"]])
+    l_action = np.vstack([np.asarray(parse_state(v), dtype=float) for v in local["action"]])
+
+    grand_s_mis = grand_a_mis = grand_frame_mis = 0
     max_s = max_a = 0.0
     n_frames = 0
 
     for tidx in sorted(selected):
+        task_name = task_map[tidx][2]
         for ep in selected[tidx]:
-            lrow = local[local["episode_index"] == ep].sort_values("frame_index").reset_index(drop=True)
-            rrow = ref_ee[ref_ee["episode_index"] == ep].sort_values("frame_index").reset_index(drop=True)
+            lmask = l_ep == ep
+            n_local = int(lmask.sum())
+            lstate = l_state[lmask]
+            laction = l_action[lmask]
 
-            n_local, n_real = len(lrow), len(rrow)
+            rrow = ref_ee[ref_ee["episode_index"] == ep].sort_values("frame_index")
+            rstate = rrow[EE_COLS].to_numpy(dtype=float) if len(rrow) else np.empty((0, 16))
+            n_real = len(rstate)
+
+            n_cmp = min(n_local, n_real)
             frames_ok = n_local == n_real
-            # 任务核对: 本地 task_index vs 基准任务编号
-            task_ok = bool(len(lrow)) and int(lrow["task_index"].iloc[0]) == tidx
-            task_name = task_map[tidx][2]
+            grand_frame_mis += int(not frames_ok)
 
-            s_mis = a_mis = 0
-            s_max = a_max = 0.0
-            for i in range(min(n_local, n_real)):
-                rv = rrow[EE_COLS].iloc[i].to_numpy(dtype=float)
-                lv = np.array(parse_state(lrow["observation.state"].iloc[i]), dtype=float)
-                d = np.abs(lv - rv)
-                s_max = max(s_max, d.max())
-                s_mis += int((d > 1e-4).any())
+            if n_cmp:
+                # state: 本地 state vs 基准 ee
+                d = np.abs(lstate[:n_cmp] - rstate[:n_cmp])
+                s_mis = int((d > 1e-4).any(axis=1).sum())
+                s_max = float(d.max())
                 # action: 本帧 == 后一帧 state; 末帧 == 自身 state
-                ns = rrow[EE_COLS].iloc[i + 1].to_numpy(dtype=float) if i + 1 < n_real else rv
-                av = np.array(parse_state(lrow["action"].iloc[i]), dtype=float)
-                ad = np.abs(av - ns)
-                a_max = max(a_max, ad.max())
-                a_mis += int((ad > 1e-4).any())
+                nxt = np.empty_like(rstate)
+                nxt[:-1] = rstate[1:]
+                nxt[-1] = rstate[-1]
+                ad = np.abs(laction[:n_cmp] - nxt[:n_cmp])
+                a_mis = int((ad > 1e-4).any(axis=1).sum())
+                a_max = float(ad.max())
+            else:
+                s_mis = a_mis = 0
+                s_max = a_max = 0.0
+
+            # 任务核对: 本地 task_index vs 基准任务编号
+            task_ok = n_local > 0 and int(local.loc[lmask, "task_index"].iloc[0]) == tidx
 
             n_frames += n_local
             ok = frames_ok and task_ok and s_mis == 0 and a_mis == 0
@@ -141,10 +172,10 @@ def verify_task_a(ref_csv: Path, local_csv: Path, seed: int, per_task: int) -> N
             max_a = max(max_a, a_max)
 
     print("-" * 76)
-    print(f"[任务A 汇总] {sum(len(v) for v in selected.values())} episodes / {n_frames} 帧")
+    print(f"[检查1 汇总] {len(eps_all)} episodes / {n_frames} 帧")
     print(f"  state  mismatch={grand_s_mis}  max_abs_diff={max_s:.2e}")
     print(f"  action mismatch={grand_a_mis}  max_abs_diff={max_a:.2e}")
-    print(f"  结论: {'PASS' if grand_s_mis == 0 and grand_a_mis == 0 else 'FAIL'}")
+    print(f"  结论: {'PASS' if grand_s_mis == 0 and grand_a_mis == 0 and grand_frame_mis == 0 else 'FAIL'}")
 
 
 def count_video_frames(video_path: Path, from_ts: float, to_ts: float) -> int:
@@ -159,11 +190,12 @@ def count_video_frames(video_path: Path, from_ts: float, to_ts: float) -> int:
     return int(frames[-1]) if frames else -1
 
 
-def verify_task_b(ref_csv: Path, local_csv: Path, data_root: Path, config_path: Path | None) -> None:
-    """统计已下载视频覆盖 episode 的三路帧数, 与基准 CSV 对比。"""
+def verify_video_frame_count(ref_csv: Path, local_csv: Path, data_root: Path,
+                             config_path: Path | None = None) -> None:
+    """检查2: 统计已下载视频覆盖 episode 的三路帧数, 与基准 CSV 该 episode 帧数对比。"""
     print()
     print("=" * 76)
-    print("[任务B] 已下载视频覆盖 episode 的三路帧数 vs 基准 CSV")
+    print("[检查2 · 视频帧数核对] 视频实际帧数 vs 基准 CSV 该 episode 帧数 (需要视频)")
     print("=" * 76)
 
     eps: list[int] = []
@@ -195,7 +227,7 @@ def verify_task_b(ref_csv: Path, local_csv: Path, data_root: Path, config_path: 
               f"left={cam_results[1]} right={cam_results[2]}  [{'OK' if ok else 'FAIL'}]")
 
     print("-" * 76)
-    print(f"[任务B 汇总] {len(eps)} episodes, {bad} 个不一致")
+    print(f"[检查2 汇总] {len(eps)} episodes, {bad} 个不一致")
     print(f"  结论: {'PASS' if bad == 0 else 'FAIL'}")
 
 
@@ -203,19 +235,27 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--ref-csv", required=True, help="权威基准 CSV (real_all.csv / sim_all.csv)")
     parser.add_argument("--local-csv", required=True, help="本地生成的 lerobot CSV")
-    parser.add_argument("--data-root", required=True, help="数据集根目录 (含 videos/, 任务B用)")
-    parser.add_argument("--config", default=None, help="数据集配置文件 (任务B episodes 来源)")
-    parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--per-task", type=int, default=3)
-    parser.add_argument("--skip-a", action="store_true", help="跳过任务A")
-    parser.add_argument("--skip-b", action="store_true", help="跳过任务B")
+    parser.add_argument("--data-root", default=None,
+                        help="数据集根目录 (含 videos/); 仅检查2视频帧数核对需要")
+    parser.add_argument("--config", default=None,
+                        help="数据集配置文件 (检查2的 episodes 来源; 缺省取本地 CSV 全部 episode)")
+    parser.add_argument("--per-task", type=int, default=None,
+                        help="检查1抽查: 每任务随机抽 N 个 episode (缺省为全量逐帧对比)")
+    parser.add_argument("--seed", type=int, default=42, help="抽查模式的随机种子")
+    parser.add_argument("--skip-csv-check", action="store_true", help="跳过检查1 (CSV逐帧一致性)")
+    parser.add_argument("--skip-video-check", action="store_true", help="跳过检查2 (视频帧数核对)")
     args = parser.parse_args()
 
-    if not args.skip_a:
-        verify_task_a(Path(args.ref_csv), Path(args.local_csv), args.seed, args.per_task)
-    if not args.skip_b:
-        verify_task_b(Path(args.ref_csv), Path(args.local_csv), Path(args.data_root),
-                      Path(args.config) if args.config else None)
+    if not args.skip_csv_check:
+        verify_csv_consistency(Path(args.ref_csv), Path(args.local_csv),
+                               args.per_task, args.seed)
+    if not args.skip_video_check:
+        if not args.data_root:
+            parser.error("检查2 (视频帧数核对) 需要 --data-root 指向含 videos/ 的数据集目录; "
+                         "只做 CSV 对比请加 --skip-video-check")
+        verify_video_frame_count(Path(args.ref_csv), Path(args.local_csv),
+                                 Path(args.data_root),
+                                 Path(args.config) if args.config else None)
 
 
 if __name__ == "__main__":
