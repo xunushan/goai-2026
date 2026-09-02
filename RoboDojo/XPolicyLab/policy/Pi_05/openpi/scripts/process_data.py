@@ -58,7 +58,7 @@ SCHEMAS = {
         },
         "instruction": "hdf5",
     },
-    # real（real, piper_x）：joint 用 joint+gripper；ee 用 eef（7 维四元数 xyzw 直接 / 6 维欧拉角按 xyz 内旋转）+gripper
+    # real（real, piper_x）：joint 用 joint+gripper；ee 用 eef（7 维四元数 wxyz 直接 / 6 维欧拉角按 xyz 内旋转转 wxyz）+gripper
     ("real", "piper_x"): {
         "robot_type": "piper_x",
         "fps": 25,
@@ -82,8 +82,8 @@ SCHEMAS = {
 # 变换函数名 -> 输出维度
 _TRANSFORM_OUT_DIMS = {"eef_to_pose": 7}
 
-# lerobot_v30_ee 每臂命名：l_x..l_g / r_x..r_g（[x,y,z,qx,qy,qz,qw,g]，四元数 xyzw）
-EE_DIM_NAMES = ["x", "y", "z", "wx", "wy", "wz", "w", "g"]
+# lerobot_v30_ee 每臂命名：l_x..l_g / r_x..r_g（[x,y,z,qw,qx,qy,qz,g]，四元数 wxyz，w 在首位——官方 sim/real 统一约定）
+EE_DIM_NAMES = ["x", "y", "z", "w", "wx", "wy", "wz", "g"]
 
 # real 数据无 instruction 字段，按任务名查描述（用户提供）
 REAL_TASK_DESCRIPTIONS = {
@@ -97,19 +97,18 @@ REAL_TASK_DESCRIPTIONS = {
 
 
 def eef_to_pose(eef: np.ndarray) -> np.ndarray:
-    """real eef 统一为 [x,y,z,qx,qy,qz,qw]（四元数 xyzw，w 在最后）。
+    """real/sim eef 统一为 [x,y,z,qw,qx,qy,qz]（四元数 wxyz，w 在首位）。
 
-    - 7 维：已是 xyzw 四元数，直接返回。已用「跨任务关节匹配 + 位置校验」验证：
-      xyz 欧拉 × xyzw 四元数在关节对应帧对上对齐（朝向误差中位数 0.59°，
-      而按 wxyz 解释则 5.64°，见 docs/real_eef四元数顺序判定.md）。
-    - 6 维：[x,y,z, 欧拉角×3]。欧拉角为 xyz 内旋，scipy 转出的四元数即 xyzw。
+    官方 2026-09-01 起 real 与 sim 统一为 wxyz（与 lerobot_v30_ee 官方命名 l_w 在前一致）。
+    7 维来源已是 wxyz，直接返回。
     """
     if eef.shape[1] == 7:
         return eef
     if eef.shape[1] == 6:
         pos = eef[:, :3]
-        q_xyzw = Rotation.from_euler("xyz", eef[:, 3:6], degrees=False).as_quat()
-        return np.concatenate([pos, q_xyzw], axis=1)
+        q_xyzw = Rotation.from_euler("xyz", eef[:, 3:6], degrees=False).as_quat()  # scipy: [x,y,z,w]
+        q_wxyz = np.concatenate([q_xyzw[:, 3:4], q_xyzw[:, :3]], axis=1)  # → [w,x,y,z]
+        return np.concatenate([pos, q_wxyz], axis=1)
     raise ValueError(f"eef dims {eef.shape[1]} not supported")
 
 

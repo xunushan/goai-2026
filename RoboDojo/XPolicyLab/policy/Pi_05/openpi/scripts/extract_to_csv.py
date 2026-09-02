@@ -3,10 +3,10 @@
 CSV 每行 = 一帧，列：
   task, episode_index, frame_index,
   left_joint_0..5, left_gripper, right_joint_0..5, right_gripper,   # joint state(14)
-  left_eef_x/y/z/qx/qy/qz/qw, right_eef_x/y/z/qx/qy/qz/qw           # ee state(14, gripper 复用)
+  left_eef_x/y/z/qw/qx/qy/qz, right_eef_x/y/z/qw/qx/qy/qz           # ee state(14, gripper 复用)
 
-注意：四元数统一为 xyzw（w 在最后，与 eef_to_pose 输出一致）。6 维 eef 任务在提取时
-按 xyz 内旋转四元数（eef_to_pose），CSV 存转换后四元数。
+注意：四元数统一为 wxyz（w 在首位，官方 sim/real 统一约定）。CSV 存 hdf5 原始 wxyz 四元数，
+6 维 eef 任务在提取时经 eef_to_pose 转为 wxyz。
 """
 import argparse
 import csv
@@ -28,8 +28,8 @@ CSV_COLUMNS = (
     + ["left_gripper"]
     + [f"right_joint_{i}" for i in range(6)]
     + ["right_gripper"]
-    + [f"left_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
-    + [f"right_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
+    + [f"left_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
+    + [f"right_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
 )
 
 

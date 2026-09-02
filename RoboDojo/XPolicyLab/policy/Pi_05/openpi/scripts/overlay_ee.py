@@ -18,14 +18,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-# 每臂 8 维 [x,y,z,qx,qy,qz,qw,g]（四元数 xyzw，与 process_data 的 eef_to_pose 输出一致）
-EE_DIM_NAMES = ["x", "y", "z", "wx", "wy", "wz", "w", "g"]
+# 每臂 8 维 [x,y,z,qw,qx,qy,qz,g]（四元数 wxyz，w 在首位——官方 sim/real 统一约定）
+EE_DIM_NAMES = ["x", "y", "z", "w", "wx", "wy", "wz", "g"]
 
-# CSV 中 ee state 的 16 列（与 extract_to_csv.py 输出一致）
+# CSV 中 ee state 的 16 列（与 extract_to_csv.py 输出一致，四元数 wxyz）
 EE_STATE_COLS = (
-    [f"left_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
+    [f"left_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
     + ["left_gripper"]
-    + [f"right_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
+    + [f"right_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
     + ["right_gripper"]
 )
 EE_MOTOR_NAMES = [f"l_{n}" for n in EE_DIM_NAMES] + [f"r_{n}" for n in EE_DIM_NAMES]

@@ -18,11 +18,11 @@ JOINT_STATE_COLS = (
     + [f"right_joint_{i}" for i in range(6)]
     + ["right_gripper"]
 )
-# 四元数 xyzw：left_eef_qx/qy/qz/qw（w 在最后，与 extract_to_csv.py 输出一致）
+# 四元数 wxyz：left_eef_qw/qx/qy/qz（w 在首位，与 extract_to_csv.py 输出一致）
 EE_STATE_COLS = (
-    [f"left_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
+    [f"left_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
     + ["left_gripper"]
-    + [f"right_eef_{n}" for n in ["x", "y", "z", "qx", "qy", "qz", "qw"]]
+    + [f"right_eef_{n}" for n in ["x", "y", "z", "qw", "qx", "qy", "qz"]]
     + ["right_gripper"]
 )
 STATE_COLS = {"joint": JOINT_STATE_COLS, "ee": EE_STATE_COLS}
