@@ -21,8 +21,12 @@ from scipy.spatial.transform import Rotation
 
 from XPolicyLab.utils.process_data import decode_image_bit
 
-from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
 from lerobot.datasets.lerobot_dataset import LeRobotDataset
+
+try:  # lerobot 0.4.4
+    from lerobot.datasets.lerobot_dataset import HF_LEROBOT_HOME
+except ImportError:  # lerobot 0.6.0：HF_LEROBOT_HOME 迁移至 lerobot.utils.constants
+    from lerobot.utils.constants import HF_LEROBOT_HOME
 
 ROOT_PATH = Path(__file__).parent.parent.parent.parent.parent
 
