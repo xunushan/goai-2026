@@ -84,5 +84,6 @@ lerobot_data_bench/
   `_ActionPreloadReader(DatasetReader)` + `reader.__class__` 交换（真 spawn-picklable，可跑 DataLoader nw>0）。
   自带逐位一致性哨兵（默认 vs 预载路径，horizon 自适应选行），ALL OK 后才计时。
   同会话 2×2 实测（sim224+uint8，机器有负载）：baseline nw0 88 / nw2 156；preload nw0 116 / nw2 211 sps；
-  nw2 在 0.6 env 不炸内存（RSS 2.4–2.9GB）。详见表单文档试验 L。
+  nw>0 收益取决于负载字节数：224+uint8 时 nw2 净收益（RSS 2.4–2.9GB），640+float 时 nw2 仍变慢+RSS ~3.6×
+  （0.6 env 探针验证，见 L-2）。详见表单文档试验 L/L-2。
 - `--resize`/编码相关参数不在此代码中（走 XPolicyLab process_data 转换链，见项目 memory）。
