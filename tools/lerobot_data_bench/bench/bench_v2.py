@@ -14,10 +14,10 @@ Follows docs/LeRobot_v3数据加载性能后续测试方案.md:
 - --return-uint8 : pass return_uint8=True when the dataset class supports it
 - --preload-action : preload the whole action column into RAM and serve the delta
                      (action_horizon) window from it instead of per-sample parquet
-                     row gathers; bit-identical (light sentinel verifies). The wiring is
-                     picklable (module-level override + instance attrs) so it maps 1:1 to
-                     the openpi data_loader production change. Bench measures at
-                     num_workers=0 (torchcodec nw0 optimal, established in matrix5.1).
+                     row gathers; bit-identical (light sentinel verifies). The override
+                     is a real DatasetReader subclass swapped in via reader.__class__,
+                     so it survives DataLoader spawn pickling -- maps 1:1 to the openpi
+                     data_loader production change. Measured at nw=0 and nw=2.
 
 One process = one independent run. The shell driver loops for repeats and aggregates medians.
 """
@@ -31,7 +31,6 @@ import os
 import pathlib
 import threading
 import time
-import types
 
 import numpy as np
 import torch
@@ -40,6 +39,17 @@ import torch
 # win (see torchcodec-libjpeg-conflict). The launching shell must already have
 # set LD_LIBRARY_PATH to the env's ffmpeg libs (or an fflib of soname symlinks).
 import torchcodec  # noqa: E402,F401
+
+# Base lerobot reader class used by the --preload-action subclass swap below.
+# Imported after torchcodec (libjpeg rule) and guarded so the bench still loads on
+# 0.4.4 / lance-only setups where that layout is absent (preload unavailable there).
+try:
+    from lerobot.datasets.dataset_reader import DatasetReader as _LerobotDatasetReader
+except Exception:  # noqa: BLE001 - layout not present
+    try:
+        from lerobot.common.datasets.dataset_reader import DatasetReader as _LerobotDatasetReader
+    except Exception:  # noqa: BLE001
+        _LerobotDatasetReader = None
 
 
 def parse_args() -> argparse.Namespace:
@@ -67,7 +77,7 @@ def parse_args() -> argparse.Namespace:
                         "(closes evicted file handles). None = current unbounded cache.")
     p.add_argument("--preload-action", action="store_true",
                    help="Preload the whole 'action' column and serve delta windows from RAM "
-                        "(item4 seam A prototype; requires --num-workers 0).")
+                        "(item4 seam A prototype; subclass-swap, works at nw=0 and nw=2).")
     p.add_argument("--out", default=None)
     return p.parse_args()
 
@@ -231,28 +241,40 @@ def _eq(a, b) -> bool:
     return bool(np.array_equal(a, b))
 
 
-def _query_hf_with_action_cache(self, query_indices):
-    """Module-level replacement for lerobot ``DatasetReader._query_hf_dataset`` (picklable).
+if _LerobotDatasetReader is not None:
+    class _ActionPreloadReader(_LerobotDatasetReader):
+        """Picklable stand-in for lerobot ``DatasetReader`` (--preload-action).
 
-    Serves the preloaded non-video delta columns (openpi path: the ``action`` column)
-    from RAM; video keys are skipped exactly like the original, and anything else
-    defers to the original gather. The cache / original method are stored as reader
-    instance attributes by :func:`enable_action_preload`, so a spawn-pickled copy of
-    the dataset keeps working -- module-level function + tensors + a class-method
-    bound method are all picklable.
-    """
-    cache = getattr(self, "_action_cache", None)
-    out = {}
-    for key, q_idx in query_indices.items():
-        if cache is not None and key in cache:
-            rel_map = self._absolute_to_relative_idx
-            rel = q_idx if rel_map is None else [rel_map[i] for i in q_idx]
-            out[key] = cache[key][list(rel)]
-        elif key in getattr(self, "_action_vid_keys", ()):
-            continue  # mirror original: video keys are decoded by _query_videos
-        else:
-            out[key] = getattr(self, "_query_hf_dataset_orig")({key: q_idx})[key]
-    return out
+        Swapped in via ``reader.__class__ = _ActionPreloadReader``, it serves the
+        preloaded non-video delta columns (openpi path: the ``action`` column) from
+        the RAM cache stored as ``reader._action_cache``; video keys are skipped
+        exactly like the original, and anything else defers to the base gather.
+        Window clamp/pad semantics live in ``_get_query_indices`` (untouched), so
+        outputs are bit-identical to the default path.
+
+        A real module-level subclass (not a per-instance MethodType) so a
+        spawn-pickled copy of the dataset keeps the override in each DataLoader
+        worker: the class resolves by qualname after the worker re-imports this
+        module.
+        """
+
+        def _query_hf_dataset(self, query_indices):
+            cache = getattr(self, "_action_cache", None)
+            out = {}
+            for key, q_idx in query_indices.items():
+                if cache is not None and key in cache:
+                    rel_map = self._absolute_to_relative_idx
+                    rel = q_idx if rel_map is None else [rel_map[i] for i in q_idx]
+                    out[key] = cache[key][list(rel)]
+                elif key in getattr(self, "_action_vid_keys", ()):
+                    continue  # mirror original: video keys are decoded by _query_videos
+                else:
+                    out[key] = _LerobotDatasetReader._query_hf_dataset(self, {key: q_idx})[key]
+            return out
+
+else:
+    class _ActionPreloadReader:  # inert fallback; enable_action_preload refuses to swap
+        pass
 
 
 def _column_to_tensor(col) -> torch.Tensor:
@@ -291,24 +313,24 @@ def enable_action_preload(ds) -> dict:
 
     The dominant non-decode cost in the openpi-aligned path is the per-sample
     ``action_horizon``-row parquet gather (~3.26 ms/sample of ~9.4 ms; see
-    profile_060_getitem / 汇总文档 §6). We swap the lerobot DatasetReader instance
-    method ``_query_hf_dataset`` for :func:`_query_hf_with_action_cache`, which serves
-    those columns from a RAM cache (row order == relative HF row index for the
-    unfiltered dataset this bench uses). Everything else stays on the original code
-    path: window clamp/pad semantics live in ``_get_query_indices`` (untouched), video
-    keys are skipped the same way => outputs are bit-identical to the default path.
+    profile_060_getitem / 汇总文档 §6). We swap the lerobot DatasetReader instance's
+    class for :class:`_ActionPreloadReader`, whose ``_query_hf_dataset`` serves those
+    columns from a RAM cache (row order == relative HF row index for the unfiltered
+    dataset this bench uses). Everything else stays on the original code path: window
+    clamp/pad semantics live in ``_get_query_indices`` (untouched), video keys are
+    skipped the same way => outputs are bit-identical to the default path.
 
-    **Picklable** (survives DataLoader spawn): the override is a module-level function
-    and the cache / original method / video-key set are stored as reader instance
-    attributes, all of which pickle cleanly.
+    **Picklable** (survives DataLoader spawn): the override is a module-level
+    subclass swapped in via ``reader.__class__``; cache / video-key set ride along as
+    reader instance attributes. Worker spawn re-imports this module, so the swapped
+    class and the override resolve cleanly from the pickle -- same wiring the openpi
+    ``data_loader`` change would ship.
 
     A light correctness sentinel runs before the timed region: default vs cached
     windows on fixed rows (incl. horizon-tail rows whose window clamps to the
     episode's last frame). Raises on any mismatch.
 
-    Returns meta fields (cache build seconds, sentinel result). Bench measures at
-    num_workers=0 (matches the torchcodec-nw0-optimal conclusion; nw>0 not re-validated
-    here since torchcodec multi-worker memory blow-up is already established).
+    Returns meta fields (cache build seconds, sentinel result).
     """
     reader = None
     for attr in ("reader", "_reader", "_dataset_reader"):
@@ -317,6 +339,13 @@ def enable_action_preload(ds) -> dict:
             break
     if reader is None:
         raise RuntimeError("preload-action: no lerobot reader found on dataset ('reader'/'_reader')")
+    if _LerobotDatasetReader is None:
+        raise RuntimeError("preload-action: lerobot DatasetReader not importable in this env")
+    if not isinstance(reader, _LerobotDatasetReader):
+        raise RuntimeError(f"preload-action: reader type {type(reader).__name__} is not a DatasetReader")
+    if not issubclass(_ActionPreloadReader, type(reader)):
+        raise RuntimeError(f"preload-action: cannot swap reader.__class__ {type(reader).__name__} -> "
+                           f"{_ActionPreloadReader.__name__} (not a subclass)")
     hf = reader.hf_dataset
     if hf is None:
         eager = getattr(ds, "_ensure_hf_dataset_loaded", None)
@@ -337,7 +366,7 @@ def enable_action_preload(ds) -> dict:
         raise RuntimeError("preload-action: no non-video delta columns to preload "
                            f"(delta_indices keys={list(reader.delta_indices)})")
 
-    orig_query_hf = reader._query_hf_dataset
+    base_query = _LerobotDatasetReader._query_hf_dataset  # unbound: bypasses the override
 
     # --- sentinel rows: default path vs cached path must agree ---
     rows = _sentinel_rows(reader, hf)
@@ -345,7 +374,7 @@ def enable_action_preload(ds) -> dict:
     for r in rows:
         base = hf[r]  # raw single row (cheap, no video decode)
         qidx, _pad = reader._get_query_indices(int(base["index"]), int(base["episode_index"]))
-        refs.append((qidx, orig_query_hf(qidx)))
+        refs.append((qidx, base_query(reader, qidx)))
 
     # --- build full-column caches (one columnar read per key) ---
     t0 = time.perf_counter()
@@ -356,8 +385,7 @@ def enable_action_preload(ds) -> dict:
 
     reader._action_cache = caches
     reader._action_vid_keys = vid_keys
-    reader._query_hf_dataset_orig = orig_query_hf
-    reader._query_hf_dataset = types.MethodType(_query_hf_with_action_cache, reader)
+    reader.__class__ = _ActionPreloadReader  # dispatch _query_hf_dataset to the subclass
 
     # --- verify cached path == default path on sentinel rows ---
     ok = True
@@ -371,7 +399,7 @@ def enable_action_preload(ds) -> dict:
     if not ok:
         raise RuntimeError(f"preload-action sentinel MISMATCH (first: {first_bad}); aborting")
     print(f"  preload-action: cached == default on sentinel rows ({len(refs)} rows, "
-          f"build={build_s:.2f}s, caches={cache_shape}, picklable-wiring)")
+          f"build={build_s:.2f}s, caches={cache_shape}, subclass-swap)")
     return {
         "action_preload": True,
         "action_preload_keys": preload_keys,
@@ -448,9 +476,6 @@ def main() -> None:
         meta["hf_preload_s"] = time.perf_counter() - t0
 
     if args.preload_action:
-        if args.num_workers > 0:
-            raise SystemExit("--preload-action bench 只按 nw=0 测量（torchcodec nw>0 已证内存爆炸，matrix5.1）；"
-                             "生产 spawn 路径由 picklable 版本支持，另用独立脚本验证")
         meta.update(enable_action_preload(ds))
 
     logging.basicConfig(level=logging.WARNING)
