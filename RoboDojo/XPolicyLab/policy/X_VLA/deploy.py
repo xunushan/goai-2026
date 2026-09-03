@@ -40,3 +40,14 @@ def eval_one_episode_batch(TASK_ENV, model_client):
             actions = [actions[i] for i in active_batch_idx] # Get the active action list
             env_idx_list = [env_idx_list[i] for i in active_batch_idx] # Get the active environment index list
             model_client.call(func_name="update_obs_batch", obs=TASK_ENV.get_obs_batch(env_idx_list)) # Update the observation
+
+
+# ===== 性能剖析钩子（profile_eval.py，仅 PROFILE_EVAL=1 激活，否则零副作用）=====
+import os as _os
+
+if _os.environ.get("PROFILE_EVAL") == "1":
+    try:
+        from . import profile_eval
+        profile_eval.install()
+    except Exception as _e:
+        print(f"[profile] install failed: {_e!r}", flush=True)
