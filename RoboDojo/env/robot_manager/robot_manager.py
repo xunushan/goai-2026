@@ -14,6 +14,7 @@ from env.environment.isaac.isaac_rl_env import IsaacRLEnv
 from env.global_configs import ENV_REGEX_NAMESPACE
 from env.planner_manager.curobo_planner import CuroboPlanner
 from env.robot_manager.control_manager import ControlManager, MetaControl
+from env.robot_manager.readback_cache import EpochReadbackCache
 from utils.ensure_usd_path import ensure_usd_path
 
 
@@ -43,6 +44,7 @@ class RobotManager:
         self.ik_solver = dict()
         self.robot_origin_endpose = None
         self.robot_init_joint = [dict() for _ in range(self.num_envs)]
+        self._eef_readback = EpochReadbackCache()  # 优化A：夹爪读回子步缓存
         for idx, cfg in enumerate(self.robots_cfg):
             if not cfg.get("coupled", False):
                 robot = self._get_robot(cfg, idx)
@@ -198,12 +200,33 @@ class RobotManager:
 
         key = self.robot_key[self.robot_list.index(robot)]
         gripper_indices = robot.gripper_joint_indices
-        joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
-        env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=joint_state.device)
-        selected = joint_state[env_ids][:, gripper_indices].detach().cpu().numpy()  # 一次同步读回
+
+        # 优化A：夹爪读回子步缓存。get_action/pop/control_robot/reward 会在同一物理子步内对
+        # 同一 robot 反复读夹爪真实值（旧实现 6env 每子步 ~36 次单 env .cpu() 同步）。夹爪
+        # joint_pos 只在物理推进时变化，而物理子步 _sim_step_counter 单调递增 ⇒ 同 counter 内
+        # 整批读回一次、其余切片命中，把同步降到每 robot 每子步 ≤1 次。无子步计数器
+        # （真实机器人/非 DirectRLEnv 后端）时退回逐次读回，行为与旧版完全一致。
+        sim = getattr(self, "sim", None)
+        counter = getattr(sim, "_sim_step_counter", None) if sim is not None else None
+        rid = self.robot_list.index(robot)
+
+        if counter is None:
+            joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
+            env_ids = torch.tensor(list(env_idx_list), dtype=torch.long, device=joint_state.device)
+            selected = joint_state[env_ids][:, gripper_indices].detach().cpu().numpy()
+            results = {idx: None for idx in range(self.num_envs)}
+            for i, env_idx in enumerate(env_idx_list):
+                results[env_idx] = selected[i].copy()
+            return results
+
+        master = self._eef_readback.get(counter, rid)
+        if master is None:
+            joint_state = key.data.joint_pos  # (num_envs, num_dof), device tensor
+            master = joint_state[:, gripper_indices].detach().cpu().numpy()  # 一次整批同步读回
+            self._eef_readback.put(counter, rid, master)
         results = {idx: None for idx in range(self.num_envs)}
-        for i, env_idx in enumerate(env_idx_list):
-            results[env_idx] = selected[i].copy()
+        for env_idx in env_idx_list:
+            results[env_idx] = master[env_idx].copy()  # 逐调用 copy，防外部改缓存
         return results
 
     def get_delta_endpose(self, robot, env_idx_list=None):
@@ -465,6 +488,7 @@ class RobotManager:
 
     def reset(self):
         self.control_manager.reset()
+        self._eef_readback.clear()  # 优化A：随 reset 清读回缓存（防跨 episode 陈旧）
         if self.robot_key is None or len(self.robot_key) == 0:
             self._setup_robot_key()
         self.robot_origin_endpose = [dict() for _ in range(self.num_envs)]
