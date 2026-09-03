@@ -1,0 +1,25 @@
+{
+  "tasks": [
+    {
+      "task_id": "stack_three_bowls_sim_007",
+      "task_name": "Stack Three Bowls Together",
+      "platform": "Simulation",
+      "original_instruction": "Stack the three bowls together.",
+      "modified_instruction": "Nest all three bowls upright, release them, then return to origin."
+    },
+    {
+      "task_id": "plug_charger_sim_008",
+      "task_name": "Plug Charger into Power Strip",
+      "platform": "Simulation",
+      "original_instruction": "Plug the charger into the power strip.",
+      "modified_instruction": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
+    },
+    {
+      "task_id": "fill_pen_holder_sim_009",
+      "task_name": "Fill Pen Holder",
+      "platform": "Simulation",
+      "original_instruction": "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.",
+      "modified_instruction": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
+    }
+  ]
+}

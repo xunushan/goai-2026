@@ -1,0 +1,46 @@
+{
+  "tasks": [
+    {
+      "task_id": "fill_pen_holder_001",
+      "task_name": "Fill Pen Holder",
+      "platform": "Real Robot",
+      "original_instruction": "Pick up the pen holder and place all the pens into it.",
+      "modified_instruction": "Pick up and hold the pen holder upright, insert all three pens one by one, then place the filled holder on the table."
+    },
+    {
+      "task_id": "place_objects_in_basket_002",
+      "task_name": "Place Objects in Basket",
+      "platform": "Real Robot",
+      "original_instruction": "Place all the objects on the table into the basket.",
+      "modified_instruction": "Place all objects on the table into the basket one by one."
+    },
+    {
+      "task_id": "stack_blocks_cover_cup_003",
+      "task_name": "Stack Blocks and Cover with Cup",
+      "platform": "Real Robot",
+      "original_instruction": "Stack the blocks on the table, then cover them with the cup.",
+      "modified_instruction": "Stack all three blocks into one vertical stack, then place the cup over the entire stack."
+    },
+    {
+      "task_id": "stack_bowls_center_004",
+      "task_name": "Stack Bowls in the Center",
+      "platform": "Real Robot",
+      "original_instruction": "Stack the bowls on the table.",
+      "modified_instruction": "Nest all three bowls upright at the center of the table."
+    },
+    {
+      "task_id": "stand_up_bottles_005",
+      "task_name": "Stand Up Bottles",
+      "platform": "Real Robot",
+      "original_instruction": "Stand the bottle upright.",
+      "modified_instruction": "Place all three bottles stably upright on the table."
+    },
+    {
+      "task_id": "connect_charger_006",
+      "task_name": "Connect Charger",
+      "platform": "Real Robot",
+      "original_instruction": "Insert the charger plug into the power strip, then connect the charging cable to the plug.",
+      "modified_instruction": "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
+    }
+  ]
+}
