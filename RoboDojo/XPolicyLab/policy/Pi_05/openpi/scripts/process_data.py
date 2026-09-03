@@ -58,22 +58,27 @@ SCHEMAS = {
         },
         "instruction": "hdf5",
     },
-    # real（real, piper_x）：joint 用 joint+gripper；ee 用 eef（7 维四元数 wxyz 直接 / 6 维欧拉角按 xyz 内旋转转 wxyz）+gripper
+    # real（real, piper_x）：官方 2026-09-01 起与 sim 统一容器（state/xxx_joint_states + ee_poses + vision/*/colors）。
+    #   joint = state/{left,right}_arm_joint_states(6) + ee_joint_states(gripper1)
+    #   ee    = state/{left,right}_ee_poses 已是 7 维 xyz+wxyz（四元数 wxyz、w 首位、模=1，直接透传，无 6 维欧拉角分支）+ ee_joint_states(gripper1)
+    #   camera: vision/{cam_head,cam_left_wrist,cam_right_wrist}/colors(480x640x3) -> cam_high/cam_left_wrist/cam_right_wrist
+    #   instruction: real hdf5 根级 instructions 存 original 文案；数据集任务文本按用户要求用
+    #     configs/real_task_instruction.json 的 modified_instruction（见 real_task_instructions()）
     ("real", "piper_x"): {
         "robot_type": "piper_x",
         "fps": 25,
         "state_parts_joint": [
-            [("left_arm/joint", 6), ("left_arm/gripper", 1)],
-            [("right_arm/joint", 6), ("right_arm/gripper", 1)],
+            [("state/left_arm_joint_states", 6), ("state/left_ee_joint_states", 1)],
+            [("state/right_arm_joint_states", 6), ("state/right_ee_joint_states", 1)],
         ],
         "state_parts_ee": [
-            [("left_arm/eef", "eef_to_pose"), ("left_arm/gripper", 1)],
-            [("right_arm/eef", "eef_to_pose"), ("right_arm/gripper", 1)],
+            [("state/left_ee_poses", 7), ("state/left_ee_joint_states", 1)],
+            [("state/right_ee_poses", 7), ("state/right_ee_joint_states", 1)],
         ],
         "cameras": {
-            ("cam_head", "color"): "cam_high",
-            ("cam_left_wrist", "color"): "cam_left_wrist",
-            ("cam_right_wrist", "color"): "cam_right_wrist",
+            ("vision", "cam_head", "colors"): "cam_high",
+            ("vision", "cam_left_wrist", "colors"): "cam_left_wrist",
+            ("vision", "cam_right_wrist", "colors"): "cam_right_wrist",
         },
         "instruction": "task_desc",
     },
@@ -85,15 +90,48 @@ _TRANSFORM_OUT_DIMS = {"eef_to_pose": 7}
 # lerobot_v30_ee 每臂命名：l_x..l_g / r_x..r_g（[x,y,z,qw,qx,qy,qz,g]，四元数 wxyz，w 在首位——官方 sim/real 统一约定）
 EE_DIM_NAMES = ["x", "y", "z", "w", "wx", "wy", "wz", "g"]
 
-# real 数据无 instruction 字段，按任务名查描述（用户提供）
-REAL_TASK_DESCRIPTIONS = {
-    "fill_pen_holder": "Pick up the pen holder and place all the pens into it.",
-    "put_objects_into_basket": "Place all the objects on the table into the basket.",
-    "stack_and_cover_blocks": "Stack the blocks on the table, then cover them with the cup.",
-    "stack_bowls": "Stack the three bowls together.",
-    "stand_up_bottles": "Stand the bottle upright.",
-    "insert_charger": "Insert the charger plug into the power strip, then connect the charging cable to the plug.",
+# real 任务文本：官方 real hdf5 的根级 `instructions` 字段存的是 original 文案；数据集任务文本按用户要求
+# 使用 configs/real_task_instruction.json 的 modified_instruction。该 JSON 是"唯一源"，original 字段可用于核对。
+# 数据目录 slug <-> config task_id 的映射固定（目录名即比赛数据目录名）。
+_REAL_TASK_ID_BY_SLUG = {
+    "fill_pen_holder": "fill_pen_holder_001",
+    "put_objects_into_basket": "place_objects_in_basket_002",
+    "stack_and_cover_blocks": "stack_blocks_cover_cup_003",
+    "stack_bowls": "stack_bowls_center_004",
+    "stand_up_bottles": "stand_up_bottles_005",
+    "insert_charger": "connect_charger_006",
 }
+_REAL_MODIFIED_CACHE: dict | None = None
+
+
+def real_task_instructions(force_reload: bool = False) -> dict[str, str]:
+    """返回 {数据目录slug: modified_instruction}（源 = configs/real_task_instruction.json）。
+
+    找不到 JSON 或字段缺失即抛错——宁可失败，也不静默回退成 original/默认指令。
+    可用环境变量 REAL_TASK_INSTRUCTION_JSON 覆盖路径（默认 <仓库根>/configs/real_task_instruction.json）。
+    """
+    global _REAL_MODIFIED_CACHE
+    if _REAL_MODIFIED_CACHE is not None and not force_reload:
+        return _REAL_MODIFIED_CACHE
+    import json
+
+    env_path = os.environ.get("REAL_TASK_INSTRUCTION_JSON", "").strip()
+    path = Path(env_path) if env_path else (ROOT_PATH.parent / "configs" / "real_task_instruction.json")
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"real 任务指令 JSON 不存在: {path}。real/piper_x 转换依赖 configs/real_task_instruction.json"
+            "（可设 REAL_TASK_INSTRUCTION_JSON 覆盖）。"
+        )
+    cfg = json.loads(path.read_text(encoding="utf-8"))
+    by_id = {t.get("task_id"): t for t in cfg.get("tasks", [])}
+    out: dict[str, str] = {}
+    for slug, task_id in _REAL_TASK_ID_BY_SLUG.items():
+        entry = by_id.get(task_id)
+        if entry is None or not entry.get("modified_instruction"):
+            raise ValueError(f"{path} 缺少 task_id={task_id}（slug={slug}）的 modified_instruction")
+        out[slug] = entry["modified_instruction"]
+    _REAL_MODIFIED_CACHE = out
+    return out
 
 
 def eef_to_pose(eef: np.ndarray) -> np.ndarray:
@@ -505,7 +543,7 @@ def main():
             num_frames = data["num_frames"]
 
             if schema["instruction"] == "task_desc":
-                instruction = REAL_TASK_DESCRIPTIONS.get(raw_task_dir, instruction)
+                instruction = real_task_instructions().get(raw_task_dir, instruction)
             elif data["instructions"] is not None:
                 instruction = data["instructions"]
 
