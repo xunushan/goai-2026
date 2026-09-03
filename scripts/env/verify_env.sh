@@ -18,12 +18,10 @@ SP="$ENV_DIR/lib/python3.12/site-packages"
 DATASET_ROOT="${DATASET_ROOT:-/cloud/cloud-ssd1/lerobot_data}"
 REPO="${REPO:-sim_lerobot_v30_joint-224x224}"
 
-# openpi 源码自动探测（用户放 /data/openpi；服务器当前验证副本在 goai/src）
+# openpi 源码位置（用户放 /data/openpi）
 OPENPI_SRC="${OPENPI_SRC:-}"
-if [ -z "$OPENPI_SRC" ]; then
-  for c in "/data/openpi" "/cloud/cloud-ssd1/goai/src/openpi"; do
-    [ -d "$c/src/openpi" ] && OPENPI_SRC="$c" && break
-  done
+if [ -z "$OPENPI_SRC" ] && [ -d "/data/openpi/src/openpi" ]; then
+  OPENPI_SRC="/data/openpi"
 fi
 PP=""
 [ -n "$OPENPI_SRC" ] && PP="$OPENPI_SRC/src:$OPENPI_SRC/packages/openpi-client/src"

@@ -14,12 +14,10 @@ export VENV_DIR="$GOAI_ROOT/envs/$ENV_NAME"
 export PY="$VENV_DIR/bin/python"                       # venv 解释器（绝对路径）
 SP="$VENV_DIR/lib/python3.12/site-packages"
 
-# openpi 源码位置：第 1 参 > OPENPI_SRC > 探测 /data/openpi > goai/src/openpi
+# openpi 源码位置：第 1 参 > OPENPI_SRC > 探测 /data/openpi
 OPENPI_SRC="${1:-$OPENPI_SRC}"
-if [ -z "$OPENPI_SRC" ]; then
-  for c in "/data/openpi" "$GOAI_ROOT/src/openpi"; do
-    [ -d "$c/src/openpi" ] && OPENPI_SRC="$c" && break
-  done
+if [ -z "$OPENPI_SRC" ] && [ -d "/data/openpi/src/openpi" ]; then
+  OPENPI_SRC="/data/openpi"
 fi
 export OPENPI_SRC
 export PYTHONPATH="$OPENPI_SRC/src:$OPENPI_SRC/packages/openpi-client/src${PYTHONPATH:+:$PYTHONPATH}"
