@@ -80,4 +80,6 @@ lerobot_data_bench/
 - **0.6.0 conda env（lerobot060）无 psutil**：`bench_v2.py` 的 RSS 走 `getrusage` 兜底。
 - 0.4.4 的 `LeRobotDataset` **无 `return_uint8` 参数**，该维度只在 0.6.0 上测。
 - sim h264 数据集的 `--num-workers` 只测了 0（torchcodec nw≥2 已证内存爆炸，见 matrix5.1）。
+- `--preload-action`：item4 方案 1 原型（action 整列内存预载），**仅 lerobot0.6 + nw=0**；自带逐位一致性哨兵
+  （默认 vs 预载路径），ALL OK 后才计时。实测 sim224+uint8 107.8→166.7 sps（汇总文档试验 L）。
 - `--resize`/编码相关参数不在此代码中（走 XPolicyLab process_data 转换链，见项目 memory）。
