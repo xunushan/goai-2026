@@ -2,6 +2,7 @@ from collections.abc import Iterator, Sequence
 import logging
 import multiprocessing
 import os
+import time
 import typing
 from typing import Literal, Protocol, SupportsIndex, TypeVar
 
@@ -16,6 +17,13 @@ except ModuleNotFoundError as exc:
     if exc.name != "lerobot.datasets":
         raise
     import lerobot.common.datasets.lerobot_dataset as lerobot_dataset
+
+try:
+    from lerobot.datasets.dataset_reader import DatasetReader as _LeRobotDatasetReader
+except ModuleNotFoundError as exc:
+    if exc.name != "lerobot.datasets":
+        raise
+    from lerobot.common.datasets.dataset_reader import DatasetReader as _LeRobotDatasetReader
 
 import openpi.models.model as _model
 import openpi.training.config as _config
@@ -133,6 +141,140 @@ class FakeDataset(Dataset):
         return self._num_samples
 
 
+# --- item4: preload non-video delta columns (the ``action`` column) into RAM ---
+#
+# The dominant non-decode cost in get_item is the action_horizon-wide per-sample
+# parquet gather. Serving that window from an in-RAM column cache removes it. The
+# override is a real module-level DatasetReader subclass swapped in via
+# ``reader.__class__``, so a spawn-pickled dataset (openpi num_workers>0) keeps the
+# override in every worker: the class resolves by qualname after the worker re-imports
+# this module. Window clamp/pad semantics live in ``_get_query_indices`` (untouched),
+# so outputs are bit-identical to the default path.
+class _ActionPreloadReader(_LeRobotDatasetReader):
+    def _query_hf_dataset(self, query_indices):
+        cache = getattr(self, "_action_cache", None)
+        out = {}
+        for key, q_idx in query_indices.items():
+            if cache is not None and key in cache:
+                rel_map = getattr(self, "_absolute_to_relative_idx", None)
+                rel = q_idx if rel_map is None else [rel_map[i] for i in q_idx]
+                out[key] = cache[key][list(rel)]
+            elif key in getattr(self, "_action_vid_keys", ()):
+                continue  # video keys are decoded separately, mirroring the base reader
+            else:
+                out[key] = _LeRobotDatasetReader._query_hf_dataset(self, {key: q_idx})[key]
+        return out
+
+
+def _column_to_tensor(col) -> torch.Tensor:
+    """Materialize an hf column into one (N, D) tensor."""
+    if isinstance(col, torch.Tensor):
+        return col
+    if isinstance(col, np.ndarray):
+        return torch.from_numpy(np.asarray(col))
+    vals = list(col)
+    if vals and isinstance(vals[0], torch.Tensor):
+        return torch.stack(vals)
+    return torch.from_numpy(np.stack([np.asarray(v) for v in vals]))
+
+
+def _sentinel_rows(reader, hf) -> list[int]:
+    """Deterministic sample rows (incl. episode-tail clamp windows) for the sentinel."""
+    n = len(hf)
+    if n == 0:
+        return []
+    base = hf[0]
+    qidx0, _ = reader._get_query_indices(int(base["index"]), int(base["episode_index"]))
+    horizon = max((len(q) for q in qidx0.values()), default=0)
+    cand = {0, min(1, n - 1), n // 4, n // 2, (3 * n) // 4, n - 2, n - 1}
+    if 0 < horizon < n:
+        cand.add(n - 1 - (horizon - 1))  # window reaches dataset end (clamp/repeat last frame)
+        cand.add(n - 1 - (horizon // 2))
+    return sorted(r for r in cand if 0 <= r < n)
+
+
+def enable_action_preload(dataset: lerobot_dataset.LeRobotDataset) -> None:
+    """Seam A (item4): preload non-video delta columns (``action``) into RAM.
+
+    Bit-identical to the default path; verified on sentinel rows (incl. episode-tail
+    clamp windows) before timing -- a mismatch aborts startup. Best effort: on any
+    structural incompatibility (non-lerobot reader, filtered dataset, no hf metadata)
+    it logs and leaves the dataset untouched rather than failing training.
+    Disable with OPENPI_DISABLE_ACTION_PRELOAD=1.
+    """
+    if os.environ.get("OPENPI_DISABLE_ACTION_PRELOAD", "0") == "1":
+        logging.info("action preload disabled (OPENPI_DISABLE_ACTION_PRELOAD=1)")
+        return
+
+    reader = None
+    for attr in ("reader", "_reader", "_dataset_reader"):
+        if getattr(dataset, attr, None) is not None:
+            reader = getattr(dataset, attr)
+            break
+    if not isinstance(reader, _LeRobotDatasetReader):
+        logging.info("action preload skipped: dataset reader is %s",
+                     type(reader).__name__ if reader is not None else "None")
+        return
+    if getattr(reader, "_absolute_to_relative_idx", None) is not None:
+        logging.info("action preload skipped: dataset is filtered (absolute_to_relative_idx set)")
+        return
+    if getattr(reader, "_meta", None) is None:
+        logging.info("action preload skipped: reader has no _meta (cannot classify video keys)")
+        return
+
+    hf = reader.hf_dataset
+    if hf is None:
+        eager = getattr(dataset, "_ensure_hf_dataset_loaded", None)
+        if eager is None:
+            logging.info("action preload skipped: hf_dataset not loadable")
+            return
+        eager()
+        hf = reader.hf_dataset
+        if hf is None:
+            logging.info("action preload skipped: hf_dataset still empty after load")
+            return
+
+    vid_keys = frozenset(reader._meta.video_keys)
+    preload_keys = [k for k in reader.delta_indices if k not in vid_keys]
+    if not preload_keys:
+        logging.info("action preload skipped: no non-video delta columns (delta=%s)",
+                     list(reader.delta_indices))
+        return
+
+    base_query = _LeRobotDatasetReader._query_hf_dataset  # unbound: bypasses the override
+    rows = _sentinel_rows(reader, hf)
+    refs = []
+    for r in rows:
+        row = hf[r]  # raw single row (cheap, no video decode)
+        qidx, _pad = reader._get_query_indices(int(row["index"]), int(row["episode_index"]))
+        refs.append((qidx, base_query(reader, qidx)))
+
+    # One columnar read per key -> full-column RAM cache (row order == hf row index).
+    t0 = time.perf_counter()
+    n = len(hf)
+    caches = {key: _column_to_tensor(hf[key][list(range(n))] if n else []) for key in preload_keys}
+    build_s = time.perf_counter() - t0
+
+    reader._action_cache = caches
+    reader._action_vid_keys = vid_keys
+    reader.__class__ = _ActionPreloadReader  # dispatch _query_hf_dataset to the subclass
+
+    # Verify the cached path == default path on the sentinel rows.
+    ok = True
+    first_bad = None
+    for qidx, ref in refs:
+        pre = reader._query_hf_dataset(qidx)
+        for key, value in ref.items():
+            if not torch.equal(value, pre[key]):
+                ok = False
+                first_bad = first_bad or f"{key}@{qidx}"
+    if not ok:
+        raise RuntimeError(f"action preload sentinel MISMATCH (first: {first_bad}); aborting")
+
+    logging.info("action preload enabled: keys=%s caches=%s build=%.2fs sentinel=%d rows OK",
+                 preload_keys, {k: tuple(v.shape) for k, v in caches.items()}, build_s, len(refs))
+
+
 def create_torch_dataset(
     data_config: _config.DataConfig, action_horizon: int, model_config: _model.BaseModelConfig
 ) -> Dataset:
@@ -151,6 +293,7 @@ def create_torch_dataset(
         },
         video_backend=data_config.video_backend,
     )
+    enable_action_preload(dataset)
 
     if data_config.prompt_from_task:
         dataset = TransformedDataset(dataset, [_transforms.PromptFromLeRobotTask(dataset_meta.tasks)])
