@@ -301,7 +301,7 @@ def enable_action_preload(ds) -> dict:
     rel_map = reader._absolute_to_relative_idx
     vid_keys = set(reader._meta.video_keys) if getattr(reader, "_meta", None) is not None else set()
 
-    def _query_hf_with_cache(query_indices):
+    def _query_hf_with_cache(self, query_indices):
         out = {}
         for key, q_idx in query_indices.items():
             if key == "action":
