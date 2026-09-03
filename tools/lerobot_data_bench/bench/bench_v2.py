@@ -12,6 +12,10 @@ Follows docs/LeRobot_v3数据加载性能后续测试方案.md:
 - camera_frames_per_s = samples_per_s * 3
 - --thread-limit : OMP/MKL/OPENBLAS/RAYON=1 + torch.set_num_threads(1) (Lance oversubscription check)
 - --return-uint8 : pass return_uint8=True when the dataset class supports it
+- --preload-action : preload the whole action column into RAM and serve the delta
+                     (action_horizon) window from it instead of per-sample parquet
+                     row gathers; bit-identical (light sentinel verifies). num_workers
+                     must be 0 (in-process reader cache; item4 seam A prototype).
 
 One process = one independent run. The shell driver loops for repeats and aggregates medians.
 """
@@ -25,6 +29,7 @@ import os
 import pathlib
 import threading
 import time
+import types
 
 import numpy as np
 import torch
@@ -58,6 +63,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--decoder-cache", type=int, default=None,
                    help="Bound lerobot's torchcodec VideoDecoderCache to N entries with LRU eviction "
                         "(closes evicted file handles). None = current unbounded cache.")
+    p.add_argument("--preload-action", action="store_true",
+                   help="Preload the whole 'action' column and serve delta windows from RAM "
+                        "(item4 seam A prototype; requires --num-workers 0).")
     p.add_argument("--out", default=None)
     return p.parse_args()
 
@@ -215,6 +223,119 @@ def build_dataset(args) -> tuple[object, dict]:
     return ds, {"init_s": init_s, "kind": kind, "fps": fps, "delta_keys": list(delta)}
 
 
+def _eq(a, b) -> bool:
+    if isinstance(a, torch.Tensor):
+        return bool(torch.equal(a, b))
+    return bool(np.array_equal(a, b))
+
+
+def enable_action_preload(ds) -> dict:
+    """Seam A (item4): preload the whole ``action`` column and serve delta windows from RAM.
+
+    The dominant non-decode cost in the openpi-aligned path is the per-sample
+    ``action_horizon``-row parquet gather (~3.26 ms/sample of ~9.4 ms; see
+    profile_060_getitem / 汇总文档 §6). We monkeypatch the lerobot DatasetReader
+    instance method ``_query_hf_dataset`` so the ``action`` key is read from a
+    column-level cache (row order == relative HF row index for the unfiltered
+    dataset this bench uses). Everything else stays on the original code path:
+    window clamp/pad semantics live in ``_get_query_indices`` (untouched), video
+    keys are skipped the same way, and non-action non-video delta keys defer to
+    the original gather => outputs are bit-identical to the default path.
+
+    A light correctness sentinel runs before the timed region: default vs cached
+    action window on fixed rows (incl. episode-tail rows whose window clamps to
+    the episode's last frame). Raises on any mismatch.
+
+    Returns meta fields (cache build seconds, sentinel result). Requires
+    num_workers=0 (the MethodType override is not spawn-picklable).
+    """
+    reader = None
+    for attr in ("reader", "_reader", "_dataset_reader"):
+        if getattr(ds, attr, None) is not None:
+            reader = getattr(ds, attr)
+            break
+    if reader is None:
+        raise RuntimeError("preload-action: no lerobot reader found on dataset ('reader'/'_reader')")
+    hf = reader.hf_dataset
+    if hf is None:
+        eager = getattr(ds, "_ensure_hf_dataset_loaded", None)
+        if eager is not None:
+            eager()
+            hf = reader.hf_dataset
+    if hf is None:
+        lazy = getattr(reader, "load_and_activate", None)
+        if lazy is None:
+            raise RuntimeError("preload-action: cannot load hf_dataset "
+                               "(no _ensure_hf_dataset_loaded / load_and_activate)")
+        lazy()
+        hf = reader.hf_dataset
+
+    orig_query_hf = reader._query_hf_dataset
+
+    # --- sentinel rows: default path vs cached path must agree ---
+    n = len(hf)
+    cand = {0, min(1, n - 1), n // 4, n // 2, (3 * n) // 4, n - 2, n - 1}
+    if n > 50:
+        cand.add(n - 1 - 49)  # episode-tail window: clamps & repeats last frame
+        cand.add(n - 1 - 24)
+    rows = sorted(r for r in cand if 0 <= r < n)
+    refs = []
+    for r in rows:
+        base = hf[r]  # raw single row (cheap, no video decode)
+        qidx, _pad = reader._get_query_indices(int(base["index"]), int(base["episode_index"]))
+        refs.append((qidx, orig_query_hf(qidx)))
+
+    # --- build full action column cache (one columnar read) ---
+    t0 = time.perf_counter()
+    colvals = hf["action"][list(range(n))] if n else []
+    if isinstance(colvals, torch.Tensor):
+        cache = colvals
+    elif isinstance(colvals, np.ndarray):
+        cache = torch.from_numpy(np.asarray(colvals))
+    elif len(colvals) and isinstance(colvals[0], torch.Tensor):
+        cache = torch.stack(list(colvals))
+    else:
+        cache = torch.from_numpy(np.stack([np.asarray(v) for v in colvals]))
+    build_s = time.perf_counter() - t0
+
+    rel_map = reader._absolute_to_relative_idx
+    vid_keys = set(reader._meta.video_keys) if getattr(reader, "_meta", None) is not None else set()
+
+    def _query_hf_with_cache(query_indices):
+        out = {}
+        for key, q_idx in query_indices.items():
+            if key == "action":
+                rel = q_idx if rel_map is None else [rel_map[i] for i in q_idx]
+                out[key] = cache[list(rel)]
+            elif key in vid_keys:
+                continue  # mirror original: video keys are handled by _query_videos
+            else:
+                out[key] = orig_query_hf({key: q_idx})[key]
+        return out
+
+    reader._query_hf_dataset = types.MethodType(_query_hf_with_cache, reader)
+
+    # --- verify cached path == default path on sentinel rows ---
+    ok = True
+    first_bad = None
+    for qidx, ref in refs:
+        pre = reader._query_hf_dataset(qidx)
+        for k, v in ref.items():
+            if not _eq(v, pre[k]):
+                ok = False
+                first_bad = first_bad or f"{k}@{qidx}"
+    if not ok:
+        raise RuntimeError(f"preload-action sentinel MISMATCH (first: {first_bad}); aborting")
+    print(f"  preload-action: cached action == default on sentinel rows ({len(refs)} rows, "
+          f"build={build_s:.2f}s, cache={tuple(cache.shape)} {cache.dtype})")
+    return {
+        "action_preload": True,
+        "action_preload_build_s": round(build_s, 4),
+        "action_preload_sentinel_n": len(refs),
+        "action_preload_sentinel_ok": True,
+    }
+
+
 class RssMonitor:
     """Samples RSS of self + all children (DataLoader workers) every 0.1s, tracks peak."""
 
@@ -280,6 +401,12 @@ def main() -> None:
         t0 = time.perf_counter()
         ds._ensure_hf_dataset_loaded()
         meta["hf_preload_s"] = time.perf_counter() - t0
+
+    if args.preload_action:
+        if args.num_workers > 0:
+            raise SystemExit("--preload-action requires --num-workers 0 "
+                             "(in-process reader cache; MethodType override is not spawn-picklable)")
+        meta.update(enable_action_preload(ds))
 
     logging.basicConfig(level=logging.WARNING)
     print(f"=== {meta['kind']} nw={args.num_workers} uint8={args.return_uint8} threadlimit={args.thread_limit} "
