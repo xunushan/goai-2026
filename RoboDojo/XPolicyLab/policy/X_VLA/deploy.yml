@@ -43,6 +43,13 @@ temporal_ensemble_coeff: null
 # generate_actions（值保持，见 model.py 注释）。仅多 env eval（eval_batch）生效，
 # 单 env 仍走顺序路径。默认 false 与旧行为完全一致。
 batch_inference: false
+# 中间步 obs 策略（性能优化，仅客户端 eval 循环生效）：full|video|none，默认 full。
+#   full  = 现行为：中段每步 render+capture+录像+obs 组装+状态读+推服务端（obs 实为死写）
+#   video = 中段只出帧+写 mp4（video-only，跳状态读/组装/深拷贝/推服），推理 obs 不变
+#   none  = 中段完全不取 obs（无 render/capture/录像），视频只剩重规划帧抽帧
+# 说明：策略只在 chunk 边界（每段首帧）用 obs；中段 obs 从不被读，full 下属死写。
+# none/video 仅在提速评测时用；需顺滑逐帧 mp4 时用 full。真 obs 路径（重规划）不受影响。
+mid_step_obs: full
 gripper_mode: continuous
 gripper_threshold: 0.7
 # 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。

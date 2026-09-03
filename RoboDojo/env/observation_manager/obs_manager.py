@@ -73,7 +73,10 @@ class ObsManager:
         self.desc_manager.reset()
         self.instruction = self.desc_manager.get_one_description()
 
-    def get_obs(self, env_idx_list=None):  # batch
+    def get_obs(self, env_idx_list=None, vision_only=False):  # batch
+        # vision_only=True：只取相机画面（供逐帧录像），跳过 robot 状态读回与
+        # action/state 组装（那些 GPU→CPU 同步是中间步 obs 的大头）。仅供
+        # X_VLA 中间步「video-only」路径使用；默认 False 行为与历史完全一致。
         if env_idx_list is None:
             env_idx_list = range(self.num_envs)
         obs = dict()
@@ -141,7 +144,7 @@ class ObsManager:
                                 self.camera_manager.get_camera_extrinsics(ith, env_idx)
                             )
 
-        if self.robot_manager is not None:
+        if (not vision_only) and self.robot_manager is not None:
             try:
                 for robot in self.robot_manager.robot_list:
                     if robot.type != "target":

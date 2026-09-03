@@ -281,7 +281,11 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
         def get_obs(self):
             return self.get_obs_batch(env_idx_list=[0])[0]
 
-        def get_obs_batch(self, env_idx_list=None, last_frame=False):
+        def get_obs_batch(self, env_idx_list=None, last_frame=False, vision_only=False):
+            # vision_only=True：只出帧+录像，跳过 robot 状态读回与深拷贝隔离/打包。
+            # obs_manager.get_obs(vision_only=True) 已省状态段；_stream_vision 当场消费
+            # color（ascontiguous + append），不依赖共享 warp buffer 的后续内容，故隔离
+            # 拷贝可省。仅供 X_VLA 中间步「video」档使用；默认 False 行为与历史完全一致。
             if self.physx_monitor_enabled:
                 self._check_physx_broken_envs()
             self.render()
@@ -289,7 +293,12 @@ def create_eval_env(config, app, resume_state=None, **kwargs):
                 env_idx_list = list(range(self.num_envs))
             if self.physx_monitor_enabled:
                 self._check_endpose_finite(env_idx_list)
-            data = self.obs_manager.get_obs(env_idx_list=env_idx_list)
+            data = self.obs_manager.get_obs(env_idx_list=env_idx_list, vision_only=vision_only)
+            if vision_only:
+                for env_idx in env_idx_list:
+                    if not self.end_flag[env_idx] or last_frame:
+                        self._stream_vision(env_idx, data[env_idx])
+                return []
             data_list = []
             for env_idx in env_idx_list:
                 if not self.end_flag[env_idx] or last_frame:
