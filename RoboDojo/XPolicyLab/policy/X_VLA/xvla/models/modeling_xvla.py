@@ -197,6 +197,7 @@ class XVLA(PreTrainedModel):
         proprio: torch.Tensor,
         steps: int = 10,
         generator: torch.Generator | None = None,
+        x1: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Iterative denoising (linear schedule).
@@ -206,6 +207,11 @@ class XVLA(PreTrainedModel):
             generator: optional RNG for the initial flow-matching noise x1.
                 When provided, the same seed reproduces the same noise sequence;
                 when None, sampling uses the process-global RNG as before.
+            x1: optional pre-drawn initial noise [B, num_actions, dim_action].
+                When provided, `generator` is not used for the noise draw (allows
+                batched inference where each batch row draws x1 from its OWN
+                per-env generator before stacking, keeping per-row noise
+                identical to sequential single-sample generation).
         """
         self.eval()
         enc = self.forward_vlm(input_ids, image_input, image_mask)
@@ -213,14 +219,17 @@ class XVLA(PreTrainedModel):
         B = input_ids.shape[0]
         D = self.action_space.dim_action
 
-        x1 = torch.randn(
-            B,
-            self.num_actions,
-            D,
-            device=proprio.device,
-            dtype=proprio.dtype,
-            generator=generator,
-        )
+        if x1 is None:
+            x1 = torch.randn(
+                B,
+                self.num_actions,
+                D,
+                device=proprio.device,
+                dtype=proprio.dtype,
+                generator=generator,
+            )
+        else:
+            x1 = x1.to(device=proprio.device, dtype=proprio.dtype)
         action = torch.zeros_like(x1)
 
         steps = max(1, int(steps))

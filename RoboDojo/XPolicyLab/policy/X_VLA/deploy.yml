@@ -39,6 +39,10 @@ actions_per_chunk: 30
 # horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
 # 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
 temporal_ensemble_coeff: null
+# 批量推理（优化 B）：true 时 get_action_batch 收到多个 env 会合并为一次 B=N 的
+# generate_actions（值保持，见 model.py 注释）。仅多 env eval（eval_batch）生效，
+# 单 env 仍走顺序路径。默认 false 与旧行为完全一致。
+batch_inference: false
 gripper_mode: continuous
 gripper_threshold: 0.7
 # 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。

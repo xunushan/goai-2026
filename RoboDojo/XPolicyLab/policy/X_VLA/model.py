@@ -536,6 +536,12 @@ class Model(ModelTemplate):
         )
         self._policy_generators: dict[int, torch.Generator] = {}
         self._policy_noise_draws: dict[int, int] = {}
+        # 批量推理（优化 B，默认关）：get_action_batch 收到多个 env 时把
+        # 顺序 B=1 推理合并为一次 B=N 的 generate_actions（forward_vlm 一次、
+        # 去噪循环 N 行并行）。值保持：每 env 初始噪声仍从其各自 generator
+        # 抽取（与顺序路径逐位一致），批内各行互不影响（transformer 按行
+        # attention），仅批 GEMM 浮点舍入差异。deploy.yml 设 batch_inference=true 开启。
+        self.batch_inference = bool(self.model_cfg.get("batch_inference", False))
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
@@ -548,7 +554,8 @@ class Model(ModelTemplate):
             f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
-            f"policy_seed={self.policy_seed}",
+            f"policy_seed={self.policy_seed} "
+            f"batch_inference={self.batch_inference}",
             flush=True,
         )
 
@@ -760,135 +767,240 @@ class Model(ModelTemplate):
         return action_list[0]
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
+        """分派：batch_inference=true 且收到多 env 时走批量推理（优化 B），否则逐 env 顺序。"""
         if self.observation_window is None:
             raise AssertionError("update_obs or update_obs_batch first!")
 
         env_idx_list = env_idx_list or self._latest_env_idx_list
+        env_list = [int(env_idx) for env_idx in env_idx_list]
+        if self.batch_inference and len(env_list) > 1:
+            return self._get_action_batch_batched(env_list)
+        return self._get_action_batch_sequential(env_list)
+
+    def _get_action_batch_sequential(self, env_idx_list):
+        """原逐 env 顺序路径（B=1 推理）。与批量路径共用 _prep_env/_finalize_chunk，
+        保证两条路径的后处理完全一致。"""
         action_list = []
-        for env_idx in env_idx_list:
-            resolved_env_idx = int(env_idx)
-            if resolved_env_idx not in self._latest_by_env:
-                raise KeyError(
-                    f"No buffered observation for env_idx={resolved_env_idx}; "
-                    f"available={sorted(self._latest_by_env)}"
-                )
-            encoded_obs = self._latest_by_env[resolved_env_idx]
-            self._log_observation(
-                self._raw_by_env[resolved_env_idx],
-                encoded_obs,
-                resolved_env_idx,
-            )
-            generator = self._get_policy_generator(resolved_env_idx)
+        for resolved_env_idx in env_idx_list:
+            encoded_obs, generator = self._prep_env(resolved_env_idx)
             raw_chunk = self.infer(encoded_obs, generator=generator)
             if generator is not None:
                 # 记录为「本次采样后累计次数」（1-based）：env 首次重规划为 1
                 self._policy_noise_draws[resolved_env_idx] += 1
-            if raw_chunk.ndim != 2 or raw_chunk.shape[1] < 20:
-                raise ValueError(
-                    f"Expected X-VLA action chunk [T,>=20], got {raw_chunk.shape}"
-                )
-            if not np.isfinite(raw_chunk).all():
-                raise ValueError("X-VLA action chunk contains NaN or Inf")
-            if raw_chunk.shape[0] != self.model_chunk_size:
-                raise ValueError(
-                    "X-VLA returned an unexpected chunk length: "
-                    f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
-                )
-            temporal_ensemble_diagnostics = None
-            if self.temporal_ensemble_active:
-                assert self.temporal_ensemble_coeff is not None
-                assert self.temporal_ensemble_horizon is not None
-                ensembler = self._temporal_ensemblers.get(resolved_env_idx)
-                if ensembler is None:
-                    ensembler = ServerTemporalEnsembler(
-                        self.temporal_ensemble_coeff,
-                        self.temporal_ensemble_horizon,
-                    )
-                    self._temporal_ensemblers[resolved_env_idx] = ensembler
-                pre_ensemble_action = raw_chunk[0].copy()
-                # 每次重规划喂入完整 horizon 段，随后弹出 actions_per_chunk 个
-                # 对齐后的 ensembled action（滑动窗口：相邻重规划的预测窗口在
-                # 时间上重叠，重叠步取指数加权平均）。
-                ensembler.update(raw_chunk[: self.temporal_ensemble_horizon])
-                first_action = ensembler.pop()
-                aligned_prediction_count = ensembler.last_prediction_count
-                executed = [first_action] + [
-                    ensembler.pop()
-                    for _ in range(self.actions_per_chunk - 1)
-                ]
-                executed_chunk = np.stack(executed, axis=0)
-                temporal_ensemble_diagnostics = {
-                    "enabled": True,
-                    "coefficient": self.temporal_ensemble_coeff,
-                    "aligned_prediction_count": aligned_prediction_count,
-                    "horizon": self.temporal_ensemble_horizon,
-                    "model_chunk_size": int(raw_chunk.shape[0]),
-                    "pre_ensemble_action": pre_ensemble_action.tolist(),
-                }
-            else:
-                executed_chunk = raw_chunk[: self.actions_per_chunk]
-            actions = action_chunk_to_ee_dict_list(
-                executed_chunk,
-                gripper_mode=self.gripper_mode,
-                gripper_threshold=self.gripper_threshold,
-            )
-            # 夹爪迟滞（执行层后处理，D4）：作用于最终 16 维动作的夹爪维、
-            # 6D→四元数转换之后。latch 每次由当前 obs 的真实夹爪位置初始化，
-            # 无跨请求状态；enabled=false 跳过。
-            if self._hysteresis_cfg.enabled:
-                obs_state = self._raw_by_env[resolved_env_idx]["state"]
-                apply_gripper_hysteresis(
-                    actions,
-                    left_init=float(obs_state["left_ee_joint_state"][-1]),
-                    right_init=float(obs_state["right_ee_joint_state"][-1]),
-                    lo=self._hysteresis_cfg.lo,
-                    hi=self._hysteresis_cfg.hi,
-                    mode=self._hysteresis_cfg.mode,
-                )
-            if self.log_io:
-                summary = {
-                    "event": "server_actions",
-                    "request": self._request_index,
-                    "env_idx": resolved_env_idx,
-                    "episode_idx": self._raw_by_env[resolved_env_idx].get(
-                        "episode_idx"
-                    ),
-                    "model_chunk_size": int(raw_chunk.shape[0]),
-                    "execute_steps": int(executed_chunk.shape[0]),
-                    "gripper_mode": self.gripper_mode,
-                    "gripper_threshold": self.gripper_threshold,
-                    "hysteresis": (
-                        self._hysteresis_cfg.mode
-                        if self._hysteresis_cfg.enabled
-                        else None
-                    ),
-                    "temporal_ensemble": temporal_ensemble_diagnostics,
-                    "policy_seed": self.policy_seed,
-                    "policy_noise_draw": (
-                        self._policy_noise_draws[resolved_env_idx]
-                        if self.policy_seed is not None
-                        else None
-                    ),
-                    "actions_16d": [
-                        np.concatenate(
-                            [
-                                action["left_ee_pose"],
-                                action["left_ee_joint_state"],
-                                action["right_ee_pose"],
-                                action["right_ee_joint_state"],
-                            ]
-                        ).astype(np.float32).tolist()
-                        for action in actions
-                    ],
-                }
-                print(
-                    "[x_vla][io] "
-                    + json.dumps(summary, ensure_ascii=False),
-                    flush=True,
-                )
-            self._request_index += 1
+            actions = self._finalize_chunk(resolved_env_idx, raw_chunk)
             action_list.append(actions)
         return action_list
+
+    def _get_action_batch_batched(self, env_idx_list):
+        """多 env 批量推理：一次 processor + 一次 forward_vlm + 去噪循环 N 行并行。
+
+        值保持：每 env 的初始噪声 x1 在 _batch_infer 内从各自 generator 逐 env
+        抽取（与顺序路径同序同值），批内各行输出互不影响（transformer 逐行
+        attention），后处理走与顺序路径相同的 _finalize_chunk。
+        """
+        encoded_list = []
+        generators = []
+        for resolved_env_idx in env_idx_list:
+            encoded_obs, generator = self._prep_env(resolved_env_idx)
+            encoded_list.append(encoded_obs)
+            generators.append(generator)
+        raw_chunks = self._batch_infer(encoded_list, generators)
+        for resolved_env_idx, generator in zip(env_idx_list, generators):
+            if generator is not None:
+                # 与顺序路径一致：每个 env 本次重规划消耗一次噪声抽样
+                self._policy_noise_draws[resolved_env_idx] += 1
+        return [
+            self._finalize_chunk(resolved_env_idx, raw_chunk)
+            for resolved_env_idx, raw_chunk in zip(env_idx_list, raw_chunks)
+        ]
+
+    def _prep_env(self, resolved_env_idx):
+        """取某 env 缓存的编码 obs + 其策略生成器（含 KeyError 检查与 obs 日志）。"""
+        if resolved_env_idx not in self._latest_by_env:
+            raise KeyError(
+                f"No buffered observation for env_idx={resolved_env_idx}; "
+                f"available={sorted(self._latest_by_env)}"
+            )
+        encoded_obs = self._latest_by_env[resolved_env_idx]
+        self._log_observation(
+            self._raw_by_env[resolved_env_idx],
+            encoded_obs,
+            resolved_env_idx,
+        )
+        generator = self._get_policy_generator(resolved_env_idx)
+        return encoded_obs, generator
+
+    def _finalize_chunk(self, resolved_env_idx, raw_chunk):
+        """raw_chunk 之后的全部后处理：校验→temporal ensemble/截取→16 维 ee
+        dict→夹爪迟滞→日志。顺序与批量两条路径共用，语义与旧逐 env 内联一致。"""
+        if raw_chunk.ndim != 2 or raw_chunk.shape[1] < 20:
+            raise ValueError(
+                f"Expected X-VLA action chunk [T,>=20], got {raw_chunk.shape}"
+            )
+        if not np.isfinite(raw_chunk).all():
+            raise ValueError("X-VLA action chunk contains NaN or Inf")
+        if raw_chunk.shape[0] != self.model_chunk_size:
+            raise ValueError(
+                "X-VLA returned an unexpected chunk length: "
+                f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
+            )
+        temporal_ensemble_diagnostics = None
+        if self.temporal_ensemble_active:
+            assert self.temporal_ensemble_coeff is not None
+            assert self.temporal_ensemble_horizon is not None
+            ensembler = self._temporal_ensemblers.get(resolved_env_idx)
+            if ensembler is None:
+                ensembler = ServerTemporalEnsembler(
+                    self.temporal_ensemble_coeff,
+                    self.temporal_ensemble_horizon,
+                )
+                self._temporal_ensemblers[resolved_env_idx] = ensembler
+            pre_ensemble_action = raw_chunk[0].copy()
+            # 每次重规划喂入完整 horizon 段，随后弹出 actions_per_chunk 个
+            # 对齐后的 ensembled action（滑动窗口：相邻重规划的预测窗口在
+            # 时间上重叠，重叠步取指数加权平均）。
+            ensembler.update(raw_chunk[: self.temporal_ensemble_horizon])
+            first_action = ensembler.pop()
+            aligned_prediction_count = ensembler.last_prediction_count
+            executed = [first_action] + [
+                ensembler.pop()
+                for _ in range(self.actions_per_chunk - 1)
+            ]
+            executed_chunk = np.stack(executed, axis=0)
+            temporal_ensemble_diagnostics = {
+                "enabled": True,
+                "coefficient": self.temporal_ensemble_coeff,
+                "aligned_prediction_count": aligned_prediction_count,
+                "horizon": self.temporal_ensemble_horizon,
+                "model_chunk_size": int(raw_chunk.shape[0]),
+                "pre_ensemble_action": pre_ensemble_action.tolist(),
+            }
+        else:
+            executed_chunk = raw_chunk[: self.actions_per_chunk]
+        actions = action_chunk_to_ee_dict_list(
+            executed_chunk,
+            gripper_mode=self.gripper_mode,
+            gripper_threshold=self.gripper_threshold,
+        )
+        # 夹爪迟滞（执行层后处理，D4）：作用于最终 16 维动作的夹爪维、
+        # 6D→四元数转换之后。latch 每次由当前 obs 的真实夹爪位置初始化，
+        # 无跨请求状态；enabled=false 跳过。
+        if self._hysteresis_cfg.enabled:
+            obs_state = self._raw_by_env[resolved_env_idx]["state"]
+            apply_gripper_hysteresis(
+                actions,
+                left_init=float(obs_state["left_ee_joint_state"][-1]),
+                right_init=float(obs_state["right_ee_joint_state"][-1]),
+                lo=self._hysteresis_cfg.lo,
+                hi=self._hysteresis_cfg.hi,
+                mode=self._hysteresis_cfg.mode,
+            )
+        if self.log_io:
+            summary = {
+                "event": "server_actions",
+                "request": self._request_index,
+                "env_idx": resolved_env_idx,
+                "episode_idx": self._raw_by_env[resolved_env_idx].get(
+                    "episode_idx"
+                ),
+                "model_chunk_size": int(raw_chunk.shape[0]),
+                "execute_steps": int(executed_chunk.shape[0]),
+                "gripper_mode": self.gripper_mode,
+                "gripper_threshold": self.gripper_threshold,
+                "hysteresis": (
+                    self._hysteresis_cfg.mode
+                    if self._hysteresis_cfg.enabled
+                    else None
+                ),
+                "temporal_ensemble": temporal_ensemble_diagnostics,
+                "policy_seed": self.policy_seed,
+                "policy_noise_draw": (
+                    self._policy_noise_draws[resolved_env_idx]
+                    if self.policy_seed is not None
+                    else None
+                ),
+                "actions_16d": [
+                    np.concatenate(
+                        [
+                            action["left_ee_pose"],
+                            action["left_ee_joint_state"],
+                            action["right_ee_pose"],
+                            action["right_ee_joint_state"],
+                        ]
+                    ).astype(np.float32).tolist()
+                    for action in actions
+                ],
+            }
+            print(
+                "[x_vla][io] "
+                + json.dumps(summary, ensure_ascii=False),
+                flush=True,
+            )
+        self._request_index += 1
+        return actions
+
+    def _batch_infer(self, encoded_obs_list, generators):
+        """把多个 env 的一次生成合并为单次 B=N 的 generate_actions。
+
+        每 env x1 从各自 generator 抽（顺序路径同序同值）后整批喂入；
+        processor 以「每 env 一子列表」的嵌套 images 批量编码。
+        返回 [B, num_actions, dim] 拆成逐 env 的 np raw chunk 列表。
+        """
+        B = len(encoded_obs_list)
+        pil_lists = [
+            [Image.fromarray(image) for image in obs["images"]]
+            for obs in encoded_obs_list
+        ]
+        prompts = [obs["prompt"] for obs in encoded_obs_list]
+        inputs = self.processor(images=pil_lists, language_instruction=prompts)
+        missing_inputs = {"input_ids", "image_input", "image_mask"} - set(inputs)
+        if missing_inputs:
+            raise ValueError(
+                f"Processor returned incomplete inputs: missing {sorted(missing_inputs)} "
+                f"for batch of {B} envs."
+            )
+        proprio = torch.as_tensor(
+            np.stack(
+                [np.asarray(obs["proprio"], dtype=np.float32) for obs in encoded_obs_list]
+            ),
+            dtype=torch.float32,
+        )
+        domain_id = torch.tensor(
+            [int(self.model_cfg.get("domain_id", 0))] * B,
+            dtype=torch.long,
+        )
+
+        def to_model(tensor: torch.Tensor):
+            if tensor.is_floating_point():
+                return tensor.to(device=self.device, dtype=torch.float32)
+            return tensor.to(device=self.device)
+
+        inputs = {key: to_model(value) for key, value in inputs.items()}
+        inputs["proprio"] = to_model(proprio)
+        inputs["domain_id"] = domain_id.to(self.device)
+
+        num_actions = int(self.model.num_actions)
+        dim_action = int(self.model.action_space.dim_action)
+        x1_rows = []
+        for gen in generators:
+            # B=1 逐 env 抽 → 与顺序路径 infer 内 torch.randn(1,A,D) 同值同序
+            row = torch.randn(
+                (1, num_actions, dim_action),
+                device=self.device,
+                dtype=torch.float32,
+                generator=gen,
+            )
+            x1_rows.append(row)
+        x1 = torch.cat(x1_rows, dim=0)
+
+        with torch.no_grad():
+            action = self.model.generate_actions(
+                **inputs,
+                steps=self.denoise_steps,
+                x1=x1,
+            )
+        raw_batch = action.float().cpu().numpy()
+        return [raw_batch[i] for i in range(B)]
 
     def reset(self):
         self.observation_window = None
