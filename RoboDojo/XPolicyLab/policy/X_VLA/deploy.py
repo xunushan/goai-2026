@@ -1,27 +1,3 @@
-import os
-
-def _mid_step_mode():
-    """读取 deploy.yml mid_step_obs → full|video|none。
-
-    中间步（chunk 内非首帧）的 obs 在下一个 chunk 边界的重观察中整体覆盖，属死写；
-    开关只影响中间步成本，真 obs（重规划，while 顶部）路径不变。不可读/非法一律回退 full。
-    """
-    mode = "full"
-    try:
-        from utils.load_file import load_yaml
-
-        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "deploy.yml")
-        mode = str(load_yaml(path).get("mid_step_obs", "full")).strip().lower()
-    except Exception as e:
-        print(f"[deploy] mid_step_obs unreadable, fallback full ({e!r})", flush=True)
-        mode = "full"
-    if mode not in ("full", "video", "none"):
-        print(f"[deploy] invalid mid_step_obs={mode!r}, fallback full", flush=True)
-        mode = "full"
-    print(f"[deploy] mid_step_obs = {mode}", flush=True)
-    return mode
-
-
 def eval_one_episode(TASK_ENV, model_client):
 
     model_client.call(func_name="reset") # reset policy
@@ -41,8 +17,6 @@ def eval_one_episode(TASK_ENV, model_client):
             model_client.call(func_name="update_obs", obs=obs)
 
 def eval_one_episode_batch(TASK_ENV, model_client):
-
-    mid_mode = _mid_step_mode()  # full | video | none（deploy.yml mid_step_obs）
 
     model_client.call(func_name="reset")
 
@@ -65,18 +39,7 @@ def eval_one_episode_batch(TASK_ENV, model_client):
 
             actions = [actions[i] for i in active_batch_idx] # Get the active action list
             env_idx_list = [env_idx_list[i] for i in active_batch_idx] # Get the active environment index list
-
-            if mid_mode == "video":
-                # 中间步只出帧+写 mp4：policy 只在中段后的下一次重规划（while 顶部）
-                # 用 obs，这里组装的 obs 属死写。跳状态读回/组装/深拷贝/推服务端，
-                # 录像帧不丢（_stream_vision 仍逐帧消费 color）。
-                TASK_ENV.get_obs_batch(env_idx_list, vision_only=True)
-            elif mid_mode == "none":
-                # 中间步完全不取 obs（无 render/capture/录像）→ 视频只剩重规划帧；
-                # 下个 chunk 边界（while 顶部）照常全量重新观察 + 推服务端 + 推理。
-                pass
-            else:  # full（默认）：与历史行为完全一致
-                model_client.call(func_name="update_obs_batch", obs=TASK_ENV.get_obs_batch(env_idx_list)) # Update the observation
+            model_client.call(func_name="update_obs_batch", obs=TASK_ENV.get_obs_batch(env_idx_list)) # Update the observation
 
 
 # ===== 性能剖析钩子（profile_eval.py，仅 PROFILE_EVAL=1 激活，否则零副作用）=====
