@@ -8,7 +8,7 @@
 # 用法
 #   bash verify_env.sh                # auto(同 setup)
 #   bash verify_env.sh gpu|cpu
-#   OPENPI_SRC=/data/openpi bash verify_env.sh   # 覆盖 openpi 源码位置(默认自动探测)
+#   OPENPI_SRC=<openpi 仓库根> bash verify_env.sh  # 传入仓库根才跑 [3/3]；缺省跳过（不预设路径）
 # =============================================================================
 set -euo pipefail
 ENV_NAME="${ENV_NAME:-pi05_l060}"
@@ -18,11 +18,9 @@ SP="$ENV_DIR/lib/python3.12/site-packages"
 DATASET_ROOT="${DATASET_ROOT:-/cloud/cloud-ssd1/lerobot_data}"
 REPO="${REPO:-sim_lerobot_v30_joint-224x224}"
 
-# openpi 源码位置（用户放 /data/openpi）
+# openpi 仓库根：调用方用 OPENPI_SRC 传入，脚本不预设路径。
+# openpi 包在 <根>/src/openpi，client 在 <根>/packages/openpi-client/src，据此拼 PYTHONPATH。
 OPENPI_SRC="${OPENPI_SRC:-}"
-if [ -z "$OPENPI_SRC" ] && [ -d "/data/openpi/src/openpi" ]; then
-  OPENPI_SRC="/data/openpi"
-fi
 PP=""
 [ -n "$OPENPI_SRC" ] && PP="$OPENPI_SRC/src:$OPENPI_SRC/packages/openpi-client/src"
 export LD_LIBRARY_PATH="$ENV_DIR/fflib:$SP/av.libs"
