@@ -26,7 +26,7 @@ set -euo pipefail
 
 # ---------- 配置 ----------
 GOAI_ROOT="${GOAI_ROOT:-/cloud/cloud-ssd1/goai}"   # 统一目录根（envs/ src/ 在此）
-UVPY_DIR="${UVPY_DIR:-/cloud/cloud-ssd1/uvpy}"      # base python 安装目录（uv 管理）
+UVPY_DIR="${UVPY_DIR:-/cloud/cloud-ssd1/goai/envs/uvpy}"   # base python 安装目录（uv 管理，与 venv 同放 envs/）
 PYVER=3.12.14
 ENV_NAME="${ENV_NAME:-pi05_l060}"
 ENV_DIR="$GOAI_ROOT/envs/$ENV_NAME"
