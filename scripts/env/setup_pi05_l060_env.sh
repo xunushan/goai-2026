@@ -78,8 +78,16 @@ case "$MODE" in
   cpu) TORCH_INDEX="https://download.pytorch.org/whl/cpu";  TAG="+cpu";;
 esac
 echo "-- torch 2.10.0$TAG / torchvision 0.25.0$TAG  <- $TORCH_INDEX"
-uv pip install --python "$PY" --no-deps --index-url "$TORCH_INDEX" \
-  "torch==2.10.0$TAG" "torchvision==0.25.0$TAG" 2>&1 | tail -2
+if [ "$MODE" = gpu ]; then
+  # cu128 wheel 不含 CUDA 运行库，须让 resolver 拉 nvidia-*/triton（lock 已排除这些行）。
+  # 若 --no-deps 单装会缺 libcublas → import torch 报 libcublas not found（2026-09-04 train-4090 实测）。
+  uv pip install --python "$PY" --index-url "$TORCH_INDEX" \
+    "torch==2.10.0$TAG" "torchvision==0.25.0$TAG" 2>&1 | tail -2
+else
+  # cpu wheel 自包含，--no-deps 精确回放不与 lock 冲突
+  uv pip install --python "$PY" --no-deps --index-url "$TORCH_INDEX" \
+    "torch==2.10.0$TAG" "torchvision==0.25.0$TAG" 2>&1 | tail -2
+fi
 # torchcodec 由 lock 回放时已装（pypi 0.10.0，与 FFmpeg 链接、构建无关）
 
 # ---------- 4) fflib：soname 软链集（av==15.1.0 固定哈希，映射内嵌） ----------
