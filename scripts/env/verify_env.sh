@@ -12,7 +12,8 @@
 # =============================================================================
 set -euo pipefail
 ENV_NAME="${ENV_NAME:-pi05_l060}"
-ENV_DIR="/cloud/cloud-ssd1/goai/envs/$ENV_NAME"
+GOAI_ROOT="${GOAI_ROOT:-/cloud/cloud-ssd1/goai}"
+ENV_DIR="$GOAI_ROOT/envs/$ENV_NAME"
 PY="$ENV_DIR/bin/python"
 SP="$ENV_DIR/lib/python3.12/site-packages"
 DATASET_ROOT="${DATASET_ROOT:-/cloud/cloud-ssd1/lerobot_data}"
