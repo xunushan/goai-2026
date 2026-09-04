@@ -15,7 +15,7 @@ from pathlib import Path
 
 from huggingface_hub import snapshot_download
 
-REPO = "tianSeconds/goai_2026_lerobot"
+REPO = "tianSeconds/goai_2026_lerobot_real"
 SUB = "real_lerobot_v30_ee"
 LOCAL_DIR = Path(__file__).resolve().parents[1] / "data"
 
