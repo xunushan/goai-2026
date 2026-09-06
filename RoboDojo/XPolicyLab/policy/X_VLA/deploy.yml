@@ -56,11 +56,16 @@ hysteresis:
   mode: direction_latch   # binary（离散 0/1 迟滞）| direction_latch（连续迟滞）
   lo: 0.3
   hi: 0.7
-# 指令实验（候选 A）：key 必须与 sim 端 task.gen_instruction 发送的指令逐字符一致
-# （含句号），值才是实际喂给模型的 prompt；用 task name 作 key 不会命中 resolve_prompt。
-# 改动内容：保留原句 + 澄清竖向堆叠 + 补充"回家"（对齐成功判据 all_robot_back_to_origin）。
+# 指令映射：key 必须与 sim 端 task.gen_instruction 发送的指令逐字符一致（含句号），
+# 值才是实际喂给模型的 prompt；用 task name 作 key 不会命中 resolve_prompt。
+# 自训模型（X3/X0）语言条件用 sim_lerobot_v30_ee_6d 数据集完整指令，而评测时 env
+# gen_instruction 为 RoboDojo 短句，二者不一致，故在此做 env原文 → 训练指令 映射；
+# 官方 RoboDojo ckpt 与其 env 指令同域，重评官方时不应走此映射。
 task_prompt_map:
   "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
+  "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
+  "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
+  "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
 log_io: true
