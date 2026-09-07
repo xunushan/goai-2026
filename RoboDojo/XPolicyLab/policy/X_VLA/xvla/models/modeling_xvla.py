@@ -72,6 +72,18 @@ class XVLA(PreTrainedModel):
         self.num_actions: int = config.num_actions
         self.use_proprio: bool = config.use_proprio
         self.action_mode: str = config.action_mode.lower()
+        # Aux view gating (X2 三相机渐进)。use_aux_view_gates=False 时退化为
+        # 无 gate 直通，与旧模型（X0/X3/官方单路或多路无 gate 权重）完全一致。
+        self.use_aux_view_gates: bool = config.use_aux_view_gates
+        self.num_aux_views: int = config.num_aux_views
+        if self.use_aux_view_gates:
+            if self.num_aux_views <= 0:
+                raise ValueError("num_aux_views must be positive when gates are enabled")
+            self.aux_view_gate_logits = torch.nn.Parameter(
+                torch.full((self.num_aux_views,), float(config.aux_gate_init_logit))
+            )
+        else:
+            self.register_parameter("aux_view_gate_logits", None)
         # Action space (dimensions + hooks)
         self.action_space = build_action_space(config.action_mode.lower())
         dim_action = self.action_space.dim_action
@@ -108,6 +120,20 @@ class XVLA(PreTrainedModel):
 
         # Deferred FastAPI app
         self.app: FastAPI | None = None
+
+    def _apply_aux_view_gates(self, aux_features: torch.Tensor) -> torch.Tensor:
+        """Scale each auxiliary view before the shared visual projection."""
+        if not self.use_aux_view_gates:
+            return aux_features
+        if aux_features.shape[1] != self.num_aux_views:
+            raise ValueError(
+                "Auxiliary view count does not match gate configuration: "
+                f"got {aux_features.shape[1]}, expected {self.num_aux_views}"
+            )
+        gates = torch.sigmoid(self.aux_view_gate_logits).to(
+            device=aux_features.device, dtype=aux_features.dtype
+        )
+        return aux_features * gates.view(1, self.num_aux_views, 1, 1)
 
     # ============================= Florence2 encoder =============================
     def forward_vlm(
@@ -150,7 +176,9 @@ class XVLA(PreTrainedModel):
             inputs_embeds=merged_embeds,
         )[0]  # [B, T_enc, D]
 
-        aux_visual_inputs = image_features[:, 1:].reshape(B, -1, D)  # remaining views flattened
+        aux_features = image_features[:, 1:]
+        aux_features = self._apply_aux_view_gates(aux_features)
+        aux_visual_inputs = aux_features.reshape(B, -1, D)  # remaining views flattened
         return {"vlm_features": enc_out, "aux_visual_inputs": aux_visual_inputs}
 
     # ================================= training =================================

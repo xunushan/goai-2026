@@ -52,6 +52,11 @@ class XVLAConfig(PretrainedConfig):
         action_mode: str = "ee6d",
         use_proprio: bool = True,
 
+        # === Aux view gating (X2 三相机渐进引入；旧模型缺省关闭，向后兼容) ===
+        use_aux_view_gates: bool = False,
+        num_aux_views: int = 2,
+        aux_gate_init_logit: float = -4.0,
+
         **kwargs,
     ):
         # Florence2 backbone configuration
@@ -78,6 +83,11 @@ class XVLAConfig(PretrainedConfig):
         self.num_actions = num_actions
         self.action_mode = action_mode
         self.use_proprio = use_proprio
+
+        # Aux view gating settings
+        self.use_aux_view_gates = use_aux_view_gates
+        self.num_aux_views = num_aux_views
+        self.aux_gate_init_logit = aux_gate_init_logit
 
         # Initialize base HF config attributes (e.g. name_or_path)
         super().__init__(**kwargs)
