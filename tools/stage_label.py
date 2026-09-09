@@ -9,7 +9,7 @@
         | 阶段      | 作用臂     | t0           | 窗口        |
         |-----------|-----------|--------------|-------------|
         | 抓取笔筒  | 持筒臂    | hold_start   | [t0-15, t0+5]  |
-        | 放下笔筒  | 持筒臂    | hold_end     | [t0-15, t0-5]  |  只到释放前(不含放开帧)
+        | 放下笔筒  | 持筒臂    | hold_end     | [t0-15, t0+5]  |
         | 抓笔      | 笔臂      | hold_start   | [t0-15, t0+5]  |
         | 放笔      | 笔臂      | hold_end     | [t0-20, t0+10] |
 
@@ -70,12 +70,12 @@ STAGE_COLORS: dict[str, str] = {
 }
 
 # fill_pen_holder 阶段表: role=持筒臂(holder)/笔臂(pen); anchor=该周期 hold_start/hold_end;
-# pre/post = 窗口在 t0 前/后延伸 (post 可为负 -> 窗口在 t0 前结束, 如放下笔筒 [-15,-5])
+# pre/post = 窗口在 t0 前/后延伸 (用户确认: 放下笔筒也到 holder_end+5, 与抓取窗口对称)
 FILL_STAGES: list[dict] = [
     {"key": "grasp_holder", "cn": "抓取笔筒", "role": "holder",
      "anchor": "hold_start", "pre": 15, "post": 5},
     {"key": "place_holder", "cn": "放下笔筒", "role": "holder",
-     "anchor": "hold_end", "pre": 15, "post": -5},
+     "anchor": "hold_end", "pre": 15, "post": 5},
     {"key": "grasp_pen", "cn": "抓笔", "role": "pen",
      "anchor": "hold_start", "pre": 15, "post": 5},
     {"key": "place_pen", "cn": "放笔", "role": "pen",
