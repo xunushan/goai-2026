@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""sim_lerobot_v30_ee 关键阶段标注: 每帧一个关键阶段标签 + 可视化 (fill/plug 已实现)。
+"""sim_lerobot_v30_ee 关键阶段标注: 每帧一个关键阶段标签 + 可视化 (fill/plug/stack)。
 
 在关键帧检测 (detect_gripper_keyframes, 见 tools/keyframe_detect.py) 基础上, 把每个抓取
 周期解析成关键事件, 事件前后扩成"阶段窗口", 给每帧赋一个阶段标签 (默认 none=普通帧)。
@@ -21,6 +21,10 @@ plug_in_charger (task 1) —— 左/右角色随 episode 互换, 周期数可为
     释放充电器 每个非插入周期的 hold_end(交接释放) [t0-10, t0+5]
     插入      插入周期的 hold_end(末次, L/R 均可) [t0-20, t0+10]
     插入臂 = 两侧中 hold_end 最大(最晚放开)的那个周期所在臂。
+
+stack_bowls (task 2) —— 无固定角色臂, 左右臂周期都可多可少(实测 1~4 周期/例, 部分仅单臂):
+    抓碗      每个周期 hold_start [t0-15, t0+5]
+    放置碗    每个周期 hold_end   [t0-20, t0+10]
 
 子命令:
   viz   挑若干 episode 画图人工核对 (默认每任务 3 个均匀抽样)
@@ -81,6 +85,9 @@ STAGE_COLORS: dict[str, str] = {
     "grasp_charger": "#2ca25f",
     "release_charger": "#9467bd",
     "insert": "#d62728",
+    # stack
+    "grasp_bowl": "#2ca25f",
+    "place_bowl": "#d62728",
 }
 
 # fill_pen_holder 阶段表
@@ -103,7 +110,15 @@ PLUG_STAGES: list[dict] = [
     {"key": "insert", "cn": "插入", "anchor": "hold_end",
      "pre": 20, "post": 10},
 ]
-TASK_STAGES: dict[int, list[dict]] = {0: FILL_STAGES, 1: PLUG_STAGES}
+# stack_bowls 阶段表 (无固定角色臂, 左右臂各周期都算抓/放碗)
+STACK_STAGES: list[dict] = [
+    {"key": "grasp_bowl", "cn": "抓碗", "anchor": "hold_start",
+     "pre": 15, "post": 5},
+    {"key": "place_bowl", "cn": "放置碗", "anchor": "hold_end",
+     "pre": 20, "post": 10},
+]
+TASK_STAGES: dict[int, list[dict]] = {0: FILL_STAGES, 1: PLUG_STAGES,
+                                      2: STACK_STAGES}
 
 # fill: 持筒臂周期须跨段至少该比例才认定为"整段持筒"
 HOLDER_SURE_FRAC = 0.5
@@ -231,6 +246,24 @@ def annotate_task(ti: int, state: np.ndarray, frame: np.ndarray,
         n_cyc = {s: len(cycle_lists[s]) for s in ("left", "right")}
         meta = (f"insert={insert_side} (插入臂)  cycles L={n_cyc['left']} "
                 f"R={n_cyc['right']}")
+    elif ti == 2:                     # stack: 左右臂各周期都 = 抓碗/放置碗
+        cycle_lists = {s: side_cycles(per_side, s) for s in ("left", "right")}
+        spans = []
+        for side in ("left", "right"):
+            for cyc in cycle_lists[side]:
+                for st in stages:
+                    if st["anchor"] == "hold_start":
+                        t0 = cyc[1]
+                    else:
+                        t0 = cyc[2]
+                        if cyc[2] == INCOMPLETE:
+                            continue
+                    ab = window(t0, st["pre"], st["post"], T)
+                    if ab:
+                        spans.append({**st, "side": side, "t0": t0,
+                                      "a": ab[0], "b": ab[1]})
+        n_cyc = {s: len(cycle_lists[s]) for s in ("left", "right")}
+        meta = f"cycles L={n_cyc['left']} R={n_cyc['right']}"
     else:
         raise SystemExit(f"task_index={ti} 暂无阶段表")
 
@@ -355,8 +388,8 @@ def load_common(args) -> tuple:
 
 def add_detect_args(p: argparse.ArgumentParser) -> None:
     p.add_argument("--csv", default=str(DEFAULT_CSV), help="sim CSV 路径")
-    p.add_argument("--tasks", default="0,1",
-                   help="task_index, 逗号分隔 (0=fill 1=plug, 需有阶段表)")
+    p.add_argument("--tasks", default="0,1,2",
+                   help="task_index, 逗号分隔 (0=fill 1=plug 2=stack, 需有阶段表)")
     p.add_argument("--min-prominence", type=float, default=0.2)
     p.add_argument("--hold-min-len", type=int, default=3)
     p.add_argument("--open-level", type=float, default=0.9)
@@ -438,14 +471,11 @@ def cmd_viz(args) -> None:
 # ---------------------------------------------------------------------------
 
 def apply_verify_pick(ti: int, summaries: dict) -> list[int]:
-    """每种形态抽样画验证图的 episode 集。
-
-    fill: 返回右持筒 (meta 以 'holder=right' 开头) 均匀抽样;
-    plug: 返回右臂插入 (meta 'insert=right') 均匀抽样。
-    """
+    """验证形态 episode 集: 有角色/形态区分的任务过滤该形态; 无则全 episode。"""
     cond = {"0": "holder=right", "1": "insert=right"}.get(str(ti))
     eps = [int(k.split("_ep")[1]) for k, v in summaries.items()
-           if cond and v["meta"].startswith(cond)]
+           if v["meta"].startswith(cond)] if cond else \
+        [int(k.split("_ep")[1]) for k in summaries]
     return sorted(eps)
 
 
