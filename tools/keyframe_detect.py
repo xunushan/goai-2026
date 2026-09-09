@@ -216,15 +216,25 @@ def detect_gripper_keyframes(
                 j += 1
                 continue
             if t2 == "flat":
-                if g[a2] < open_level:
-                    closed_flats.append((a2, b2))
-                    j += 1
-                    continue
-                # 回到 open 平段(逐渐重新打开, 无显著上升段)
-                if closed_flats:
-                    emit(a, closed_flats, a2)
-                    completed = True
-                break
+                if g[a2] >= open_level:
+                    # 回到 open 平段(逐渐重新打开, 无显著上升段)
+                    if closed_flats:
+                        emit(a, closed_flats, a2)
+                        completed = True
+                    break
+                # 起点在 open 以下, 但平段尾部值已 >= open_level: 该平段是一次
+                # "慢回开"的终点(释放时缓慢爬升, 整段升幅 < min_prominence 被并入平段),
+                # 并非闭合保持 -> 不能并入 closed_flats; 从平段内首次达 open 处完成周期。
+                # 典型: 闭合保持后部分张开到 0.8x 再慢爬回 1.0 (重抓抖动不应误吞整段)。
+                if g[b2] >= open_level:
+                    if closed_flats:
+                        first_open = a2 + int(np.argmax(g[a2:b2 + 1] >= open_level))
+                        emit(a, closed_flats, first_open)
+                        completed = True
+                    break
+                closed_flats.append((a2, b2))
+                j += 1
+                continue
             # asc
             if g[b2] >= open_level:
                 # 回开到打开, 周期完成
