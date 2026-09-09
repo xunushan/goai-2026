@@ -14,6 +14,8 @@ obs_transform_pipeline: "xspark-v1.0"
 
 # Model / action configuration
 action_type: joint
+# 逐请求 IO 日志（[pi05][io] client_observation / server_actions），参照 X_VLA log_io
+log_io: true
 policy_uv_env_path: openpi
 # Must match the config used by train.sh (default OPENPI_TRAIN_CONFIG_NAME).
 train_config_name: pi05_base_aloha_full_sim_arx-x5_seed_0

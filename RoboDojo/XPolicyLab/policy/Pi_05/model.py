@@ -4,6 +4,8 @@
 #!/usr/bin/python3
 """
 from pathlib import Path
+import json
+import math
 import os
 import sys
 from typing import Any
@@ -27,6 +29,53 @@ from XPolicyLab.utils.process_data import (
 
 _POLICY_DIR = Path(__file__).resolve().parent
 _CHECKPOINTS_DIR = _POLICY_DIR / "checkpoints"
+
+
+def _finite_round(value: Any, digits: int = 4) -> float | None:
+    """Round a scalar for logging; NaN/±Inf → None (mirrors X_VLA finite_list)."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return round(number, digits)
+
+
+def _array_log(value: Any, max_values: int = 24) -> dict[str, Any]:
+    """紧凑数组日志摘要：shape/dtype/有限值范围 + NaN|Inf 计数 + 前 max_values 个值。"""
+    array = np.asarray(value)
+    flat = array.reshape(-1)
+    summary: dict[str, Any] = {
+        "shape": list(array.shape),
+        "dtype": str(array.dtype),
+    }
+    if flat.size == 0:
+        return summary
+    finite = np.isfinite(flat.astype(np.float64, copy=False))
+    summary["n_nan_inf"] = int((~finite).sum())
+    if finite.any():
+        finite_values = flat[finite].astype(np.float64)
+        summary.update(
+            {
+                "min": float(finite_values.min()),
+                "max": float(finite_values.max()),
+                "mean": float(finite_values.mean()),
+            }
+        )
+    summary["values"] = [_finite_round(item) for item in flat[:max_values]]
+    return summary
+
+
+def _action_log(action: Any) -> dict[str, Any]:
+    """动作日志：dict(arm/ee 键)或 list[dict](多步)或裸数组 → 统一 JSON 摘要。"""
+    if isinstance(action, dict):
+        return {key: _array_log(value) for key, value in action.items()}
+    if isinstance(action, (list, tuple)):
+        if len(action) > 0 and isinstance(action[0], dict):
+            return {"n_steps": len(action), "step0": _action_log(action[0])}
+        return _array_log(action)
+    return _array_log(action)
 
 
 def _extract_step_number(value: Any) -> int | None:
@@ -92,11 +141,32 @@ class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         self.task_name = model_cfg["task_name"]
         self.action_type = model_cfg.get("action_type", "joint")
+        self.env_cfg_type = model_cfg.get("env_cfg_type")
         self.robot_action_dim_info = (
             get_robot_action_dim_info(model_cfg["env_cfg_type"]) if model_cfg.get("env_cfg_type") is not None else None
         )
         self.observation_window: dict[str, Any] | None = None
         self._latest_env_idx_list: list[int] = [0]
+        # 逐请求日志（参照 X_VLA）：[pi05][io] client_observation / server_actions。
+        # deploy.yml 配 log_io: false 可关。
+        self.log_io = bool(model_cfg.get("log_io", True))
+        self._request_index = 0
+
+        if self.log_io:
+            dim_info = self.robot_action_dim_info or {}
+            action_dim = sum(dim_info.get("arm_dim", [])) + sum(dim_info.get("ee_dim", [])) or None
+            print(
+                "[pi05] "
+                f"task_name={self.task_name} "
+                f"action_type={self.action_type} "
+                f"env_cfg_type={self.env_cfg_type} "
+                f"train_config_name={model_cfg.get('train_config_name')} "
+                f"repo_id={model_cfg.get('repo_id')} "
+                f"checkpoint_num={model_cfg.get('checkpoint_num')} "
+                f"action_dim={action_dim} "
+                f"log_io={self.log_io}",
+                flush=True,
+            )
 
         self.policy = self.get_model(model_cfg=model_cfg)
         self.model = self.policy
@@ -105,6 +175,14 @@ class Model(ModelTemplate):
         train_config_name = model_cfg.get("train_config_name", "pi05_aloha")
         repo_id = model_cfg.get("repo_id", "1118")
         model_root = _resolve_pi05_model_root(model_cfg)
+        self._model_root = model_root
+
+        if self.log_io:
+            print(
+                f"[pi05] loading train_config={train_config_name} repo_id={repo_id} "
+                f"model_root={model_root}",
+                flush=True,
+            )
 
         config = _config.get_config(train_config_name)
         norm_stats = None
@@ -122,6 +200,9 @@ class Model(ModelTemplate):
             encode_obs(obs, self.action_type, self.robot_action_dim_info) for obs in obs_list
         ]
         self.observation_window = stack_obs(encoded_obs_list)
+        # 缓存每 env 的原始/编码观测（日志用，参照 X_VLA _raw_by_env/_latest_by_env）。
+        self._raw_obs_by_env = dict(zip(self._latest_env_idx_list, obs_list, strict=True))
+        self._encoded_obs_by_env = dict(zip(self._latest_env_idx_list, encoded_obs_list, strict=True))
 
     def get_action(self, **kwargs):
         action_list = self.get_action_batch(env_idx_list=[self._latest_env_idx_list[0]], **kwargs)
@@ -134,23 +215,69 @@ class Model(ModelTemplate):
         env_idx_list = env_idx_list or self._latest_env_idx_list
         # actions = self.policy.infer(self.observation_window, **kwargs)["actions"]
         action_list = []
+        request_index = self._request_index
 
-        for batch_index, _ in enumerate(env_idx_list):
+        for batch_index, env_idx in enumerate(env_idx_list):
             single_observation = slice_stacked_obs(self.observation_window, batch_index)
             actions = self.policy.infer(single_observation, **kwargs)["actions"]
-            if self.robot_action_dim_info is None:
-                action_list.append(actions)
-            else:
-                action_list.append(
-                    unpack_robot_state(
-                        actions,
-                        self.action_type,
-                        self.robot_action_dim_info,
-                        source_type="obs",
-                    )
-                )
 
+            if self.robot_action_dim_info is None:
+                action = actions
+            else:
+                action = unpack_robot_state(
+                    actions,
+                    self.action_type,
+                    self.robot_action_dim_info,
+                    source_type="obs",
+                )
+            action_list.append(action)
+
+            if self.log_io:
+                self._log_request(request_index, int(env_idx), actions, action)
+
+        if self.log_io:
+            self._request_index += 1
         return action_list
+
+    def _log_request(self, request_index: int, env_idx: int, raw_actions: Any, action: Any) -> None:
+        """参照 X_VLA [x_vla][io] 打 [pi05][io] 两事件：client_observation + server_actions。"""
+        encoded = self._encoded_obs_by_env.get(env_idx)
+        raw = self._raw_obs_by_env.get(env_idx)
+
+        observation_summary: dict[str, Any] = {"event": "client_observation", "request": request_index, "env_idx": env_idx}
+        if isinstance(raw, dict):
+            for key in ("episode_idx", "task_name"):
+                if key in raw:
+                    observation_summary[key] = raw[key]
+        if encoded is not None:
+            observation_summary["prompt"] = str(encoded.get("prompt", ""))[:200]
+            state = encoded.get("state")
+            if state is not None:
+                observation_summary["state"] = _array_log(state)
+            observation_summary["images"] = {
+                name: {"shape": list(image.shape), "dtype": str(image.dtype)}
+                for name, image in (encoded.get("images") or {}).items()
+            }
+        print("[pi05][io] " + json.dumps(observation_summary, ensure_ascii=False), flush=True)
+
+        action_summary = {
+            "event": "server_actions",
+            "request": request_index,
+            "env_idx": env_idx,
+            "raw_actions": _array_log(raw_actions),
+            "actions": _action_log(action),
+        }
+        print("[pi05][io] " + json.dumps(action_summary, ensure_ascii=False, default=_json_default), flush=True)
+
+
+def _json_default(value: Any) -> Any:
+    """JSON 兜底（np 标量等无法直接序列化时转字符串）。"""
+    try:
+        if isinstance(value, np.ndarray):
+            return value.tolist()
+        return str(value)
+    except Exception:
+        return repr(value)
 
     def reset(self):
         self.observation_window = None
