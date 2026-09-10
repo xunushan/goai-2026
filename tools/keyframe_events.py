@@ -15,7 +15,7 @@
 
 【两个训练字段】(doc v2 §1 开头 / §5.2, 严禁混用; 旧名 frame_weight 已废止)
     frame_weight_loss[t]     : 未来 action target 的逐帧 loss 权重 = 梯形事件权重取 max。
-    frame_weight_sampling[t] : 当前 observation 的重采样权重 = 关键帧常数(默认 2.1) / 普通帧 1。
+    frame_weight_sampling[t] : 当前 observation 的重采样权重 = 关键帧常数(默认 2) / 普通帧 1。
     is_key_frame[t]          : 二值关键帧标记, 按事件窗口闭区间直接生成。**不得**用
                                『frame_weight_loss > 1』反推 —— 梯形在窗口两端点恰好回到 1。
 
@@ -28,7 +28,7 @@
     v2 统一窗口: 所有任务/事件 L=20, R=5, Pl=-5, Pr=0, 仅 W 因事件而异。
 
 配置 schema (configs/keyframe_weight_config.json):
-    {"sampling": {"key_value": 2.1, "normal_value": 1.0},
+    {"sampling": {"key_value": 2, "normal_value": 1},
      "tasks": {"<task_index>": {"slug":..., "events": [
         {"key","cn","anchor","role","L","R","Pl","Pr","W","skip_incomplete"?}
     ]}}}
@@ -59,8 +59,8 @@ WEIGHT_BASE = 1.0          # frame_weight_loss 的普通帧/窗口外取值
 NONE_LABEL = "none"        # 非关键帧标签
 MULTI_SEP = "|"            # 多标签连接符
 
-# frame_weight_sampling 取值缺省 (配置 sampling 段可覆盖; doc §5.2 写 2, 用户 2026-09-10 指定 2.1)
-SAMPLING_KEY_VALUE = 2.1
+# frame_weight_sampling 取值缺省 (配置 sampling 段可覆盖; doc §5.2: 关键帧 2, 普通帧 1)
+SAMPLING_KEY_VALUE = 2.0
 SAMPLING_NORMAL_VALUE = 1.0
 
 # sim 数据集固定 3 任务 task_index -> slug (文件名用); 角色语义见配置 _comment

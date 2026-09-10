@@ -4,7 +4,7 @@
     "方案/公式以 docs/dual_arm_tasks_failure_and_keyframe_plan.md (v2) 为准。",
     "",
     "【两个训练字段 · 严禁混用】(doc §1 开头 / §5.2)",
-    "  frame_weight_sampling : 当前 observation 的重采样权重。关键帧恒为常数 2.1, 普通帧 1。",
+    "  frame_weight_sampling : 当前 observation 的重采样权重。关键帧恒为常数 2, 普通帧 1。",
     "                          直接由二值 is_key_frame 生成, 不使用梯形值 (doc §6.1)。",
     "  frame_weight_loss     : 未来 action target 的逐帧 loss 权重, 由梯形事件权重 w_final 给出。",
     "  旧名称 frame_weight 废止, 代码/文件/结论中不得再出现。",
@@ -55,8 +55,8 @@
     "task_index 语义随数据集变化, 本文件仅覆盖 sim_lerobot_v30_ee (0=fill, 1=plug, 2=stack)。"
   ],
   "sampling": {
-    "_comment": "frame_weight_sampling 取值; doc §1/§5.2/§6.1 均写关键帧常数 2, 此处按用户 2026-09-10 指示取 2.1",
-    "key_value": 2.1,
+    "_comment": "frame_weight_sampling 取值 (doc §1/§5.2/§6.1: 关键帧恒为 2, 普通帧 1)",
+    "key_value": 2.0,
     "normal_value": 1.0
   },
   "tasks": {

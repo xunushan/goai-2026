@@ -9,17 +9,21 @@
      窗口参数 (L, R, Pl, Pr, W), 关键帧范围 = [t0-L, t0+R]。
   2. frame_weight_loss     = 各事件梯形窗口逐帧取 max (不累加); 窗口外为 1。
   3. is_key_frame          = 落在任一事件窗口闭区间的二值标记 (不由 loss>1 反推)。
-  4. frame_weight_sampling = 关键帧常数(默认 2.1) / 普通帧 1。
+  4. frame_weight_sampling = 关键帧常数(默认 2) / 普通帧 1。
   5. keyframe_label        = 命中窗口的事件 key, 多个用 '|' 连接, 无则 'none'。
 
 子命令:
-  preview  每任务抽样 n 个 episode, 画 loss/sampling 曲线+事件色带 / 左右爪夹 (人工确认)
-  apply    对全部(或指定)episode 逐帧赋权重+标签, 原地更新目标 frame_weight.csv
-           (episode_index,frame_index,keyframe_label,is_key_frame,
-            frame_weight_loss,frame_weight_sampling) + outputs 副本 + stats
-  dist     读 apply 产物(含 task_index 的副本), 画权重分布图
-  align    每任务抽样 n ep, 把 loss/sampling 与左右爪夹曲线对齐标注 (人工确认)
-  merge    把权重表三列按 (episode_index,frame_index) 并入训练集主表 CSV
+  preview       每任务抽样 n 个 episode, 画 loss/sampling 曲线+事件色带 / 左右爪夹 (人工确认)
+  apply         对全部(或指定)episode 逐帧赋权重+标签, 原地更新目标 frame_weight.csv
+                (episode_index,frame_index,keyframe_label,is_key_frame,
+                 frame_weight_loss,frame_weight_sampling) + outputs 副本 + stats
+  dist          读 apply 产物(含 task_index 的副本), 画权重分布图
+  align         每任务抽样 n ep, 把 loss/sampling 与左右爪夹曲线对齐标注 (人工确认)
+  merge         把权重表三列按 (episode_index,frame_index) 并入训练集主表 CSV
+  merge-dataset 把三个训练字段(frame_weight_loss / frame_weight_sampling /
+                is_key_frame)写进 LeRobot v3 数据集: 数据 parquet 追加列 +
+                meta/info.json features + meta/stats.json (按 (episode_index,frame_index)
+                对齐, 行序不变; 幂等, 重复执行只覆盖这三列)
 
 配置文件 schema 与范围定义详见 tools/keyframe_events.py 文件头 / 配置文件 _comment。
 
@@ -29,6 +33,7 @@
     python tools/frame_weight_trapezoid.py dist --csv outputs/<...>/frame_weight_with_task.csv
     python tools/frame_weight_trapezoid.py align --per-task 3 --out outputs/frame_weight_align
     python tools/frame_weight_trapezoid.py merge --dataset data/.../sim_lerobot_v30_ee.csv
+    python tools/frame_weight_trapezoid.py merge-dataset --dataset-dir data/sim_lerobot_v30_ee
 """
 
 from __future__ import annotations
@@ -679,6 +684,104 @@ def cmd_merge(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# 并入 LeRobot v3 数据集 (parquet + meta)
+# ---------------------------------------------------------------------------
+
+# 写进 LeRobot 数据集的三个训练字段 (不含 keyframe_label —— 字符串列不入 features)
+DS_COLS = ["is_key_frame", "frame_weight_loss", "frame_weight_sampling"]
+DS_DTYPES = {"is_key_frame": "int64",           # 二值 0/1
+             "frame_weight_loss": "float32",
+             "frame_weight_sampling": "float32"}
+DS_QUANTILES = [("q01", 0.01), ("q10", 0.10), ("q50", 0.50),
+                ("q90", 0.90), ("q99", 0.99)]
+
+
+def _stats_entry(v: np.ndarray) -> dict:
+    """LeRobot stats.json 单字段格式 (见 meta/stats.json 现有条目)。"""
+    e = {"min": [float(v.min())], "max": [float(v.max())],
+         "mean": [float(v.mean())], "std": [float(v.std())],
+         "count": [int(v.size)]}
+    for name, q in DS_QUANTILES:
+        e[name] = [float(np.quantile(v, q))]
+    return e
+
+
+def cmd_merge_dataset(args) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--dataset-dir", default=str(DEFAULT_TARGET.parents[0]),
+                        help="LeRobot v3 数据集根目录 (含 data/ 与 meta/)")
+    parser.add_argument("--weights", default=str(DEFAULT_TARGET),
+                        help="权重 CSV (episode_index,frame_index,...)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="只校验对齐与统计, 不写任何文件")
+    a = parser.parse_args(args)
+    ddir = Path(a.dataset_dir).resolve()
+    info_p, stats_p = ddir / "meta" / "info.json", ddir / "meta" / "stats.json"
+    if not info_p.exists():
+        raise SystemExit(f"{info_p} 不存在, 不是 LeRobot v3 数据集目录")
+    info = json.loads(info_p.read_text())
+
+    # 定位数据 parquet (按 info.json 的 data_path 模板, 目前仅支持单文件数据集)
+    pqs = sorted(ddir.glob("data/chunk-*/file-*.parquet"))
+    if len(pqs) != 1:
+        raise SystemExit(f"预期 1 个数据 parquet, 实际 {len(pqs)} 个: {pqs}")
+
+    w = pd.read_csv(a.weights)
+    need = {"episode_index", "frame_index", *DS_COLS}
+    if not need.issubset(w.columns):
+        raise SystemExit(f"{a.weights} 缺列: {sorted(need - set(w.columns))}")
+    ww = w[["episode_index", "frame_index", *DS_COLS]]
+    if ww.duplicated(["episode_index", "frame_index"]).any():
+        raise SystemExit(f"{a.weights} 的 (episode_index,frame_index) 不唯一")
+
+    df = pd.read_parquet(pqs[0])
+    keys = pd.MultiIndex.from_arrays([df["episode_index"], df["frame_index"]])
+    ww = ww.set_index(["episode_index", "frame_index"])
+    vals = {}
+    for c in DS_COLS:
+        s = ww[c].reindex(keys)
+        miss = int(s.isna().sum())
+        if miss:
+            raise SystemExit(f"{miss} 行 parquet (ep,frame) 在权重表中找不到, 已中止")
+        vals[c] = s.to_numpy()
+
+    # 幂等: 已存在则直接覆盖; 新增列一律追加在末尾
+    for c in DS_COLS:
+        df[c] = (vals[c].astype("int64") if DS_DTYPES[c] == "int64"
+                 else vals[c].astype("float32"))
+        info["features"][c] = {"dtype": DS_DTYPES[c], "shape": [1], "names": None}
+
+    print(f"数据集: {pqs[0].relative_to(ddir)}  ({len(df):,} 行, "
+          f"col_order={list(df.columns)})")
+    for c in DS_COLS:
+        v = df[c].to_numpy()
+        print(f"  {c:<22} {DS_DTYPES[c]:<8} "
+              f"min={v.min():g} max={v.max():g} mean={v.mean():.4f} "
+              f"nonzero={int((v != 0).sum()):,}")
+    if list(df["is_key_frame"]) != [int(x != "none") for x in
+                                    w.set_index(["episode_index",
+                                                 "frame_index"])["keyframe_label"]
+                                    .reindex(keys).to_numpy()]:
+        raise SystemExit("is_key_frame 与 keyframe_label!=none 不一致, 已中止")
+
+    if a.dry_run:
+        print("[dry-run] 未写文件")
+        return
+
+    df.to_parquet(pqs[0], index=False)          # 行序/原列 dtype 已验无损往返
+    info["data_files_size_in_mb"] = round(pqs[0].stat().st_size / 1e6, 3)
+    info_p.write_text(json.dumps(info, indent=2, ensure_ascii=False) + "\n")
+    if stats_p.exists():
+        stats = json.loads(stats_p.read_text())
+        for c in DS_COLS:
+            stats[c] = _stats_entry(df[c].to_numpy())
+        stats_p.write_text(json.dumps(stats, indent=2, ensure_ascii=False) + "\n")
+    print(f"已写入 {pqs[0]} + meta/info.json"
+          f"{' + meta/stats.json' if stats_p.exists() else ''}")
+    print(f"  features 新增: {', '.join(DS_COLS)}")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -690,6 +793,8 @@ def main() -> None:
     sub.add_parser("dist", help="读 apply 副本, 画权重分布图")
     sub.add_parser("align", help="每任务抽样 n ep: 权重曲线与爪夹曲线对齐标注(人工确认)")
     sub.add_parser("merge", help="把 frame_weight/keyframe_label 并入训练集 CSV")
+    sub.add_parser("merge-dataset",
+                   help="把 loss/sampling/is_key_frame 写进 LeRobot v3 parquet + meta")
     args, rest = parser.parse_known_args()
     if args.command == "preview":
         cmd_preview(rest)
@@ -701,6 +806,8 @@ def main() -> None:
         cmd_align(rest)
     elif args.command == "merge":
         cmd_merge(rest)
+    elif args.command == "merge-dataset":
+        cmd_merge_dataset(rest)
 
 
 if __name__ == "__main__":
