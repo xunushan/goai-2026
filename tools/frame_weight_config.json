@@ -1,9 +1,0 @@
-{
-  "_comment": "关键帧梯形权重的按任务配置。task_index 语义随数据集变化(sim_lerobot_v30_ee: 0/1/2 = fill_pen_holder/plug_in_charger/stack_bowls)。窗口定义见 docs/dual_arm_tasks_failure_and_keyframe_plan.md: a=t0-L, b=t0+Pl, c=t0+Pr, d=t0+R; w(t): <a 为1, [a,b) 线性1->wmax, [b,c] 恒wmax, (c,d] 线性wmax->1, >d 为1。事件语义: t0=hold_start(抓取/接取) 或 hold_end(释放/放置/开始插入); 逐帧权重=各事件窗口取max。",
-  "wmax": 2.0,
-  "tasks": {
-    "0": {"L": 20, "R": 10, "Pl": -8, "Pr": -2},
-    "1": {"L": 15, "R": 10, "Pl": -5, "Pr": 5},
-    "2": {"L": 20, "R": 10, "Pl": -8, "Pr": -2}
-  }
-}
