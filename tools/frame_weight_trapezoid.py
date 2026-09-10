@@ -438,6 +438,170 @@ def cmd_dist(args) -> None:
 
 
 # ---------------------------------------------------------------------------
+# align: 权重与爪夹曲线对齐可视化 (人工确认每帧权重)
+# ---------------------------------------------------------------------------
+
+def plot_task_align(task_name: str, picks: list[dict], max_w: float,
+                    out_path: Path) -> None:
+    """每任务一张图, 每个 episode 一行: 左轴=左右爪夹开度, 右轴=逐帧权重曲线,
+    事件范围用彩色底纹标出, 最大权重区间标出权重数值。三行 sharex=False。"""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from tools.keyframe_detect import C_LEFT, C_RIGHT, GRID, INK, MUT, SURF
+
+    plt.rcParams.update({
+        "axes.edgecolor": MUT, "axes.labelcolor": INK, "axes.titlecolor": INK,
+        "text.color": INK, "xtick.color": INK, "ytick.color": INK,
+        "figure.facecolor": SURF, "axes.facecolor": SURF, "grid.color": GRID,
+        "font.family": "sans-serif", "figure.dpi": 110,
+        "font.sans-serif": ["PingFang SC", "Hiragino Sans GB", "Heiti SC",
+                            "Arial Unicode MS", "DejaVu Sans"],
+        "axes.unicode_minus": False,
+    })
+
+    n = len(picks)
+    fig, axes = plt.subplots(n, 1, figsize=(14, 3.4 * n), squeeze=False)
+    fig.suptitle(f"{task_name}  —  frame weight aligned with gripper curves",
+                 fontsize=12, y=0.995)
+    keys_seen: set[str] = set()
+    for r, pk in enumerate(picks):
+        ep, frame, state, res = pk["ep"], pk["frame"], pk["state"], pk["res"]
+        weight = res["weight"]
+        ax = axes[r][0]
+        ax2 = ax.twinx()                                   # 右轴: 权重
+        # 事件范围底纹 (左轴坐标, 只作背景)
+        for inst in res["instances"]:
+            keys_seen.add(inst["key"])
+            ax.axvspan(frame[inst["a"]], frame[inst["b"]],
+                       color=ke.event_color(inst["key"]), alpha=0.14, lw=0)
+            ax.axvline(frame[inst["t0"]], color=ke.event_color(inst["key"]),
+                       ls="--", lw=0.9, alpha=0.55, zorder=1)
+        # 权重曲线 (右轴)
+        ax2.fill_between(frame, WEIGHT_BASE, weight, color="#f2a900",
+                         alpha=0.22, lw=0)
+        ax2.plot(frame, weight, color="#c47b00", lw=1.1, label="frame weight")
+        ax2.axhline(WEIGHT_BASE, color="0.6", lw=0.7, ls=":")
+        ax2.set_ylim(0.9, max_w + 0.35)
+        ax2.set_yticks(sorted({1.0, 2.0, round(max_w, 1)}))
+        ax2.set_ylabel("weight", color="#c47b00")
+        ax2.tick_params(axis="y", colors="#c47b00")
+        # 每个连续 weight>1 区段标注一次峰值 (避免相邻事件重复标注/与图例打架)
+        hi = weight > WEIGHT_BASE + 1e-9
+        i = 0
+        while i < len(hi):
+            if hi[i]:
+                j = i
+                while j + 1 < len(hi) and hi[j + 1]:
+                    j += 1
+                k = int(np.argmax(weight[i:j + 1])) + i
+                ax2.text(frame[k], float(weight[k]) + 0.05, f"{float(weight[k]):g}",
+                         ha="center", va="bottom", fontsize=7.5, color="#8a5700",
+                         zorder=6)
+                i = j + 1
+            else:
+                i += 1
+        # 爪夹曲线 (左轴)
+        ax.plot(frame, state[:, ke.GRIP_L], color=C_LEFT, lw=1.2, label="left gripper")
+        ax.plot(frame, state[:, ke.GRIP_R], color=C_RIGHT, lw=1.2, label="right gripper")
+        ax.set_ylim(-0.05, 1.05)
+        ax.set_ylabel("gripper (0闭~1开)")
+        ax.set_xlim(frame[0], frame[-1])
+        ax.grid(alpha=0.22, zorder=0)
+        eq1 = int(np.isclose(weight, WEIGHT_BASE).sum())
+        nmulti = int(sum(ke.MULTI_SEP in x for x in res["labels"]))
+        ax.set_title(f"ep{ep:03d}  T={len(frame)}  {res['meta']}  "
+                     f"w=1={100.0*eq1/len(frame):.1f}%  multi={nmulti}",
+                     loc="left", fontsize=9)
+    axes[-1][0].set_xlabel("frame index")
+    cn = {i["key"]: i["cn"] for pk in picks for i in pk["res"]["instances"]}
+    # 图例统一置于图外底部 (避免遮挡右上角峰值标注)
+    line_handles = [
+        plt.Line2D([0], [0], color=C_LEFT, lw=1.5, label="left gripper"),
+        plt.Line2D([0], [0], color=C_RIGHT, lw=1.5, label="right gripper"),
+        plt.Line2D([0], [0], color="#c47b00", lw=1.5, label="frame weight"),
+    ]
+    span_handles = [plt.Rectangle((0, 0), 1, 1, color=ke.event_color(k), alpha=0.5,
+                                  label=f"{k}({cn.get(k, k)})")
+                    for k in sorted(keys_seen)]
+    handles = line_handles + span_handles
+    fig.legend(handles=handles, fontsize=8, frameon=False, ncol=min(6, len(handles)),
+               loc="lower center", bbox_to_anchor=(0.5, -0.004))
+    fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def cmd_align(args) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    common_parser_args(parser)
+    parser.add_argument("--per-task", type=int, default=3,
+                        help="每任务抽样 episode 数 (默认 3)")
+    parser.add_argument("--episodes", default=None,
+                        help="指定每任务 ep(逗号分隔, 覆盖 --per-task)")
+    a = parser.parse_args(args)
+    (small, eps_by, task_names, config, dk, out_dir, selected) = load_common(a)
+    want = [int(x) for x in a.episodes.split(",")] if a.episodes else None
+    for ti in selected:
+        if ti not in eps_by:
+            print(f"  ! task_index={ti} 不存在, 跳过"); continue
+        slug = ke.task_slug(config, ti)
+        name = task_names.get(ti, slug)
+        eps = eps_by[ti]
+        pick = (np.asarray(want, dtype=int) if want is not None
+                else ke.pick_episodes(eps, a.per_task))
+        pick = [int(x) for x in pick[np.isin(pick, eps)]]
+        mw = max_event_weight(config, ti)
+        picks = []
+        for ep in pick:
+            state, frame = episode_df(small, ep)
+            res = ke.episode_weight_and_labels(ti, state, frame, dk, config)
+            picks.append({"ep": ep, "frame": frame, "state": state, "res": res})
+        out_png = out_dir / f"{slug}_align.png"
+        plot_task_align(name, picks, mw, out_png)
+        print(f"  task {ti} ({slug}): episodes {pick} -> {out_png}")
+    print(f"\nalign figures -> {out_dir}")
+
+
+# ---------------------------------------------------------------------------
+# merge: 把 frame_weight/keyframe_label 并入数据集 CSV
+# ---------------------------------------------------------------------------
+
+def cmd_merge(args) -> None:
+    parser = argparse.ArgumentParser(add_help=False)
+    parser.add_argument("--dataset", required=True,
+                        help="要并入的训练集 CSV (如 data/.../sim_lerobot_v30_ee.csv)")
+    parser.add_argument("--weights", default=str(DEFAULT_TARGET),
+                        help="权重 CSV (episode_index,frame_index,frame_weight,keyframe_label)")
+    parser.add_argument("--out", default=None,
+                        help="输出路径 (默认原地更新 --dataset)")
+    a = parser.parse_args(args)
+    ds_path = Path(a.dataset)
+    fw = pd.read_csv(a.weights)
+    need = {"episode_index", "frame_index", "frame_weight", "keyframe_label"}
+    if not need.issubset(fw.columns):
+        raise SystemExit(f"{a.weights} 缺列: {sorted(need - set(fw.columns))}")
+    ds = pd.read_csv(ds_path)
+    # 幂等: 若已存在则先剔除
+    ds = ds.drop(columns=[c for c in ("frame_weight", "keyframe_label")
+                          if c in ds.columns])
+    merged = ds.merge(fw[["episode_index", "frame_index",
+                          "frame_weight", "keyframe_label"]],
+                      on=["episode_index", "frame_index"], how="left",
+                      validate="one_to_one")
+    miss = int(merged["frame_weight"].isna().sum())
+    if miss:
+        raise RuntimeError(f"{miss} 行未对齐到权重 (ep,frame)")
+    out = Path(a.out) if a.out else ds_path
+    merged.to_csv(out, index=False)
+    print(f"并入 {len(merged):,} 行 -> {out}  (新增列: frame_weight, keyframe_label)")
+    print(f"  label 分布: "
+          f"{merged['keyframe_label'].value_counts().head(8).to_dict()}")
+
+
+# ---------------------------------------------------------------------------
 # main
 # ---------------------------------------------------------------------------
 
@@ -447,6 +611,8 @@ def main() -> None:
     sub.add_parser("preview", help="每任务抽样 n ep 画 权重+事件+爪夹 图")
     sub.add_parser("apply", help="全量赋权重+标签, 更新 frame_weight.csv + 副本 + stats")
     sub.add_parser("dist", help="读 apply 副本, 画权重分布图")
+    sub.add_parser("align", help="每任务抽样 n ep: 权重曲线与爪夹曲线对齐标注(人工确认)")
+    sub.add_parser("merge", help="把 frame_weight/keyframe_label 并入训练集 CSV")
     args, rest = parser.parse_known_args()
     if args.command == "preview":
         cmd_preview(rest)
@@ -454,6 +620,10 @@ def main() -> None:
         cmd_apply(rest)
     elif args.command == "dist":
         cmd_dist(rest)
+    elif args.command == "align":
+        cmd_align(rest)
+    elif args.command == "merge":
+        cmd_merge(rest)
 
 
 if __name__ == "__main__":
