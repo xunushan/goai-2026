@@ -19,6 +19,12 @@ prompt: null
 # 不再需要单独的 processor_path。
 model_path: null
 lora_path: null
+# 策略模型类路由（默认 null = 基础 XVLA，行为与不配置时逐字相同）。
+# R0/R1 腕部残差模型必须显式设为：
+#   policy_model_class: xvla.models.wrist_action_residual.WristActionResidualXVLA
+# 加载前会与 checkpoint 自身声明（config.json 的 architectures /
+# wrist_residual_mode）做双向校验，两边不一致直接报错退出，避免静默用错类。
+policy_model_class: null
 domain_id: 0
 # Flow-matching denoising iterations. This is not the number of simulator
 # actions executed before the next inference.

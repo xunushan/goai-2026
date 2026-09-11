@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -29,6 +30,21 @@ from xvla.models.processing_xvla import XVLAProcessor
 
 from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
 from temporal_ensemble import ServerTemporalEnsembler
+
+# R0/R1 腕部残差模型（config.json 的 architectures / wrist_residual_mode 由此判别）。
+WRIST_RESIDUAL_CLASS = "WristActionResidualXVLA"
+WRIST_RESIDUAL_DOTTED_PATH = "xvla.models.wrist_action_residual.WristActionResidualXVLA"
+
+
+def checkpoint_declares_wrist_residual(model_path: str | Path) -> bool:
+    """checkpoint 自身是否声明需要腕部残差分支（R0/R1）。"""
+    try:
+        config = json.loads((Path(model_path) / "config.json").read_text())
+    except FileNotFoundError:
+        return False
+    if config.get("wrist_residual_mode"):
+        return True
+    return WRIST_RESIDUAL_CLASS in (config.get("architectures") or [])
 
 
 def extract_image(observation, candidate_names):
@@ -587,6 +603,56 @@ class Model(ModelTemplate):
             )
         return XVLAProcessor.from_pretrained(processor_path)
 
+    def _resolve_policy_model_class(self, model_path: str):
+        """按 deploy.yml 的 policy_model_class 选模型类；未配置时返回 XVLA（旧行为）。
+
+        同一份 model.py 要同时服务基础 X-VLA 与 R0/R1 腕部残差模型，故用显式配置
+        路由而非按 ckpt 自动判别：未配置 policy_model_class 时返回 XVLA，后续加载
+        路径与改动前逐字相同。为避免「静默用错类跑出一堆无意义分数」，这里还和
+        checkpoint 自身的声明做双向校验——两边不一致直接报错退出。
+        """
+        spec = self.model_cfg.get("policy_model_class")
+        if not spec:
+            model_cls = XVLA
+        else:
+            module_name, _, class_name = str(spec).rpartition(".")
+            if not module_name or not class_name:
+                raise ValueError(
+                    "policy_model_class must be a dotted path like "
+                    f"{WRIST_RESIDUAL_DOTTED_PATH}; got {spec!r}"
+                )
+            try:
+                module = importlib.import_module(module_name)
+            except ImportError as exc:
+                raise ImportError(
+                    f"policy_model_class={spec!r}: cannot import module {module_name!r}"
+                ) from exc
+            if not hasattr(module, class_name):
+                raise AttributeError(
+                    f"policy_model_class={spec!r}: {module_name!r} has no attribute "
+                    f"{class_name!r}"
+                )
+            model_cls = getattr(module, class_name)
+
+        wants_residual = checkpoint_declares_wrist_residual(model_path)
+        if wants_residual and model_cls is XVLA:
+            raise ValueError(
+                f"Checkpoint {model_path} declares a wrist residual model "
+                f"({WRIST_RESIDUAL_CLASS}) but policy_model_class is unset; loading it "
+                "with the plain XVLA class would silently drop the residual branch. "
+                f"Set policy_model_class: {WRIST_RESIDUAL_DOTTED_PATH} in deploy.yml."
+            )
+        if model_cls is not XVLA and not wants_residual:
+            raise ValueError(
+                f"policy_model_class={spec!r} but checkpoint {model_path} does not "
+                "declare a wrist residual model; refusing to load it with the wrong class."
+            )
+        print(
+            f"[x_vla] policy_model_class={model_cls.__name__} (ckpt wrist_residual={wants_residual})",
+            flush=True,
+        )
+        return model_cls
+
     def _load_model(self, model_cfg):
         checkpoint_root = _resolve_checkpoint_root(model_cfg)
         candidate_paths = _build_candidate_dirs(
@@ -602,7 +668,7 @@ class Model(ModelTemplate):
         if model_path is None:
             raise ValueError("ckpt_name, model_path, or checkpoint_path is required for X-VLA.")
 
-        model = XVLA.from_pretrained(
+        model = self._resolve_policy_model_class(model_path).from_pretrained(
             model_path,
             trust_remote_code=True,
             torch_dtype=torch.float32,
