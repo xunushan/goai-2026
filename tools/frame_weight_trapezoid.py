@@ -10,16 +10,17 @@
   2. frame_weight_loss     = 各事件梯形窗口逐帧取 max (不累加); 窗口外为 1。
   3. is_key_frame          = 落在任一事件窗口闭区间的二值标记 (不由 loss>1 反推)。
   4. frame_weight_sampling = 关键帧常数(默认 2) / 普通帧 1。
-  5. keyframe_label        = 命中窗口的事件 key, 多个用 '|' 连接, 无则 'none'。
+  5. left/right_keyframe_label = 命中窗口的事件 key, 按事件实例所属臂分列, 多个用 '|'
+                                连接, 无则 'none' (同一事件两臂同时命中时两侧都记)。
 
 子命令:
   preview       每任务抽样 n 个 episode, 画 loss/sampling 曲线+事件色带 / 左右爪夹 (人工确认)
   apply         对全部(或指定)episode 逐帧赋权重+标签, 原地更新目标 frame_weight.csv
-                (episode_index,frame_index,keyframe_label,is_key_frame,
+                (episode_index,frame_index,left/right_keyframe_label,is_key_frame,
                  frame_weight_loss,frame_weight_sampling) + outputs 副本 + stats
   dist          读 apply 产物(含 task_index 的副本), 画权重分布图
   align         每任务抽样 n ep, 把 loss/sampling 与左右爪夹曲线对齐标注 (人工确认)
-  merge         把权重表三列按 (episode_index,frame_index) 并入训练集主表 CSV
+  merge         把左右标签 + 权重按 (episode_index,frame_index) 并入训练集主表 CSV
   merge-dataset 把三个训练字段(frame_weight_loss / frame_weight_sampling /
                 is_key_frame)写进 LeRobot v3 数据集: 数据 parquet 追加列 +
                 meta/info.json features + meta/stats.json (按 (episode_index,frame_index)
@@ -100,12 +101,15 @@ def plot_episode_weight(
                  f"{len(instances)} events)  {res['meta']}",
                  fontsize=11, y=0.995)
 
-    # 行0: 事件色带 + 权重曲线 + t0 标记
+    # 行0: 事件色带(颜色=事件, 斜纹=右臂) + 权重曲线 + t0 标记
     ax = axes[0]
     for inst in instances:
         col = ke.event_color(inst["key"])
-        ax.axvspan(frame[inst["a"]], frame[inst["b"]], color=col, alpha=0.16, lw=0)
-        ax.axvline(frame[inst["t0"]], color=col, lw=0.9, alpha=0.6, zorder=0)
+        right = inst["side"] == "right"
+        ax.axvspan(frame[inst["a"]], frame[inst["b"]], color=col, alpha=0.16,
+                   lw=0, hatch="///" if right else None, edgecolor=col)
+        ax.axvline(frame[inst["t0"]], color=col, lw=0.9, alpha=0.6, zorder=0,
+                   ls="--" if right else "-")
     ax.fill_between(frame, WEIGHT_BASE, weight, color="#f2a900", alpha=0.35, lw=0)
     ax.plot(frame, weight, color="#c47b00", lw=1.0, label="frame_weight_loss")
     ax.step(frame, sampling, where="mid", color="#1f7a8c", lw=1.0, ls="--",
@@ -124,10 +128,17 @@ def plot_episode_weight(
         (axes[1], "Left gripper", ke.GRIP_L, C_LEFT),
         (axes[2], "Right gripper", ke.GRIP_R, C_RIGHT),
     ]:
+        side = "left" if idx == ke.GRIP_L else "right"
+        # 该臂自己的事件窗口 (与上面色带同色, 便于把窗口对回本臂的抓取周期)
+        for inst in instances:
+            if inst["side"] != side:
+                continue
+            col = ke.event_color(inst["key"])
+            axg.axvspan(frame[inst["a"]], frame[inst["b"]], color=col,
+                        alpha=0.14, lw=0)
         axg.plot(frame, state[:, idx], color=color, lw=1.1)
         axg.set_ylabel("gripper")
         axg.set_ylim(-0.05, 1.05)
-        side = "left" if idx == ke.GRIP_L else "right"
         for key, lc, ls, _ in KEYFRAME_STYLES:
             for x in per_side[side][key]:
                 if x == ke.INCOMPLETE:
@@ -290,9 +301,14 @@ def cmd_preview(args) -> None:
             plot_episode_weight(name, ep, frame, state, r, mw, out_png)
             eq1 = int(np.isclose(r["weight_loss"], WEIGHT_BASE).sum())
             nkey = int(r["is_key_frame"].sum())
-            nmulti = int(sum(ke.MULTI_SEP in x for x in r["labels"]))
+            nkey_l = int(r["is_key_frame_left"].sum())
+            nkey_r = int(r["is_key_frame_right"].sum())
+            nmulti = sum(len({*a.split(ke.MULTI_SEP), *b.split(ke.MULTI_SEP)}
+                             - {ke.NONE_LABEL}) > 1
+                         for a, b in zip(r["labels_left"], r["labels_right"]))
             print(f"    ep {ep:3d}: T={len(frame):4d} events={len(r['instances']):2d} "
                   f"key={nkey:4d} ({100.0*nkey/len(frame):4.1f}%) "
+                  f"L={nkey_l:4d} R={nkey_r:4d} "
                   f"loss=1 {100.0*eq1/len(frame):.1f}% multi-label={nmulti} "
                   f"-> {out_png.name}")
             summary[f"task{ti}_ep{ep}"] = {
@@ -333,29 +349,37 @@ def cmd_apply(args) -> None:
         eps = [int(e) for e in eps_by[ti]]
         print(f"  task {ti} ({slug}): {len(eps)} episodes ...")
         cnt = {k: 0 for k in [ke.NONE_LABEL] + keys}   # 命中该事件(含多标签中)的帧数
-        t_frame = t_eq1 = t_multi = t_key = 0
+        t_frame = t_eq1 = t_multi = t_key = t_both = 0
+        t_key_l = t_key_r = 0
         for ep in eps:
             state, frame = episode_df(small, ep)
             r = ke.episode_weight_and_labels(ti, state, frame, dk, config)
             eq1 = int(np.isclose(r["weight_loss"], WEIGHT_BASE).sum())
-            multi = int(sum(ke.MULTI_SEP in x for x in r["labels"]))
+            both = int((r["is_key_frame_left"] & r["is_key_frame_right"]).sum())
+            multi = 0
+            for a_, b_ in zip(r["labels_left"], r["labels_right"]):
+                ks = set() if a_ == ke.NONE_LABEL else set(a_.split(ke.MULTI_SEP))
+                if b_ != ke.NONE_LABEL:
+                    ks |= set(b_.split(ke.MULTI_SEP))
+                if not ks:
+                    cnt[ke.NONE_LABEL] += 1; continue
+                multi += len(ks) > 1
+                for k in ks:                          # 同一事件两臂同时命中只计一次
+                    cnt[k] += 1
             rows.append(pd.DataFrame({
                 "episode_index": ep, "task_index": ti, "frame_index": frame,
-                "keyframe_label": r["labels"],
+                "left_keyframe_label": r["labels_left"],
+                "right_keyframe_label": r["labels_right"],
                 "is_key_frame": r["is_key_frame"].astype(int),
                 "frame_weight_loss": r["weight_loss"],
                 "frame_weight_sampling": r["weight_sampling"],
             }))
-            for x in r["labels"]:
-                if x == ke.NONE_LABEL:
-                    cnt[ke.NONE_LABEL] += 1
-                else:
-                    for k in x.split(ke.MULTI_SEP):
-                        cnt[k] += 1
             n_ep += 1; n_frame += len(frame); n_eq1 += eq1
             n_key += int(r["is_key_frame"].sum())
             t_frame += len(frame); t_eq1 += eq1; t_multi += multi
-            t_key += int(r["is_key_frame"].sum())
+            t_key += int(r["is_key_frame"].sum()); t_both += both
+            t_key_l += int(r["is_key_frame_left"].sum())
+            t_key_r += int(r["is_key_frame_right"].sum())
             per_episode[f"task{ti}_ep{ep}"] = {
                 "task_index": ti, "episode_index": ep, "T": int(len(frame)),
                 "meta": r["meta"], "loss_eq1": eq1,
@@ -363,6 +387,9 @@ def cmd_apply(args) -> None:
                 "loss_eq1_pct": round(100.0*eq1/len(frame), 3),
                 "is_key_frames": int(r["is_key_frame"].sum()),
                 "is_key_frame_pct": round(100.0*r["is_key_frame"].mean(), 3),
+                "is_key_frames_left": int(r["is_key_frame_left"].sum()),
+                "is_key_frames_right": int(r["is_key_frame_right"].sum()),
+                "is_key_frames_both": both,
                 "multi_label_frames": multi,
                 "instances": [{k: x[k] for k in ("key", "side", "t0", "a", "b")}
                               for x in r["instances"]],
@@ -374,6 +401,10 @@ def cmd_apply(args) -> None:
             "loss_eq1_pct": round(100.0*t_eq1/t_frame, 3),
             "is_key_frames": t_key,
             "is_key_frame_pct": round(100.0*t_key/t_frame, 3),
+            "is_key_frames_left": t_key_l,
+            "is_key_frames_right": t_key_r,
+            "is_key_frames_both": t_both,
+            "is_key_frame_both_pct": round(100.0*t_both/t_frame, 3),
             "multi_label_frames": t_multi,
             "event_frame_share_pct": {k: round(100.0*v/t_frame, 2)
                                       for k, v in cnt.items()},
@@ -383,7 +414,8 @@ def cmd_apply(args) -> None:
 
     # 1) 更新数据目标 frame_weight.csv: 以目标行序为基准对齐 (缺文件则按计算顺序写)
     target = Path(a.target)
-    cols = ["episode_index", "frame_index", "keyframe_label", "is_key_frame",
+    cols = ["episode_index", "frame_index",
+            "left_keyframe_label", "right_keyframe_label", "is_key_frame",
             "frame_weight_loss", "frame_weight_sampling"]
     if target.is_file():
         base = pd.read_csv(target)[["episode_index", "frame_index"]]
@@ -423,6 +455,12 @@ def cmd_apply(args) -> None:
         "total": {"episodes": n_ep, "frames": n_frame,
                   "is_key_frames": n_key,
                   "is_key_frame_pct": round(100.0*n_key/n_frame, 3),
+                  "is_key_frames_left": sum(t["is_key_frames_left"]
+                                            for t in per_task.values()),
+                  "is_key_frames_right": sum(t["is_key_frames_right"]
+                                             for t in per_task.values()),
+                  "is_key_frames_both": sum(t["is_key_frames_both"]
+                                            for t in per_task.values()),
                   "loss_eq1": n_eq1, "loss_gt1": n_frame - n_eq1,
                   "loss_eq1_pct": round(total_eq1_pct, 3),
                   "ess_with_sampling": round(ess, 1),
@@ -438,17 +476,24 @@ def cmd_apply(args) -> None:
                           encoding="utf-8")
 
     print(f"{'task':>4} {'slug':<18} {'episodes':>8} {'frames':>8} "
-          f"{'key':>8} {'key pct':>8} {'loss=1':>8} {'multi':>7}")
+          f"{'key':>8} {'key pct':>8} {'L':>8} {'R':>8} {'L&R':>7} "
+          f"{'loss=1':>8} {'multi':>7}")
     for ti in selected:
         s = per_task.get(ti)
         if s:
             print(f"{ti:>4} {s['slug']:<18} {s['episodes']:>8} {s['frames']:>8} "
                   f"{s['is_key_frames']:>8} {s['is_key_frame_pct']:>7.2f}% "
+                  f"{s['is_key_frames_left']:>8} {s['is_key_frames_right']:>8} "
+                  f"{s['is_key_frames_both']:>7} "
                   f"{s['loss_eq1']:>8} {s['multi_label_frames']:>7}")
             print(f"       event share: {s['event_frame_share_pct']}")
     print(f"总计: {n_ep} episodes / {n_frame:,} frames, "
           f"is_key_frame={n_key:,} ({100.0*n_key/n_frame:.2f}%), "
           f"loss=1 {n_eq1:,} ({total_eq1_pct:.2f}%)")
+    print(f"分臂关键帧: left={stats['total']['is_key_frames_left']:,} "
+          f"right={stats['total']['is_key_frames_right']:,} "
+          f"两臂同时={stats['total']['is_key_frames_both']:,} "
+          f"({100.0*stats['total']['is_key_frames_both']/n_frame:.2f}%)")
     print(f"采样: key={key_v} normal={normal_v} -> 采样后关键帧期望占比 "
           f"{stats['total']['expected_key_share_after_sampling']}%, "
           f"ESS={stats['total']['ess_with_sampling']}")
@@ -529,23 +574,29 @@ def plot_task_align(task_name: str, picks: list[dict], max_w: float,
     })
 
     n = len(picks)
-    fig, axes = plt.subplots(n, 1, figsize=(14, 3.4 * n), squeeze=False)
-    fig.suptitle(f"{task_name}  —  frame weight aligned with gripper curves",
+    fig, axes = plt.subplots(2 * n, 1, figsize=(14, 4.3 * n), squeeze=False,
+                             gridspec_kw={"height_ratios": [1.15, 1.0] * n})
+    fig.suptitle(f"{task_name}  —  frame weight aligned with gripper curves "
+                 f"(上=权重+事件窗口, 下=爪夹+各臂事件窗口)",
                  fontsize=12, y=0.995)
     keys_seen: set[str] = set()
     for r, pk in enumerate(picks):
         ep, frame, state, res = pk["ep"], pk["frame"], pk["state"], pk["res"]
         weight = res["weight_loss"]
         sampling = res["weight_sampling"]
-        ax = axes[r][0]
+        ax = axes[2 * r][0]                                # 权重 + 事件窗口
+        axg = axes[2 * r + 1][0]                           # 爪夹 + 各臂窗口
         ax2 = ax.twinx()                                   # 右轴: 权重
-        # 事件范围底纹 (左轴坐标, 只作背景)
+        # 事件窗口底纹: 颜色=事件, 斜纹=右臂事件 (实心=左臂事件)
         for inst in res["instances"]:
             keys_seen.add(inst["key"])
-            ax.axvspan(frame[inst["a"]], frame[inst["b"]],
-                       color=ke.event_color(inst["key"]), alpha=0.14, lw=0)
-            ax.axvline(frame[inst["t0"]], color=ke.event_color(inst["key"]),
-                       ls="--", lw=0.9, alpha=0.55, zorder=1)
+            col = ke.event_color(inst["key"])
+            right = inst["side"] == "right"
+            ax.axvspan(frame[inst["a"]], frame[inst["b"]], color=col, lw=0,
+                       alpha=0.16, hatch="///" if right else None,
+                       edgecolor=col)
+            ax.axvline(frame[inst["t0"]], color=col,
+                       ls="--" if right else "-", lw=0.9, alpha=0.6, zorder=1)
         # 权重曲线 (右轴)
         ax2.fill_between(frame, WEIGHT_BASE, weight, color="#f2a900",
                          alpha=0.22, lw=0)
@@ -559,6 +610,7 @@ def plot_task_align(task_name: str, picks: list[dict], max_w: float,
         ax2.set_yticks(sorted({1.0, round(max_w, 2), round(key_v, 2)}))
         ax2.set_ylabel("loss / sampling", color="#c47b00")
         ax2.tick_params(axis="y", colors="#c47b00")
+        ax.tick_params(axis="y", left=False, labelleft=False)   # 左轴仅用于画底纹
         # 每个连续 weight>1 区段标注一次峰值 (避免相邻事件重复标注/与图例打架)
         hi = weight > WEIGHT_BASE + 1e-9
         i = 0
@@ -574,19 +626,37 @@ def plot_task_align(task_name: str, picks: list[dict], max_w: float,
                 i = j + 1
             else:
                 i += 1
-        # 爪夹曲线 (左轴)
-        ax.plot(frame, state[:, ke.GRIP_L], color=C_LEFT, lw=1.2, label="left gripper")
-        ax.plot(frame, state[:, ke.GRIP_R], color=C_RIGHT, lw=1.2, label="right gripper")
-        ax.set_ylim(-0.05, 1.05)
-        ax.set_ylabel("gripper (0闭~1开)")
-        ax.set_xlim(frame[0], frame[-1])
-        ax.grid(alpha=0.22, zorder=0)
         eq1 = int(np.isclose(weight, WEIGHT_BASE).sum())
-        nmulti = int(sum(ke.MULTI_SEP in x for x in res["labels"]))
+        nmulti = sum(len({*a.split(ke.MULTI_SEP), *b.split(ke.MULTI_SEP)}
+                         - {ke.NONE_LABEL}) > 1
+                     for a, b in zip(res["labels_left"], res["labels_right"]))
+        kl, kr = res["is_key_frame_left"], res["is_key_frame_right"]
         ax.set_title(f"ep{ep:03d}  T={len(frame)}  {res['meta']}  "
-                     f"key={100.0*res['is_key_frame'].mean():.1f}%  "
+                     f"key={100.0*res['is_key_frame'].mean():.1f}% "
+                     f"(L={100.0*kl.mean():.1f}% R={100.0*kr.mean():.1f}% "
+                     f"L&R={100.0*(kl & kr).mean():.1f}%)  "
                      f"loss=1 {100.0*eq1/len(frame):.1f}%  multi={nmulti}",
                      loc="left", fontsize=9)
+        # 爪夹行: 各臂事件窗口画在该臂颜色下 (左=实线 t0, 右=虚线 t0)
+        for inst in res["instances"]:
+            left = inst["side"] == "left"
+            tint = C_LEFT if left else C_RIGHT
+            axg.axvspan(frame[inst["a"]], frame[inst["b"]], color=tint,
+                        alpha=0.13, lw=0, hatch="///" if not left else None,
+                        edgecolor=tint)
+            axg.axvline(frame[inst["t0"]], color=tint,
+                        ls="-" if left else "--", lw=1.0, alpha=0.7, zorder=1)
+        axg.plot(frame, state[:, ke.GRIP_L], color=C_LEFT, lw=1.2, label="left gripper")
+        axg.plot(frame, state[:, ke.GRIP_R], color=C_RIGHT, lw=1.2,
+                 label="right gripper")
+        axg.set_ylim(-0.05, 1.05)
+        axg.set_ylabel("gripper (0闭~1开)")
+        axg.set_title("爪夹 + 该臂关键帧窗口 "
+                      "(实线/实心=左臂, 虚线/斜纹=右臂)",
+                      loc="left", fontsize=8.5)
+        for a_ in (ax, axg):
+            a_.set_xlim(frame[0], frame[-1])
+            a_.grid(alpha=0.22, zorder=0)
     axes[-1][0].set_xlabel("frame index")
     cn = {i["key"]: i["cn"] for pk in picks for i in pk["res"]["instances"]}
     # 图例统一置于图外底部 (避免遮挡右上角峰值标注)
@@ -596,17 +666,35 @@ def plot_task_align(task_name: str, picks: list[dict], max_w: float,
         plt.Line2D([0], [0], color="#c47b00", lw=1.5, label="frame_weight_loss"),
         plt.Line2D([0], [0], color="#1f7a8c", lw=1.5, ls="--",
                    label="frame_weight_sampling"),
+        plt.Rectangle((0, 0), 1, 1, facecolor="0.55", alpha=0.4,
+                      label="左臂事件窗口 (实心/实线)"),
+        plt.Rectangle((0, 0), 1, 1, facecolor="0.55", alpha=0.4, hatch="///",
+                      edgecolor="0.35", label="右臂事件窗口 (斜纹/虚线)"),
     ]
     span_handles = [plt.Rectangle((0, 0), 1, 1, color=ke.event_color(k), alpha=0.5,
                                   label=f"{k}({cn.get(k, k)})")
                     for k in sorted(keys_seen)]
     handles = line_handles + span_handles
-    fig.legend(handles=handles, fontsize=8, frameon=False, ncol=min(6, len(handles)),
-               loc="lower center", bbox_to_anchor=(0.5, -0.004))
-    fig.tight_layout(rect=(0, 0.035, 1, 0.965))
+    ncol = 4 if len(handles) > 6 else len(handles)
+    fig.legend(handles=handles, fontsize=8, frameon=False, ncol=ncol,
+               loc="lower center", bbox_to_anchor=(0.5, -0.012))
+    nrow = -(-len(handles) // ncol)
+    fig.tight_layout(rect=(0, 0.020 + 0.026 * nrow, 1, 0.962))
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
+
+
+def rle(labels: list[str], max_runs: int = 14) -> str:
+    """标签序列的行程编码, 如 'none[0,33) grasp_charger[33,58) ...'。"""
+    out, i = [], 0
+    while i < len(labels):
+        j = i
+        while j + 1 < len(labels) and labels[j + 1] == labels[i]:
+            j += 1
+        out.append(f"{labels[i]}[{i},{j + 1})")
+        i = j + 1
+    return " ".join(out[:max_runs]) + (" ..." if len(out) > max_runs else "")
 
 
 def cmd_align(args) -> None:
@@ -634,6 +722,12 @@ def cmd_align(args) -> None:
             state, frame = episode_df(small, ep)
             res = ke.episode_weight_and_labels(ti, state, frame, dk, config)
             picks.append({"ep": ep, "frame": frame, "state": state, "res": res})
+            print(f"    ep {ep}: {res['meta']}")
+            for x in res["instances"]:
+                print(f"      {x['key']:<17} side={x['side']:<5} "
+                      f"t0={x['t0']:4d}  range=[{x['a']},{x['b']}]")
+            print(f"      L: {rle(res['labels_left'])}")
+            print(f"      R: {rle(res['labels_right'])}")
         out_png = out_dir / f"{slug}_align.png"
         plot_task_align(name, picks, mw, out_png)
         print(f"  task {ti} ({slug}): episodes {pick} -> {out_png}")
@@ -641,7 +735,7 @@ def cmd_align(args) -> None:
 
 
 # ---------------------------------------------------------------------------
-# merge: 把 frame_weight/keyframe_label 并入数据集 CSV
+# merge: 把左右标签 + 三列权重并入训练集 CSV
 # ---------------------------------------------------------------------------
 
 def cmd_merge(args) -> None:
@@ -649,21 +743,22 @@ def cmd_merge(args) -> None:
     parser.add_argument("--dataset", required=True,
                         help="要并入的训练集 CSV (如 data/.../sim_lerobot_v30_ee.csv)")
     parser.add_argument("--weights", default=str(DEFAULT_TARGET),
-                        help="权重 CSV (episode_index,frame_index,keyframe_label,"
+                        help="权重 CSV (episode_index,frame_index,"
+                             "left_keyframe_label,right_keyframe_label,"
                              "is_key_frame,frame_weight_loss,frame_weight_sampling)")
     parser.add_argument("--out", default=None,
                         help="输出路径 (默认原地更新 --dataset)")
     a = parser.parse_args(args)
     ds_path = Path(a.dataset)
     fw = pd.read_csv(a.weights)
-    NEW_COLS = ["keyframe_label", "is_key_frame", "frame_weight_loss",
-                "frame_weight_sampling"]
+    NEW_COLS = ["left_keyframe_label", "right_keyframe_label", "is_key_frame",
+                "frame_weight_loss", "frame_weight_sampling"]
     need = {"episode_index", "frame_index", *NEW_COLS}
     if not need.issubset(fw.columns):
         raise SystemExit(f"{a.weights} 缺列: {sorted(need - set(fw.columns))}")
     ds = pd.read_csv(ds_path)
-    # 幂等: 若已存在旧列则先剔除 (含已废止的 frame_weight)
-    ds = ds.drop(columns=[c for c in (*NEW_COLS, "frame_weight")
+    # 幂等: 若已存在旧列则先剔除 (含已废止的 frame_weight / 单列 keyframe_label)
+    ds = ds.drop(columns=[c for c in (*NEW_COLS, "frame_weight", "keyframe_label")
                           if c in ds.columns])
     merged = ds.merge(fw[["episode_index", "frame_index", *NEW_COLS]],
                       on=["episode_index", "frame_index"], how="left",
@@ -674,8 +769,8 @@ def cmd_merge(args) -> None:
     out = Path(a.out) if a.out else ds_path
     merged.to_csv(out, index=False)
     print(f"并入 {len(merged):,} 行 -> {out}  (新增列: {', '.join(NEW_COLS)})")
-    print(f"  label 分布: "
-          f"{merged['keyframe_label'].value_counts().head(8).to_dict()}")
+    for c in ("left_keyframe_label", "right_keyframe_label"):
+        print(f"  {c}: {merged[c].value_counts().head(8).to_dict()}")
     print(f"  is_key_frame={int(merged['is_key_frame'].sum()):,} "
           f"({100.0*merged['is_key_frame'].mean():.2f}%), "
           f"loss 范围 [{merged['frame_weight_loss'].min()}, "
@@ -687,7 +782,7 @@ def cmd_merge(args) -> None:
 # 并入 LeRobot v3 数据集 (parquet + meta)
 # ---------------------------------------------------------------------------
 
-# 写进 LeRobot 数据集的三个训练字段 (不含 keyframe_label —— 字符串列不入 features)
+# 写进 LeRobot 数据集的三个训练字段 (不含字符串标签列 —— 不入 features)
 DS_COLS = ["is_key_frame", "frame_weight_loss", "frame_weight_sampling"]
 DS_DTYPES = {"is_key_frame": "int64",           # 二值 0/1
              "frame_weight_loss": "float32",
@@ -758,11 +853,11 @@ def cmd_merge_dataset(args) -> None:
         print(f"  {c:<22} {DS_DTYPES[c]:<8} "
               f"min={v.min():g} max={v.max():g} mean={v.mean():.4f} "
               f"nonzero={int((v != 0).sum()):,}")
-    if list(df["is_key_frame"]) != [int(x != "none") for x in
-                                    w.set_index(["episode_index",
-                                                 "frame_index"])["keyframe_label"]
-                                    .reindex(keys).to_numpy()]:
-        raise SystemExit("is_key_frame 与 keyframe_label!=none 不一致, 已中止")
+    wl = w.set_index(["episode_index", "frame_index"])
+    lbl_key = ((wl["left_keyframe_label"].reindex(keys) != ke.NONE_LABEL)
+               | (wl["right_keyframe_label"].reindex(keys) != ke.NONE_LABEL))
+    if list(df["is_key_frame"]) != [int(x) for x in lbl_key.to_numpy()]:
+        raise SystemExit("is_key_frame 与左右标签是否均为 none 不一致, 已中止")
 
     if a.dry_run:
         print("[dry-run] 未写文件")
@@ -792,7 +887,7 @@ def main() -> None:
     sub.add_parser("apply", help="全量赋权重+标签, 更新 frame_weight.csv + 副本 + stats")
     sub.add_parser("dist", help="读 apply 副本, 画权重分布图")
     sub.add_parser("align", help="每任务抽样 n ep: 权重曲线与爪夹曲线对齐标注(人工确认)")
-    sub.add_parser("merge", help="把 frame_weight/keyframe_label 并入训练集 CSV")
+    sub.add_parser("merge", help="把左右标签/权重并入训练集主表 CSV")
     sub.add_parser("merge-dataset",
                    help="把 loss/sampling/is_key_frame 写进 LeRobot v3 parquet + meta")
     args, rest = parser.parse_known_args()

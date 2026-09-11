@@ -341,15 +341,19 @@ def trapezoid_weight(t0: int, frame: np.ndarray, ev: dict) -> np.ndarray:
 
 def episode_weight_and_labels(ti: int, state: np.ndarray, frame: np.ndarray,
                               detect_kwargs: dict, config: dict) -> dict:
-    """单 episode -> 逐帧 frame_weight_loss / frame_weight_sampling / is_key_frame / 标签。
+    """单 episode -> 逐帧 frame_weight_loss / frame_weight_sampling / is_key_frame / 左右标签。
 
     返回 {"weight_loss":np.ndarray, "weight_sampling":np.ndarray,
-          "is_key_frame":np.ndarray[bool], "labels":list[str], "instances":[...],
-          "meta":str, "per_side":..., "T":int}。
+          "is_key_frame":np.ndarray[bool],
+          "is_key_frame_left":..., "is_key_frame_right":...,
+          "labels_left":list[str], "labels_right":list[str],
+          "instances":[...], "meta":str, "per_side":..., "T":int}。
     - weight_loss = 各事件梯形窗口取 max (普通帧 1);
-    - is_key_frame = 落在任一事件窗口 [t0-L, t0+R] 的闭区间标记 (独立二值, 不由 weight 反推);
+    - is_key_frame = 落在任一事件窗口 [t0-L, t0+R] 的闭区间标记 (两臂并集, 独立二值,
+      不由 weight 反推); is_key_frame_left/right 为分臂版本;
     - weight_sampling = 关键帧常数 / 普通帧常数 (取自配置 sampling 段);
-    - 标签按配置事件顺序对命中窗口去重连接 (如 'grasp_pen|place_pen'), 无则 'none'。
+    - 标签按配置事件顺序对命中窗口去重连接 (如 'grasp_pen|place_pen'), 无则 'none';
+      事件实例锚定在具体抓取周期上, 故按该周期所属臂拆成 labels_left / labels_right。
     """
     info = episode_event_instances(ti, state, frame, detect_kwargs, config)
     instances = info["instances"]
@@ -361,24 +365,37 @@ def episode_weight_and_labels(ti: int, state: np.ndarray, frame: np.ndarray,
         weight_loss = np.maximum(weight_loss,
                                  trapezoid_weight(inst["t0"], frame, inst))
 
-    # is_key_frame + 逐帧标签: 事件范围 [a,b] 内的帧打上该 key, 多标签按配置顺序 '|' 连接
+    # is_key_frame + 逐帧标签: 事件范围 [a,b] 内的帧打上该 key, 多标签按配置顺序 '|' 连接。
+    # 事件实例带 side (其锚定抓取周期所属的臂), 故左/右臂各自出一列标签; 同一事件在两臂
+    # 同时命中时两侧标签相同。is_key_frame 仍为两臂并集 (doc §1.3, 驱动 loss/sampling)。
     order = [ev["key"] for ev in task_events(config, ti)]
-    cover = {k: np.zeros(T, dtype=bool) for k in order}
+    cover = {s: {k: np.zeros(T, dtype=bool) for k in order}
+             for s in ("left", "right")}
     is_key = np.zeros(T, dtype=bool)
+    is_key_side = {s: np.zeros(T, dtype=bool) for s in ("left", "right")}
     for inst in instances:
-        cover[inst["key"]][inst["a"]:inst["b"] + 1] = True
-        is_key[inst["a"]:inst["b"] + 1] = True
-    hit = np.stack([cover[k] for k in order], axis=1) if order else \
-        np.zeros((T, 0), dtype=bool)
-    labels: list[str] = []
-    for i in range(T):
-        ks = [order[j] for j in range(len(order)) if hit[i, j]]
-        labels.append(MULTI_SEP.join(ks) if ks else NONE_LABEL)
+        sl = slice(inst["a"], inst["b"] + 1)
+        cover[inst["side"]][inst["key"]][sl] = True
+        is_key[sl] = True
+        is_key_side[inst["side"]][sl] = True
+    labels_side: dict[str, list[str]] = {}
+    for s in ("left", "right"):
+        hit = (np.stack([cover[s][k] for k in order], axis=1) if order
+               else np.zeros((T, 0), dtype=bool))
+        labels_side[s] = [
+            MULTI_SEP.join([order[j] for j in range(len(order)) if hit[i, j]])
+            or NONE_LABEL for i in range(T)
+        ]
 
     # frame_weight_sampling: 关键帧常数 / 普通帧常数 (doc §5.2/§6.1)
     key_v, normal_v = sampling_values(config)
     weight_sampling = np.where(is_key, key_v, normal_v).astype(float)
 
     return {"weight_loss": weight_loss, "weight_sampling": weight_sampling,
-            "is_key_frame": is_key, "labels": labels, "instances": instances,
+            "is_key_frame": is_key,
+            "is_key_frame_left": is_key_side["left"],
+            "is_key_frame_right": is_key_side["right"],
+            "labels_left": labels_side["left"],
+            "labels_right": labels_side["right"],
+            "instances": instances,
             "meta": info["meta"], "per_side": info["per_side"], "T": T}
