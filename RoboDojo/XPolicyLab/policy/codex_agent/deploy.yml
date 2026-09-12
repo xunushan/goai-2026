@@ -24,7 +24,13 @@ bridge_url: http://localhost:8765
 
 bridge:
   base_url: http://localhost:8765
-  connect_timeout_s: 5        # healthz probe; distinguishes "bridge down" from "Codex slow"
+  # healthz probe; distinguishes "bridge down" from "Codex slow". The probe
+  # traverses the reverse SSH tunnel, so it pays an sshd channel-open round trip
+  # on top of the Mac's own latency -- 5 s was short enough that a busy GPU box
+  # read as "bridge down" and the whole episode degraded to holds. It runs only
+  # while thread_id is None, so probe + request_timeout_first_turn_s must still
+  # stay under the eval client's hard 120 s.
+  connect_timeout_s: 10
   request_timeout_s: 95       # per-turn HTTP budget once the thread exists
   request_timeout_first_turn_s: 105
   decision_wall_budget_s: 110 # hard ceiling, must stay under the eval client's 120 s
@@ -70,7 +76,7 @@ home:
 codex:
   bin: /Applications/ChatGPT.app/Contents/Resources/codex
   model: gpt-6-astra
-  reasoning_effort: low
+  reasoning_effort: medium
 
 images:
   camera_names: [cam_head, cam_left_wrist, cam_right_wrist]

@@ -230,6 +230,10 @@ class BridgeHandler(BaseHTTPRequestHandler):
             {
                 "ok": True,
                 "model": self.state.runner.model,
+                # Reported so a run can be audited after the fact: the effort level
+                # changes per-call latency and is set by a startup flag, not by
+                # anything the policy server sends.
+                "reasoning_effort": self.state.runner.reasoning_effort,
                 "codex_bin": self.state.runner.binary,
                 "workdir": str(self.state.runner.workdir),
                 "runs_dir": str(self.state.runs_dir),
@@ -326,6 +330,7 @@ def main() -> int:
     print(
         f"[bridge] listening on http://{args.host}:{args.port}  "
         f"codex={state.runner.binary}  model={state.runner.model}  "
+        f"effort={state.runner.reasoning_effort}  "
         f"runs={state.runs_dir}  timeout={state.runner.timeout_s}s",
         flush=True,
     )
