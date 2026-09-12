@@ -395,6 +395,43 @@ def test_all_keep_is_reported_as_a_noop() -> None:
         step(model, make_obs())
         payload = bridge.last_payload()
         check("charged to your budget" in payload["prompt"], "the feedback explains the waste")
+        # Nothing was malformed here, so the format-problem lines must stay away:
+        # they are a diagnostic, not boilerplate in every prompt.
+        check(
+            "could not be used" not in payload["prompt"],
+            "a clean all-keep reply does not get the format-problem lines",
+        )
+
+
+def test_a_noop_caused_by_bad_fields_says_so() -> None:
+    print("a no-op caused by unreadable fields is explained, not blamed on the model")
+    with MockBridge("broken_fields") as bridge:
+        bridge.wait_until_responsive()
+        model = make_model({"bridge_url": bridge.url})
+        chunk, text = step(model, make_obs())
+        check_chunk_shape(chunk, "broken_fields")
+        record = decisions_in(text)[-1]
+        check(record["mode"] == "noop_target", f"every field fell back to keep: {record['mode']}")
+        check(len(record["problems"]) >= 4, f"all four fields are reported: {record['problems']}")
+        check(
+            np.allclose(chunk[-1]["left_ee_pose"][:3], HOME_LEFT_POS, atol=1e-6),
+            "the arm did not move",
+        )
+
+        step(model, make_obs())
+        prompt = bridge.last_payload()["prompt"]
+        check("could not be used" in prompt, "the model is told the fields were unreadable")
+        check("left.position" in prompt, "and which fields they were")
+        check(
+            "Those fields fell back to \"keep\"" in prompt,
+            "the no-op is attributed to the format problem, not to indecision",
+        )
+        # The wrong diagnosis would send the model off to pick a target, which
+        # is not the fix when the target it already picked was unreadable.
+        check(
+            "Issue a concrete motion next time" not in prompt,
+            "the misleading advice is suppressed on this path",
+        )
 
 
 def test_out_of_workspace_targets_are_rejected() -> None:
@@ -408,6 +445,13 @@ def test_out_of_workspace_targets_are_rejected() -> None:
             record = decisions_in(text)[-1]
             check(record["mode"] == "target_rejected", f"{mode}: mode={record['mode']}")
             check(model._episode.invalid_streak == 1, f"{mode}: the invalid streak advanced")
+            # The audit log has to show what was asked for, not just that it was
+            # refused -- otherwise "why was this rejected?" is unanswerable from
+            # the decision lines alone.
+            check(
+                record["left_target"]["position"] is not None,
+                f"{mode}: the rejected target is recorded ({record['left_target']})",
+            )
             check(
                 np.allclose(chunk[-1]["left_ee_pose"][:3], HOME_LEFT_POS, atol=1e-6),
                 f"{mode}: the arm was not moved to the illegal target",
@@ -450,6 +494,19 @@ def test_degenerate_orientation_falls_back_to_keep() -> None:
         check(record["left_target"]["quat"] is None, "the orientation fell back to keep")
         check(record["left_target"]["position"] is not None, "the position survived")
         check(model._episode.invalid_streak == 0, "a repaired field is not an invalid target")
+
+        # A repaired field is only recoverable if the model hears about it: the
+        # motion still happened, so nothing else in the feedback gives it away.
+        # Without this, the model re-sends the same bad orientation every turn.
+        check(
+            model._episode.feedback is not None
+            and any("invalid quaternion" in line for line in model._episode.feedback.lines),
+            f"the next turn's feedback carries the problem: {model._episode.feedback.lines}",
+        )
+        step(model, make_obs())
+        prompt = bridge.last_payload()["prompt"]
+        check("could not be used" in prompt, "the problem reached the model's next prompt")
+        check("invalid quaternion" in prompt, "and it names the offending field")
 
 
 def test_hung_bridge_returns_within_the_wall_budget() -> None:
@@ -823,6 +880,7 @@ def main() -> int:
         test_failed_calls_still_cost_budget,
         test_every_failure_mode_still_yields_a_chunk,
         test_all_keep_is_reported_as_a_noop,
+        test_a_noop_caused_by_bad_fields_says_so,
         test_out_of_workspace_targets_are_rejected,
         test_degenerate_orientation_falls_back_to_keep,
         test_hung_bridge_returns_within_the_wall_budget,

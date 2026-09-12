@@ -23,8 +23,9 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 
-# Modes that answer with a well-formed decision.
-DECISION_MODES = ("legal", "all_keep", "out_of_box", "far_away", "absurd_quat")
+# Modes that answer 200 with a decision. Most are well-formed; `absurd_quat`
+# and `broken_fields` carry parts the parser has to repair.
+DECISION_MODES = ("legal", "all_keep", "out_of_box", "far_away", "absurd_quat", "broken_fields")
 
 # Modes that fail, with the error_kind the adapter should end up reporting.
 FAILURE_MODES = {
@@ -159,6 +160,21 @@ class MockBridge:
         elif mode == "far_away":
             # 0.98 m from HOME: exercises the per-decision distance limit.
             parsed = legal_reply([-0.10, 0.60, 1.05])
+        elif mode == "broken_fields":
+            # Every field is unreadable, so each falls back to `keep` and the
+            # whole decision collapses into a no-op. This is the one path where
+            # "your decision changed nothing" is *caused* by the format problem,
+            # so the usual "issue a concrete motion" advice would mislead.
+            parsed = {
+                "left": {
+                    "position": [0.1, 0.2],
+                    "orientation": "tilt it slightly",
+                    "gripper": "squeeze",
+                },
+                "right": {"position": "over there"},
+                "note": "approaching the socket",
+                "phase": "approach",
+            }
         elif mode == "absurd_quat":
             # A real target with an unusable orientation: the parse reports the
             # problem and falls back to keep, but the motion still happens, so

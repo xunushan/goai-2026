@@ -32,7 +32,7 @@ import sys
 import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Sequence
 
 import numpy as np
 
@@ -64,7 +64,7 @@ from .prompt import (
     build_turn_prompt,
     load_task_card,
 )
-from .protocol import ParseError, parse_decision
+from .protocol import ParseError, ParsedDecision, parse_decision
 
 DEFAULT_CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 CAMERA_CANDIDATES = {
@@ -184,6 +184,30 @@ class EpisodeState:
 # --------------------------------------------------------------------------- #
 # adapter
 # --------------------------------------------------------------------------- #
+
+
+def _problem_lines(problems: Sequence[str]) -> list[str]:
+    """Explain the fields of the model's reply that could not be used.
+
+    ``protocol.py`` is deliberately tolerant: a field it cannot read falls back
+    to ``keep`` while the rest of the decision still executes. That is the right
+    behaviour -- the arm should not freeze because one number was malformed --
+    but it makes a partial failure look like a success. A model that asked for a
+    tilt, had its ``orientation`` silently dropped, and is then told only "you
+    commanded the left arm: position [...]" will ask for the same tilt again on
+    every remaining turn and never learn why nothing tilts.
+
+    So these lines go out on *every* path that follows a successful parse --
+    a rejected target, a no-op, and a normal motion -- not just on rejection.
+    Without them the only record of the problem is the decision log, which the
+    model cannot read.
+    """
+    if not problems:
+        return []
+    lines = ["Part of your last reply could not be used; those fields were left unchanged:"]
+    lines += [f"  - {p}" for p in problems]
+    lines.append('Resend the affected field in the documented format, or say "keep" for it.')
+    return lines
 
 
 class Model(ModelTemplate):
@@ -627,30 +651,38 @@ class Model(ModelTemplate):
             state.flags["target_rejected"] = True
             feedback_lines = [o.feedback("left" if o is left_outcome else "right") for o in rejected]
             feedback_lines += [o.feedback("left" if o is left_outcome else "right") for o in clamped]
-            if decision.problems:
-                feedback_lines += [f"Format problem: {p}" for p in decision.problems]
+            feedback_lines += _problem_lines(decision.problems)
             feedback_lines.append("Choose a target inside the valid workspace and try again.")
             state.feedback = TurnFeedback(feedback_lines)
             return self._emit_synthetic(
                 state, left, right, mode="target_rejected",
                 reason="; ".join(o.reason for o in rejected),
-                notes=notes, result=result,
+                notes=notes, result=result, decision=decision,
             )
 
         state.invalid_streak = 0
 
         if decision.is_noop:
             state.flags["noop_target"] = True
-            state.feedback = TurnFeedback(
-                [
+            noop_lines = _problem_lines(decision.problems)
+            if decision.problems:
+                # The unreadable fields are why everything collapsed to "keep",
+                # so the usual "issue a concrete motion" advice would mislead.
+                noop_lines.append(
+                    "Those fields fell back to \"keep\", so the decision changed nothing: the "
+                    "robot held still and the decision was charged to your budget."
+                )
+            else:
+                noop_lines.append(
                     "Your previous decision changed nothing (everything was \"keep\"), so the "
-                    "robot held still and the decision was charged to your budget.",
-                    "Issue a concrete motion next time.",
-                ]
-            )
+                    "robot held still and the decision was charged to your budget."
+                )
+                noop_lines.append("Issue a concrete motion next time.")
+            state.feedback = TurnFeedback(noop_lines)
             return self._emit_synthetic(
                 state, left, right, mode="noop_target",
                 reason="decision kept every component", notes=notes, result=result,
+                decision=decision,
             )
 
         chunk, info = interpolate_chunk(
@@ -666,7 +698,9 @@ class Model(ModelTemplate):
             "left": left_outcome.command,
             "right": right_outcome.command,
         }
-        state.feedback = self._build_feedback(left_outcome, right_outcome, info, left, right)
+        state.feedback = self._build_feedback(
+            left_outcome, right_outcome, info, left, right, problems=decision.problems
+        )
         state.sim_steps_used += len(chunk)
         self._remember_actions(chunk)
         return chunk
@@ -678,9 +712,10 @@ class Model(ModelTemplate):
         info,
         left: ArmState,
         right: ArmState,
+        problems: Sequence[str] = (),
     ) -> TurnFeedback:
         """Describe the executed motion and, on the next turn, how far it actually got."""
-        lines: list[str] = []
+        lines: list[str] = _problem_lines(problems)
         for arm, outcome, start in (
             ("left", left_outcome, left),
             ("right", right_outcome, right),
@@ -730,6 +765,7 @@ class Model(ModelTemplate):
         reason: str,
         notes: list[str] | None = None,
         result: BridgeResult | None = None,
+        decision: ParsedDecision | None = None,
     ) -> list[dict[str, np.ndarray]]:
         """Return a chunk that was not produced by Codex.
 
@@ -767,7 +803,7 @@ class Model(ModelTemplate):
         chunk, info = interpolate_chunk(left, left_command, right, right_command, cap, self.motion)
         state.sim_steps_used += len(chunk)
         self._record_decision(
-            state, mode=mode, capacity=cap, chunk_len=len(chunk), decision=None,
+            state, mode=mode, capacity=cap, chunk_len=len(chunk), decision=decision,
             left=left, right=right, result=result, info=info, clamped=False,
             notes=notes or [], extra={"reason": reason},
         )
