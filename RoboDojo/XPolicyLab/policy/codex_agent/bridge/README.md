@@ -136,7 +136,7 @@ another call.
   the old thread is simply dropped.
 - **Quota.** Each decision is one real Codex call and they are expensive (~25-30 s,
   substantial tokens). The policy allows at most `episode.max_codex_calls`
-  (default 10) per episode. Nothing in `tests/` calls Codex — `tests/fake_codex`
+  (15 in the shipped `deploy.yml`) per episode. Nothing in `tests/` calls Codex — `tests/fake_codex`
   stands in for the CLI and `tests/mock_bridge.py` stands in for this server — so
   the allowance is spent only on real runs.
 - **Token.** With `--token` (or `CODEX_BRIDGE_TOKEN`) every request must carry

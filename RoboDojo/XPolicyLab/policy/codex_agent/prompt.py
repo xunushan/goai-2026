@@ -106,6 +106,45 @@ def _envelope_block(ctx: PromptContext) -> str:
     return "\n".join(lines)
 
 
+# What each view is, so the three attached images can be told apart. Without
+# this the images arrive unlabelled and an arm has to work out from the pixels
+# alone which wrist view is its own -- which it cannot, and the recorded run
+# shows it guessing wrong ("the wrist views show both objects behind the
+# current grasp centers").
+_CAMERA_ROLES = {
+    "cam_head": "a fixed camera above the table, looking down at the whole scene",
+    "cam_left_wrist": "mounted on the LEFT arm, beside its jaws",
+    "cam_right_wrist": "mounted on the RIGHT arm, beside its jaws",
+}
+
+
+def _camera_block(ctx: PromptContext) -> str:
+    """Name every view in attachment order, and say what a wrist view shows."""
+    lines = [
+        f"  {index}. {name:<16} {_CAMERA_ROLES.get(name, 'an additional view')}"
+        for index, name in enumerate(ctx.camera_names, start=1)
+    ]
+    lines.append(
+        "A view labelled *_wrist is a close-up of that one gripper: its own jaws, the\n"
+        "table immediately around them, and whatever sits close to that gripper -- and\n"
+        "nothing else. Read the layout of the table from the widest view, and use an\n"
+        "arm's own wrist view to align that arm."
+    )
+    return "\n".join(lines)
+
+
+def _camera_order_line(ctx: PromptContext) -> str:
+    """The one-line reminder repeated each turn, where the images actually ride.
+
+    Kept to a single line on purpose: the standing brief already explains what a
+    wrist view is, and every repeated line is paid for out of a ten-call budget.
+    """
+    order = ", ".join(
+        f"{index}. {name}" for index, name in enumerate(ctx.camera_names, start=1)
+    )
+    return f"ATTACHED VIEWS, in this order: {order}"
+
+
 def build_system_prompt(ctx: PromptContext) -> str:
     """The standing brief, sent once when the Codex thread is created."""
     task = ctx.task
@@ -163,6 +202,9 @@ EMBODIMENT
   task forces it. A tilt of more than a few tenths of a radian is a lot.
 - gripper {ctx.gripper_open:.2f} is fully open; closing the jaws brings them to about {ctx.gripper_close:.2f},
   which is "closed" -- not zero. Open the jaws wider than the object before closing them on it.
+
+CAMERA VIEWS (three per turn, attached in this order)
+{_camera_block(ctx)}
 
 START POSE (both arms are here at the beginning of every episode)
 {_home_block(ctx)}
@@ -240,6 +282,7 @@ def build_turn_prompt(
     remaining_decisions = max(0, ctx.max_decisions - decisions_used - 1)
     remaining_steps = max(0, ctx.step_budget - steps_used)
     return f"""TURN {turn_index + 1} of at most {ctx.max_decisions}
+{_camera_order_line(ctx)}
 remaining decisions after this one: {remaining_decisions}
 remaining simulator steps: {remaining_steps}
 

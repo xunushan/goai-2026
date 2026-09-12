@@ -77,7 +77,7 @@ codex_agent/
 
 ## 关键约束
 
-- **每次 episode 最多 10 次 Codex 调用**（`episode.max_codex_calls`）。调用很贵
+- **每次 episode 最多 15 次 Codex 调用**（`episode.max_codex_calls`）。调用很贵
   （~25-30 s、token 可观），预算耗尽后不再联网，直接返回 hold chunk。
 - **`eval_batch: false`**：一个 episode = 一个 Codex thread，不支持多环境并行。
 - **两条硬不变量**：返回的 chunk 长度恒 `>= 1`（空 chunk 会让评测永久挂住）；
@@ -94,7 +94,7 @@ codex_agent/
 | 段 | 字段 | 说明 |
 | --- | --- | --- |
 | `bridge` | `base_url` / `request_timeout_s` / `decision_wall_budget_s` | bridge 地址与各级超时；`CODEX_BRIDGE_URL` 优先 |
-| `episode` | `max_codex_calls` / `max_sim_steps` / `min_sim_steps_per_call` | 预算记账（默认 10 / 400 / 5） |
+| `episode` | `max_codex_calls` / `max_sim_steps` / `min_sim_steps_per_call` | 预算记账（当前 15 / 400 / 5） |
 | `motion` | `delta_p_max_m` / `delta_theta_max_deg` / `settle_steps` | 每仿真步限速（1.5 cm / 5°）与收尾 hold 步数 |
 | `guardrail` | `workspace` / `reject_margin_m` / `max_validation_retries` | 越界 clamp 或拒绝（拒绝会回结构化 feedback 让 Codex 重规划） |
 | `home` / `workspace` | — | 取自 `data/sim_lerobot_v30_ee`（首帧 std=0 / q01-q99），非基准源码 |

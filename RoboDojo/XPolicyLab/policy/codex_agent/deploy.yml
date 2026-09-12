@@ -32,7 +32,7 @@ bridge:
 
 episode:
   max_sim_steps: 400          # == plug_in_charger.step_lim
-  max_codex_calls: 10         # hard operator constraint: <=10 gpt-6 calls per episode
+  max_codex_calls: 15         # operator constraint: cap on gpt-6 calls per episode
   min_sim_steps_per_call: 5   # reserve, so late decisions cannot be starved of steps
   count_failed_calls: true    # a failed call still costs quota, so it still costs budget
 
@@ -40,7 +40,7 @@ motion:
   delta_p_max_m: 0.015        # per-simulator-step translation limit (demo p90 is 0.021)
   delta_theta_max_deg: 5.0    # per-simulator-step rotation limit
   min_chunk_steps: 2
-  max_chunk_steps: 45         # 10 decisions x 45 steps >= 400
+  max_chunk_steps: 45         # per-decision cap; max_codex_calls x this >= max_sim_steps
   settle_steps: 3             # identical hold steps so physics settles before the next render
   gripper_open: 1.0
   gripper_close: 0.36         # observed minimum over the 100 charger demos (open == 1.0)

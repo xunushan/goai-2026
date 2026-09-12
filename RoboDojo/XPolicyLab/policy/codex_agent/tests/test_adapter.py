@@ -297,6 +297,43 @@ def test_the_brief_rides_on_the_thread_creating_turn_only() -> None:
         )
 
 
+def test_every_turn_names_the_views_it_attaches() -> None:
+    """Three images ride on every turn, so their order has to be stated.
+
+    The images go out as attachments in ``camera_names`` order; nothing else in
+    the payload identifies them. Without a manifest naming that order and saying
+    which arm each wrist view belongs to, an arm has only the pixels to go on --
+    and the recorded run shows it guessing wrong ("the wrist views show both
+    objects behind the current grasp centers").
+    """
+    print("each turn states which attached view is which")
+    with MockBridge("legal") as bridge:
+        bridge.wait_until_responsive()
+        model = make_model({"bridge_url": bridge.url})
+        step(model, make_obs())
+        step(model, make_obs())
+
+        first, second = bridge.decide_payloads[0], bridge.decide_payloads[1]
+
+        # The order line rides on every turn: it is what disambiguates the
+        # attachments, so it cannot live only in the standing brief.
+        order = "ATTACHED VIEWS, in this order: 1. cam_head, 2. cam_left_wrist, 3. cam_right_wrist"
+        check(order in first["prompt"], "turn 1 states the attachment order")
+        check(order in second["prompt"], "turn 2 states it too")
+
+        # The per-arm reading guidance is part of the standing brief only.
+        for needle in (
+            "mounted on the LEFT arm",
+            "mounted on the RIGHT arm",
+            "a close-up of that one gripper",
+        ):
+            check(needle in first["prompt"], f"the brief explains the wrist views: {needle!r}")
+        check(
+            "mounted on the LEFT arm" not in second["prompt"],
+            "the brief is not repeated, so the resumed turn stays cheap",
+        )
+
+
 # --------------------------------------------------------------------------- #
 # the operator's budget
 # --------------------------------------------------------------------------- #
@@ -931,6 +968,7 @@ def main() -> int:
     for test in (
         test_healthy_episode,
         test_the_brief_rides_on_the_thread_creating_turn_only,
+        test_every_turn_names_the_views_it_attaches,
         test_call_cap_is_enforced,
         test_exhausted_budget_drives_home,
         test_failed_calls_still_cost_budget,
