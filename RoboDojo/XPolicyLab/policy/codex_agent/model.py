@@ -67,6 +67,8 @@ from .prompt import (
 from .protocol import ParseError, ParsedDecision, parse_decision
 
 DEFAULT_CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
+# An axis with both ends open: the guardrail then enforces nothing along it.
+_OPEN_BOX = {"x": [None, None], "y": [None, None], "z": [None, None]}
 CAMERA_CANDIDATES = {
     "cam_head": ("cam_head", "cam_high", "head_camera", "top_camera"),
     "cam_left_wrist": ("cam_left_wrist", "left_camera", "left_wrist"),
@@ -144,7 +146,12 @@ def _as_pose(value: Any, what: str) -> np.ndarray:
 
 
 def _home_pose(cfg: Any, what: str) -> np.ndarray:
-    """Accept either ``[x,y,z,qw,qx,qy,qz]`` or ``{pos: [...], quat: [...]}``."""
+    """Accept either ``[x,y,z,qw,qx,qy,qz]`` or ``{pos: [...], quat: [...]}``.
+
+    Retained for tests and for anyone who still wants to pin a pose by hand. The
+    adapter itself no longer reads ``home:`` from deploy.yml -- see
+    :class:`EpisodeState`.
+    """
     if not isinstance(cfg, dict):
         return _as_pose(cfg, what)
     if "pos" in cfg and "quat" in cfg:
@@ -174,6 +181,13 @@ class EpisodeState:
     bridge_degraded: bool = False
     obs_failures: int = 0
     feedback: TurnFeedback = field(default_factory=lambda: TurnFeedback([]))
+    # The pose the arms were in at this episode's first decision, read off the
+    # robot's own observation rather than from a constant in deploy.yml: it is the
+    # frame "orientation" is measured from and the pose the episode has to end at,
+    # so it has to be the real one. Set once, by _decide.
+    home_left: ArmState | None = None
+    home_right: ArmState | None = None
+    prompt_context: PromptContext | None = None
     prev_start_left: ArmState | None = None
     prev_start_right: ArmState | None = None
     prev_target: dict[str, Any] = field(default_factory=dict)
@@ -222,7 +236,6 @@ class Model(ModelTemplate):
         guard_cfg = _section(self.model_cfg, "guardrail")
         codex_cfg = _section(self.model_cfg, "codex")
         image_cfg = _section(self.model_cfg, "images")
-        home_cfg = _section(self.model_cfg, "home")
 
         # -- budget ------------------------------------------------------ #
         self.step_budget = int(episode_cfg.get("max_sim_steps", 400))
@@ -245,22 +258,27 @@ class Model(ModelTemplate):
         self.min_chunk_steps = max(1, int(motion_cfg.get("min_chunk_steps", 2)))
         self.max_chunk_steps = max(self.min_chunk_steps, int(motion_cfg.get("max_chunk_steps", 45)))
 
-        # -- workspace / home -------------------------------------------- #
-        self.workspace_left = Box.from_cfg(guard_cfg.get("workspace", {}).get("left"))
-        self.workspace_right = Box.from_cfg(guard_cfg.get("workspace", {}).get("right"))
-        self.home_left = _home_pose(home_cfg.get("left"), "home.left")
-        self.home_right = _home_pose(home_cfg.get("right"), "home.right")
+        # -- workspace ---------------------------------------------------- #
+        # No bounds in deploy.yml means an open box, and an open box means the
+        # guardrail clamps and rejects nothing: the targets the model asks for are
+        # the targets the arm is given. The machinery is still here and still
+        # tested, so a bound can be set again once something real pins one down --
+        # but inventing one is worse than leaving it open, which is why nothing is
+        # defaulted to a plausible-looking number.
+        self.workspace_left = Box.from_cfg(guard_cfg.get("workspace", {}).get("left") or _OPEN_BOX)
+        self.workspace_right = Box.from_cfg(guard_cfg.get("workspace", {}).get("right") or _OPEN_BOX)
         self.guardrail = GuardrailConfig(
             workspace=self.workspace_left,
-            reject_margin_m=float(guard_cfg.get("reject_margin_m", 0.03)),
-            max_target_distance_m=float(motion_cfg.get("max_target_distance_m", 0.45)),
+            reject_margin_m=float(guard_cfg.get("reject_margin_m", 0.0)),
+            max_target_distance_m=float(motion_cfg.get("max_target_distance_m", math.inf)),
+            max_target_rotation_deg=float(motion_cfg.get("max_target_rotation_deg", math.inf)),
         )
         self.guardrail_right = GuardrailConfig(
             workspace=self.workspace_right,
             reject_margin_m=self.guardrail.reject_margin_m,
             max_target_distance_m=self.guardrail.max_target_distance_m,
+            max_target_rotation_deg=self.guardrail.max_target_rotation_deg,
         )
-        self.max_validation_retries = int(guard_cfg.get("max_validation_retries", 1))
         self.invalid_streak_limit = int(guard_cfg.get("invalid_streak_limit", 3))
 
         # -- bridge ------------------------------------------------------ #
@@ -303,7 +321,6 @@ class Model(ModelTemplate):
 
         # -- task card --------------------------------------------------- #
         self.configured_task_name = self.model_cfg.get("task_name") or None
-        self.prompt_context: PromptContext | None = None
         self._task_card: dict[str, Any] = {}
 
         # -- logging ----------------------------------------------------- #
@@ -323,11 +340,15 @@ class Model(ModelTemplate):
         self._request_index = 0
         self._latest_obs: dict[str, Any] | None = None
         self._latest_env_idx = 0
-        self._last_left = ArmState.from_pose7(self.home_left, self.motion.gripper_open)
-        self._last_right = ArmState.from_pose7(self.home_right, self.motion.gripper_open)
+        # The last pose the robot reported. None only before the very first
+        # observation, which is the one case where we have nothing to hold at --
+        # see _hold_state.
+        self._last_left: ArmState | None = None
+        self._last_right: ArmState | None = None
         self._hold_length = self.min_chunk_steps
 
-        self._ensure_prompt_context()
+        # Fail fast on a missing or malformed task card, without needing a pose.
+        self._task_card = self._load_task_card()
 
         print(
             f"{LOG_PREFIX} ready bridge={self.bridge.base_url} "
@@ -343,9 +364,8 @@ class Model(ModelTemplate):
     # ------------------------------------------------------------------ #
     # prompt context
     # ------------------------------------------------------------------ #
-    def _ensure_prompt_context(self) -> PromptContext:
-        if self.prompt_context is not None:
-            return self.prompt_context
+    def _load_task_card(self) -> dict[str, Any]:
+        """Read and validate the configured task card (prose-only, known keys)."""
         task_name = self.configured_task_name or "plug_in_charger"
         card = load_task_card(task_name)
         unknown = set(card) - TASK_CARD_KEYS
@@ -354,7 +374,6 @@ class Model(ModelTemplate):
                 f"task card {task_name!r} has unexpected keys {sorted(unknown)}; task cards "
                 "must stay prose-only (see prompt.py's information boundary)"
             )
-        self._task_card = card
         # The config, not the card, owns the budget: it is the operator's lever and
         # the prompt must describe the budget that is actually enforced.
         for key, actual in (
@@ -367,21 +386,44 @@ class Model(ModelTemplate):
                     f"deploy config enforces {actual}; the prompt will state {actual}.",
                     flush=True,
                 )
-        self.prompt_context = PromptContext(
+        return card
+
+    def _build_prompt_context(self, card: dict[str, Any], left: ArmState,
+                              right: ArmState) -> PromptContext:
+        return PromptContext(
             task=card,
-            home_left=self.home_left,
-            home_right=self.home_right,
-            workspace_left=self.workspace_left,
-            workspace_right=self.workspace_right,
+            home_left=left,
+            home_right=right,
             gripper_open=self.motion.gripper_open,
-            gripper_close=self.motion.gripper_close,
             step_budget=self.step_budget,
             max_decisions=self.max_codex_calls,
-            max_target_distance_m=self.guardrail.max_target_distance_m,
-            delta_p_max_m=self.motion.delta_p_max_m,
             camera_names=self.camera_names,
         )
-        return self.prompt_context
+
+    def _ensure_prompt_context(self, state: EpisodeState | None = None) -> PromptContext:
+        """The prompt context for an episode, built from that episode's own start pose.
+
+        Cached per episode, not on the adapter: two episodes can begin in
+        different poses, and the whole point of deriving the pose from the first
+        observation is that the prompt describes the run that is actually
+        happening.
+        """
+        state = self._episode if state is None else state
+        if state is None:
+            raise RuntimeError(
+                "no episode is open, so there is no observed start pose to build the prompt "
+                "from; the first decision of an episode is what establishes it"
+            )
+        if state.prompt_context is not None:
+            return state.prompt_context
+        if state.home_left is None or state.home_right is None:
+            raise RuntimeError(
+                "the arms' pose at this episode's first decision has not been read yet, and "
+                "the prompt is defined relative to it"
+            )
+        card = self._task_card or self._load_task_card()
+        state.prompt_context = self._build_prompt_context(card, state.home_left, state.home_right)
+        return state.prompt_context
 
     # ------------------------------------------------------------------ #
     # ModelTemplate interface
@@ -408,7 +450,9 @@ class Model(ModelTemplate):
             print(f"{LOG_PREFIX} unexpected error while deciding:", flush=True)
             traceback.print_exc()
             self._hold_length = self.max_chunk_steps
-            return hold_chunk(self._last_left, self._last_right, self.max_chunk_steps)
+            return hold_chunk(
+                self._hold_state("left"), self._hold_state("right"), self.max_chunk_steps
+            )
 
     def get_action_batch(self, env_idx_list=None, **kwargs):
         return [self.get_action(**kwargs)]
@@ -420,11 +464,11 @@ class Model(ModelTemplate):
         self._latest_obs = None
         self._request_index = 0
         self._hold_length = self.min_chunk_steps
-        self._last_left = ArmState.from_pose7(self.home_left, self.motion.gripper_open)
-        self._last_right = ArmState.from_pose7(self.home_right, self.motion.gripper_open)
+        self._last_left = None
+        self._last_right = None
 
     def prepare_case(self, case_meta=None):
-        self._ensure_prompt_context()
+        self._task_card = self._load_task_card()
 
     def on_trial_end(self, result=None):
         state = self._episode
@@ -468,9 +512,33 @@ class Model(ModelTemplate):
                 parsed.append(ArmState.from_pose7(pose, gripper))
             except (KeyError, ValueError, IndexError, TypeError) as exc:
                 notes.append(f"obs_pose_unusable_{side}: {exc}")
-                fallback = self._last_left if side == "left" else self._last_right
-                parsed.append(fallback)
+                parsed.append(self._hold_state(side))
         return parsed[0], parsed[1], notes
+
+    def _hold_state(self, side: str) -> ArmState:
+        """The pose to hold when an observation carries no usable arm state.
+
+        Normally this is simply the last pose the robot reported. Before the
+        first observation there is no such pose, and rather than fill the gap
+        with a plausible-looking guess -- the exact habit this module was
+        rewritten to remove -- it commands the arms to the world origin and says
+        so on stdout. A client that sends no arm state on its first frame has
+        already lost the episode; a loud, obviously wrong hold beats a quiet one
+        that looks like a real pose.
+        """
+        known = self._last_left if side == "left" else self._last_right
+        if known is not None:
+            return known
+        print(
+            f"{LOG_PREFIX} no arm state has ever been observed; holding {side} at the world "
+            "origin (this episode cannot be salvaged)",
+            flush=True,
+        )
+        return ArmState(
+            pos=np.zeros(3),
+            quat=np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float64),
+            gripper=self.motion.gripper_open,
+        )
 
     # ------------------------------------------------------------------ #
     # images
@@ -527,6 +595,11 @@ class Model(ModelTemplate):
         left, right, obs_notes = self._read_arm_states(observation, state)
         self._last_left, self._last_right = left, right
         state.obs_failures += sum(1 for note in obs_notes if note.startswith("obs_pose_unusable"))
+        if state.home_left is None:
+            # The first decision of the episode fixes the pose everything is
+            # measured against: where the arms began, and where the task requires
+            # them to be at the end.
+            state.home_left, state.home_right = left, right
 
         exhausted = self._budget_exhausted(state)
         if exhausted:
@@ -558,7 +631,7 @@ class Model(ModelTemplate):
         right: ArmState,
         obs_notes: list[str],
     ) -> list[dict[str, np.ndarray]]:
-        ctx = self._ensure_prompt_context()
+        ctx = self._ensure_prompt_context(state)
         cap = self._action_cap(state)
         prompt = build_turn_prompt(
             ctx,
@@ -782,7 +855,7 @@ class Model(ModelTemplate):
         over budget -- the task card makes returning home part of the success
         condition, so the last steps of every episode spend themselves there.
         """
-        ctx = self._ensure_prompt_context()
+        ctx = self._ensure_prompt_context(state)
         go_home = mode in (
             "decision_budget_reached",
             "step_budget_reached",
@@ -790,13 +863,15 @@ class Model(ModelTemplate):
             "force_home_recovery",
         )
         if go_home:
+            # Back to where the arms were at the first decision of *this* episode
+            # -- the pose the robot reported, not a constant in deploy.yml.
             left_command = ArmCommand(
-                position=self.home_left[:3],
+                position=ctx.home_left.pos,
                 quat=ctx.home_quat_left,
                 gripper=self.motion.gripper_open,
             )
             right_command = ArmCommand(
-                position=self.home_right[:3],
+                position=ctx.home_right.pos,
                 quat=ctx.home_quat_right,
                 gripper=self.motion.gripper_open,
             )
@@ -954,9 +1029,27 @@ class Model(ModelTemplate):
                 traceback.print_exc()
 
     # ------------------------------------------------------------------ #
-    def warmup_prompt(self) -> str:
-        """The standing brief, exposed for offline prompt review and tests."""
-        return build_system_prompt(self._ensure_prompt_context())
+    def warmup_prompt(
+        self, start_left: ArmState | None = None, start_right: ArmState | None = None
+    ) -> str:
+        """The standing brief, exposed for offline prompt review and tests.
+
+        Nothing in the text depends on the pose any more, so any plausible pair
+        renders the same brief -- the argument exists so the caller has to name
+        the frame the run will be measured in, rather than let the adapter
+        quietly supply one. When an episode is open, its observed start pose is
+        used by default.
+        """
+        state = self._episode
+        left = start_left or (state.home_left if state else None) or self._last_left
+        right = start_right or (state.home_right if state else None) or self._last_right
+        if left is None or right is None:
+            raise RuntimeError(
+                "warmup_prompt needs the pose the arms start the episode in; pass "
+                "start_left/start_right, or run a decision first"
+            )
+        card = self._task_card or self._load_task_card()
+        return build_system_prompt(self._build_prompt_context(card, left, right))
 
 
 def _command_summary(command: ArmCommand) -> dict[str, Any]:

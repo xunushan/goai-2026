@@ -216,7 +216,7 @@ KEEP = ArmCommand()
 
 @dataclass(frozen=True)
 class MotionConfig:
-    delta_p_max_m: float = 0.015
+    delta_p_max_m: float = 0.015  # interpolation granularity; see deploy.yml's motion block
     delta_theta_max_deg: float = 5.0
     settle_steps: int = 3
     gripper_open: float = 1.0
@@ -229,7 +229,16 @@ class MotionConfig:
 
 @dataclass(frozen=True)
 class Box:
-    """Axis-aligned workspace box for one arm."""
+    """Axis-aligned workspace box for one arm.
+
+    Either end of an axis may be left open, spelled ``null`` in deploy.yml and
+    stored here as an infinity. An unknown bound is deliberately left unenforced
+    rather than filled in with a plausible-looking number: a *wrong* bound is
+    worse than an absent one, because clamping silently moves the target to the
+    wrong place and the model, which is told the box, has no way to tell that its
+    decision was overridden. A bound only belongs here when the demonstrations
+    or the embodiment actually pin it down.
+    """
 
     x: tuple[float, float]
     y: tuple[float, float]
@@ -242,13 +251,28 @@ class Box:
         if not isinstance(cfg, dict) or not {"x", "y", "z"} <= set(cfg):
             raise ValueError(
                 "workspace box must be {x: [lo, hi], y: [lo, hi], z: [lo, hi]}, "
+                "with null for an end that is not bounded, "
                 f"got {cfg!r}"
             )
         return cls(
-            x=(float(cfg["x"][0]), float(cfg["x"][1])),
-            y=(float(cfg["y"][0]), float(cfg["y"][1])),
-            z=(float(cfg["z"][0]), float(cfg["z"][1])),
+            x=cls._axis(cfg["x"], "x"),
+            y=cls._axis(cfg["y"], "y"),
+            z=cls._axis(cfg["z"], "z"),
         )
+
+    @staticmethod
+    def _axis(values: Any, axis: str) -> tuple[float, float]:
+        if not isinstance(values, (list, tuple)) or len(values) != 2:
+            raise ValueError(
+                f"workspace {axis} must be [lo, hi] with null for an open end, got {values!r}"
+            )
+        lo = -math.inf if values[0] is None else float(values[0])
+        hi = math.inf if values[1] is None else float(values[1])
+        if math.isnan(lo) or math.isnan(hi):
+            raise ValueError(f"workspace {axis} bound is NaN: {values!r}")
+        if lo > hi:
+            raise ValueError(f"workspace {axis} is empty: lo={lo} > hi={hi}")
+        return (lo, hi)
 
     @property
     def lo(self) -> np.ndarray:
@@ -259,7 +283,13 @@ class Box:
         return np.array([self.x[1], self.y[1], self.z[1]], dtype=np.float64)
 
     def excess(self, point: Any) -> float:
-        """Largest distance by which ``point`` lies outside the box (0 if inside)."""
+        """Signed clearance: positive means outside by that much, negative means inside.
+
+        Deliberately *not* clamped at zero. A point strictly inside has a negative
+        value (the largest of its six negative distances to a face), so a caller
+        must test ``excess > 0`` rather than ``excess == 0`` -- which is what the
+        guardrail does, and what makes a clamped-at-zero version unnecessary.
+        """
         p = np.asarray(point, dtype=np.float64).reshape(3)
         return float(np.max(np.maximum(self.lo - p, p - self.hi)))
 
@@ -275,10 +305,23 @@ class Box:
 
 @dataclass(frozen=True)
 class GuardrailConfig:
+    """Limits on a single decision. Every one of them is off unless stated.
+
+    ``workspace`` is the only one an open box can express, and ``inf``/``0.0``
+    are the open spellings of the other two. That is deliberate: an unset limit
+    must not quietly become a plausible-looking one, because the model cannot see
+    that its decision was overridden and will keep steering into the boundary it
+    was given. See deploy.yml's guardrail block.
+    """
+
     workspace: Box
-    reject_margin_m: float = 0.03
-    max_target_distance_m: float = 0.45
-    max_target_rotation_deg: float = 170.0
+    reject_margin_m: float = 0.0
+    max_target_distance_m: float = math.inf
+    # Was 170.0, which caught nothing that normalising the quaternion and taking
+    # the shortest path does not already catch: q and -q are the same rotation, so
+    # the only targets it turned away were genuinely large ones the model had
+    # actually asked for.
+    max_target_rotation_deg: float = math.inf
 
 
 @dataclass

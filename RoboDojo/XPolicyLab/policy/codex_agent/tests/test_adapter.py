@@ -36,7 +36,7 @@ _PKG = Path(__file__).resolve().parent.parent
 if str(_PKG.parent) not in sys.path:
     sys.path.insert(0, str(_PKG.parent))
 
-from codex_agent.model import Model  # noqa: E402
+from codex_agent.model import Model, load_task_card  # noqa: E402
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mock_bridge import (  # noqa: E402
@@ -278,7 +278,9 @@ def test_the_brief_rides_on_the_thread_creating_turn_only() -> None:
             ("the opening line", "high-level manipulation policy"),
             ("the embodiment", "EMBODIMENT"),
             ("the start pose", "START POSE"),
-            ("the task", "Plug the charger into the power strip."),
+            # The card deploy.yml points at, so switching tasks moves this with it
+            # instead of leaving the assertion testing a task nothing runs.
+            ("the task", load_task_card(str(load_config()["task_name"]))["instruction"]),
             ("the reply format", "REPLY FORMAT"),
         ):
             check(needle in first["prompt"], f"the first prompt carries {label}")
@@ -425,6 +427,13 @@ def test_failed_calls_still_cost_budget() -> None:
 # --------------------------------------------------------------------------- #
 
 
+# Decision modes the shipped config carries out unchanged. They are in the loop below
+# to prove they do not raise; because nothing clamps or refuses them any more, the
+# adapter logs them as `codex`. `all_keep` is deliberately not listed -- an all-keep
+# reply is a charged no-op with its own mode, not a codex decision.
+SERVED_AS_IS_MODES = ("out_of_box", "far_away")
+
+
 def test_every_failure_mode_still_yields_a_chunk() -> None:
     print("no failure mode escapes as an exception")
     for mode in ("all_keep", "out_of_box", "far_away", *FAILURE_MODES):
@@ -452,7 +461,13 @@ def test_every_failure_mode_still_yields_a_chunk() -> None:
             if not records:
                 continue
             record = records[-1]
-            check(record["mode"] != "codex", f"{mode}: the decision was not served by codex")
+            if mode not in SERVED_AS_IS_MODES:
+                # Only a decision that failed or was refused has to fall back.
+                # `out_of_box` and `far_away` are in this loop to prove they do not
+                # raise, and with the shipped config imposing no bounds they are
+                # served by codex like any other decision -- they were only ever
+                # "not codex" because of the workspace box we removed.
+                check(record["mode"] != "codex", f"{mode}: the decision was not served by codex")
             if mode in FAILURE_MODES:
                 expected = FAILURE_MODES[mode]
                 check(
@@ -526,12 +541,45 @@ def test_a_noop_caused_by_bad_fields_says_so() -> None:
         )
 
 
+# A workspace box and a travel limit to exercise the guardrail with. These used
+# to live in deploy.yml and be read by the adapter; they are a fixture now,
+# because the shipped config deliberately sets no bounds at all (see
+# test_the_shipped_config_imposes_no_workspace_limit below).
+LIMITS = {
+    "guardrail": {
+        "workspace": {
+            "left": {"x": [-0.50, -0.05], "y": [-0.41, 0.02], "z": [0.88, 1.11]},
+            "right": {"x": [0.05, 0.50], "y": [-0.41, 0.02], "z": [0.88, 1.11]},
+        },
+        "reject_margin_m": 0.03,
+    },
+    "motion": {"max_target_distance_m": 0.45, "max_target_rotation_deg": 170.0},
+}
+
+
 def test_out_of_workspace_targets_are_rejected() -> None:
-    print("targets outside the workspace are rejected, and explained")
+    print("a configured workspace rejects targets, and explains itself")
+    # Every guardrail key is reachable from deploy.yml. If one is not, the block
+    # reads as a knob and silently is not one, which is the failure mode this whole
+    # exercise was about: a bound the operator believes is in force and is not.
+    for key, expected in (
+        ("reject_margin_m", 0.03),
+        ("max_target_distance_m", 0.45),
+        ("max_target_rotation_deg", 170.0),
+    ):
+        probe = make_model({**LIMITS})
+        check(
+            getattr(probe.guardrail, key) == expected,
+            f"guardrail.{key} is settable from config, got {getattr(probe.guardrail, key)}",
+        )
+        check(
+            getattr(probe.guardrail_right, key) == expected,
+            f"guardrail_right.{key} follows the left arm's, got {getattr(probe.guardrail_right, key)}",
+        )
     for mode in ("out_of_box", "far_away"):
         with MockBridge(mode) as bridge:
             bridge.wait_until_responsive()
-            model = make_model({"bridge_url": bridge.url})
+            model = make_model({"bridge_url": bridge.url, **LIMITS})
             chunk, text = step(model, make_obs())
             check_chunk_shape(chunk, mode)
             record = decisions_in(text)[-1]
@@ -557,7 +605,7 @@ def test_out_of_workspace_targets_are_rejected() -> None:
     # three rejections in a row trigger a free return home
     with MockBridge("out_of_box") as bridge:
         bridge.wait_until_responsive()
-        model = make_model({"bridge_url": bridge.url})
+        model = make_model({"bridge_url": bridge.url, **LIMITS})
         modes = []
         for _ in range(model.invalid_streak_limit + 1):
             _, text = step(model, make_obs())
@@ -566,6 +614,52 @@ def test_out_of_workspace_targets_are_rejected() -> None:
             modes[-1] == "force_home_recovery",
             f"the third rejection forces a return home, got {modes}",
         )
+
+
+def test_the_shipped_config_imposes_no_workspace_limit() -> None:
+    """The shipped deploy.yml sets no bounds, so nothing is rewritten or refused.
+
+    This is the regression guard on a decision, not on an implementation detail:
+    a box built from the demonstrations told the model where it was allowed to be,
+    and the failing episode drove down to exactly the boundary it had been given.
+    The controller must pass on what the model asked for.
+    """
+    print("the shipped config lets the model's targets through untouched")
+    for mode in ("out_of_box", "far_away"):
+        with MockBridge(mode) as bridge:
+            bridge.wait_until_responsive()
+            model = make_model({"bridge_url": bridge.url})
+            check(
+                math.isinf(model.guardrail.max_target_distance_m),
+                f"{mode}: no per-decision travel limit is set",
+            )
+            chunk, text = step(model, make_obs())
+            check_chunk_shape(chunk, mode)
+            record = decisions_in(text)[-1]
+            check(record["mode"] == "codex", f"{mode}: the decision was served by codex")
+            check(model._episode.invalid_streak == 0, f"{mode}: nothing was rejected")
+            wanted = np.asarray(record["left_target"]["position"], dtype=np.float64)
+            start = HOME_LEFT_POS
+            end = np.asarray(chunk[-1]["left_ee_pose"][:3], dtype=np.float64)
+            # The arm has to travel the straight line the model asked for. It lands on
+            # the target only when the motion fits in one chunk; `far_away` asks for
+            # more than `max_chunk_steps` allows and the chunk deliberately stops
+            # partway (`t = i / N_raw`, so the next decision re-anchors from here).
+            asked = wanted - start
+            moved = end - start
+            check(float(np.linalg.norm(moved)) > 0.0, f"{mode}: the arm moved at all")
+            check(
+                np.allclose(moved / np.linalg.norm(moved), asked / np.linalg.norm(asked), atol=1e-3),
+                f"{mode}: the arm moved along the requested direction, not {moved}",
+            )
+            fits = math.ceil(float(np.linalg.norm(asked)) / model.motion.delta_p_max_m) <= (
+                min(model.max_chunk_steps, model.step_budget) - model.motion.settle_steps
+            )
+            if fits:
+                check(
+                    np.allclose(end, wanted, atol=1e-3),
+                    f"{mode}: the arm went where it was asked, not to {end}",
+                )
 
 
 def test_degenerate_orientation_falls_back_to_keep() -> None:
@@ -728,6 +822,13 @@ def test_unusable_observation_falls_back_to_the_last_pose() -> None:
         bridge.wait_until_responsive()
         model = make_model({"bridge_url": bridge.url})
 
+        # A good first observation, so there is a pose to fall back to: the
+        # episode's start pose is whatever the robot reports on its first
+        # decision, and a client that sends nothing at all on that decision
+        # leaves the adapter with no pose in existence (covered below).
+        step(model, make_obs())
+        check(model._episode.home_left is not None, "the first decision fixes the start pose")
+
         chunk, text = step(model, make_obs(include_state=False))
         check_chunk_shape(chunk, "no_state")
         record = decisions_in(text)[-1]
@@ -753,6 +854,29 @@ def test_unusable_observation_falls_back_to_the_last_pose() -> None:
         ones["state"]["right_ee_pose"] = np.ones(7, dtype=np.float32)
         chunk, text = step(model, ones)
         check_chunk_shape(chunk, "ones")
+
+
+def test_a_broken_first_observation_never_raises() -> None:
+    """No pose has ever been observed: still no exception, still a real chunk.
+
+    There is no honest fallback here -- the robot has told us nothing about where
+    it is -- so the adapter holds at the world origin and says so. What must not
+    happen is an exception (which would silently drop the episode) or an invented
+    pose that looks plausible.
+    """
+    print("a first observation with no arm state is survivable")
+    with MockBridge("legal") as bridge:
+        bridge.wait_until_responsive()
+        model = make_model({"bridge_url": bridge.url})
+        chunk, text = step(model, make_obs(include_state=False))
+        check_chunk_shape(chunk, "no_state_at_all")
+        check(bridge.decide_count == 1, "Codex was still consulted")
+        record = decisions_in(text)[-1]
+        check(
+            any("obs_pose_unusable" in note for note in record["notes"]),
+            f"the failure is noted: {record['notes']}",
+        )
+        check(model._episode.obs_failures == 2, "both arms are counted as failures")
 
 
 # --------------------------------------------------------------------------- #
@@ -976,6 +1100,7 @@ def main() -> int:
         test_all_keep_is_reported_as_a_noop,
         test_a_noop_caused_by_bad_fields_says_so,
         test_out_of_workspace_targets_are_rejected,
+        test_the_shipped_config_imposes_no_workspace_limit,
         test_degenerate_orientation_falls_back_to_keep,
         test_hung_bridge_returns_within_the_wall_budget,
         test_unreachable_bridge_degrades_after_two_failures,
@@ -983,6 +1108,7 @@ def main() -> int:
         test_a_missing_camera_is_survivable,
         test_no_cameras_at_all_is_survivable,
         test_unusable_observation_falls_back_to_the_last_pose,
+        test_a_broken_first_observation_never_raises,
         test_reset_twice_is_harmless,
         test_episode_idx_change_rotates_the_episode,
         test_on_trial_end_summarises_the_episode,

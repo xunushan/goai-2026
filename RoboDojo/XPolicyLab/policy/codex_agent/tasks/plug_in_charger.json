@@ -10,5 +10,5 @@
     "Anything you are still holding when the episode ends has not been placed."
   ],
   "step_budget": 400,
-  "max_decisions": 10
+  "max_decisions": 15
 }

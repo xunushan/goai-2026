@@ -406,7 +406,15 @@ def test_guardrail_matrix() -> None:
     print("guardrail")
     now = state(pos=np.array([-0.275, -0.20, 1.00]), quat=HOME_QUAT)
     small = Box(x=(-0.30, -0.25), y=(-0.25, -0.15), z=(0.95, 1.05))
-    guard = GuardrailConfig(workspace=small, reject_margin_m=0.03, max_target_distance_m=0.45)
+    # Every limit is named here rather than inherited: the shipped config turns
+    # all of them off, and this test is about the machinery, not about what
+    # deploy.yml happens to set today.
+    guard = GuardrailConfig(
+        workspace=small,
+        reject_margin_m=0.03,
+        max_target_distance_m=0.45,
+        max_target_rotation_deg=170.0,
+    )
 
     inside = check_arm_command(ArmCommand(position=now.pos + np.array([-0.01, 0.0, 0.0])), now, guard)
     check(inside.ok and not inside.clamped, "a small in-box move is accepted")
@@ -440,7 +448,7 @@ def test_guardrail_matrix() -> None:
         now,
         guard,
     )
-    check(not spin.ok, "a 180 deg rotation in one decision is rejected")
+    check(not spin.ok, "a configured rotation limit rejects a 180 deg spin")
     check("too large for a single decision" in spin.reason, "the rejection explains the limit")
     quarter = check_arm_command(
         ArmCommand(quat=absolute_quat_from_relative_rpy([0.0, 0.0, 0.2], HOME_QUAT)),
@@ -512,6 +520,62 @@ def test_random_sweep() -> None:
     check(worst < 1e-5, f"every emitted quaternion is unit norm (worst error {worst:.2e})")
 
 
+def test_open_workspace_bound() -> None:
+    """A bound we have no source for stays open rather than being guessed at.
+
+    The z floor used to be a made-up 0.88, below anything either set of demos
+    does, and the one recorded failure drove down to exactly 0.88 -- a wrong
+    bound is not a safety net but a target the model can steer at, and it has no
+    way to tell its decision was clamped. A bound therefore only belongs in the
+    box when the demos or the embodiment pin it down; otherwise it is ``null``.
+    """
+    print("an unsupported workspace bound stays open")
+    box = Box.from_cfg({"x": (-0.50, 0.01), "y": (-0.41, 0.02), "z": (None, 1.15)})
+    check(math.isinf(box.z[0]) and box.z[0] < 0.0, "a null lower bound is negative infinity")
+    check(box.z[1] == 1.15, "the closed end keeps its value")
+    check(box.x == (-0.50, 0.01) and box.y == (-0.41, 0.02), "the closed axes are untouched")
+
+    # Nothing below the open end is out of bounds, so nothing gets moved.
+    low = np.array([-0.30, -0.20, 0.20])
+    # excess is signed, not clamped at zero: an interior point reports the
+    # largest of its negative face distances. That is exactly what the
+    # guardrail's `excess > _EPS` gate relies on, so the assertion is `<= 0`.
+    check(box.excess(low) <= 0.0, "a low point is not outside a box with an open floor")
+    check(np.allclose(box.clamp(low), low), "an open end never moves the point")
+
+    # The closed end still bites exactly as before.
+    high = np.array([-0.30, -0.20, 1.30])
+    check(close(box.excess(high), 0.15, 1e-12), "the closed end still measures the excess")
+    check(box.clamp(high)[2] == 1.15, "the closed end still clamps onto the boundary")
+
+    now = state(pos=np.array([-0.275, -0.30, 0.95]), quat=HOME_QUAT)
+    open_guard = GuardrailConfig(
+        workspace=Box(x=(-0.35, -0.15), y=(-0.45, -0.10), z=(None, 1.10)),
+        reject_margin_m=0.03,
+        max_target_distance_m=0.45,
+    )
+    down = check_arm_command(ArmCommand(position=np.array([-0.28, -0.30, 0.55])), now, open_guard)
+    check(down.ok and not down.clamped, "a downward move is not clamped by an absent floor")
+    check(down.command.position[2] == 0.55, "the target reaches the controller unchanged")
+    check(down.feedback("left") == "", "an unclamped move reports nothing")
+
+    # A malformed or empty axis is a hard error, not a silent pass.
+    for bad in (
+        {"x": (-0.50, 0.01), "y": (-0.41, 0.02), "z": (1.15, 0.10)},
+        {"x": (-0.50, 0.01), "y": (-0.41, 0.02), "z": 1.15},
+        {"x": (-0.50, 0.01), "y": (-0.41, 0.02), "z": (None, None, None)},
+        {"x": (-0.50, 0.01), "y": (-0.41,), "z": (None, 1.15)},
+        {"x": (float("nan"), 0.01), "y": (-0.41, 0.02), "z": (None, 1.15)},
+        {"x": (-0.50, 0.01), "y": (-0.41, 0.02)},
+    ):
+        try:
+            Box.from_cfg(bad)
+        except ValueError:
+            check(True, f"a malformed box {bad} is rejected")
+        else:
+            check(False, f"a malformed box {bad} must not be accepted")
+
+
 def main() -> int:
     for test in (
         test_quat_matrix_roundtrip,
@@ -526,6 +590,7 @@ def main() -> int:
         test_tiny_cap_still_yields_a_chunk,
         test_hold_chunk,
         test_guardrail_matrix,
+        test_open_workspace_bound,
         test_random_sweep,
     ):
         test()

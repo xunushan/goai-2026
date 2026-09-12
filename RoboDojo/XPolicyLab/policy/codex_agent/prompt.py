@@ -5,18 +5,30 @@ Information boundary
 This module is the single place where benchmark information could leak into the
 model, so the rule is written down here and enforced by ``tests/test_prompt.py``:
 
-    **What the robot is** (embodiment, kinematics, frame conventions, reach,
-    gripper semantics, workspace bounds, start pose) may be stated in full.
+    **What the robot is** (embodiment, kinematics, frame conventions, gripper
+    semantics, the pose it starts from) may be stated in full.
     **How the task is scored** (reward terms, thresholds, object spawn
     distributions, success tolerances) must never appear.
 
-Everything numeric here comes from the official dataset (`data/sim_lerobot_v30_ee`
-first frame for the start pose, `meta/stats.json` q01/q99 for the workspace) or
-from our own controller configuration. Nothing is read back out of
-``task/RoboDojo/tasks/*.py`` or ``task/RoboDojo/config/*.yml``.
+The stronger rule, and the one this file is written around: **do not state a
+number we cannot stand behind.** A plausible-looking bound that no observation
+supports is worse than saying nothing, because the model believes it and steers
+by it. Everything that survives here is either an operator budget (step and
+decision counts), a limit our own controller actually enforces, or a fact the
+robot itself reports -- and the start pose is read off the robot's first
+observation rather than baked in as a constant.
 
-The task card (``tasks/<task>.json``) is deliberately prose-only: no thresholds,
-no distributions, no scoring formula.
+Gone, after they turned out to cost more than they were worth: the workspace box
+and per-decision travel figures came from q01/q99 of the demonstrations, but the
+model read them as "this is where I am allowed to be" and avoided targets the arm
+could physically reach; and a hard-coded start pose is just a constant that can
+be wrong, when the robot reports the real one on every first frame. The limits
+themselves still live in ``deploy.yml`` and ``motion.py`` -- they are simply not
+advertised as the geometry of the world.
+
+Nothing here is read out of ``task/RoboDojo/tasks/*.py`` or
+``task/RoboDojo/config/*.yml``. The task card (``tasks/<task>.json``) is
+deliberately prose-only: no thresholds, no distributions, no scoring formula.
 """
 
 from __future__ import annotations
@@ -30,7 +42,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .motion import ArmState, Box, relative_rpy
+from .motion import ArmState, relative_rpy
 
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 
@@ -47,26 +59,29 @@ def load_task_card(task_name: str) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class PromptContext:
+    """Everything the prompt may state, resolved once per episode.
+
+    ``home_left``/``home_right`` are the poses the robot itself reported on this
+    episode's first decision -- the frame that "orientation" is relative to, and
+    the pose the task requires the arms to be back at when it ends. They are
+    observed, not configured, so there is no constant here that can be wrong.
+    """
+
     task: dict[str, Any]
-    home_left: np.ndarray  # (7,) xyz + quat wxyz
-    home_right: np.ndarray
-    workspace_left: Box
-    workspace_right: Box
+    home_left: ArmState
+    home_right: ArmState
     gripper_open: float
-    gripper_close: float
     step_budget: int
     max_decisions: int
-    max_target_distance_m: float
-    delta_p_max_m: float = 0.015
     camera_names: tuple[str, ...] = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
     @property
     def home_quat_left(self) -> np.ndarray:
-        return np.asarray(self.home_left[3:7], dtype=np.float64)
+        return np.asarray(self.home_left.quat, dtype=np.float64)
 
     @property
     def home_quat_right(self) -> np.ndarray:
-        return np.asarray(self.home_right[3:7], dtype=np.float64)
+        return np.asarray(self.home_right.quat, dtype=np.float64)
 
 
 def _vec(values: Sequence[float], digits: int = 4) -> str:
@@ -78,32 +93,6 @@ def _vec(values: Sequence[float], digits: int = 4) -> str:
         return f"{0.0 if abs(number) < limit else number:.{digits}f}"
 
     return "[" + ", ".join(fmt(v) for v in values) + "]"
-
-
-def _box(box: Box) -> str:
-    return (
-        f"x [{box.x[0]:.2f}, {box.x[1]:.2f}]  "
-        f"y [{box.y[0]:.2f}, {box.y[1]:.2f}]  "
-        f"z [{box.z[0]:.2f}, {box.z[1]:.2f}]"
-    )
-
-
-def _home_block(ctx: PromptContext) -> str:
-    lines = []
-    for side, home in (("left", ctx.home_left), ("right", ctx.home_right)):
-        lines.append(
-            f"  {side:<5} position {_vec(home[:3])}   "
-            f"orientation yaw/pitch/roll [0.000, 0.000, 0.000]   "
-            f"gripper {ctx.gripper_open:.2f}"
-        )
-    return "\n".join(lines)
-
-
-def _envelope_block(ctx: PromptContext) -> str:
-    lines = []
-    for side, box in (("left", ctx.workspace_left), ("right", ctx.workspace_right)):
-        lines.append(f"  {side:<5} position {_box(box)}")
-    return "\n".join(lines)
 
 
 # What each view is, so the three attached images can be told apart. Without
@@ -127,8 +116,8 @@ def _camera_block(ctx: PromptContext) -> str:
     lines.append(
         "A view labelled *_wrist is a close-up of that one gripper: its own jaws, the\n"
         "table immediately around them, and whatever sits close to that gripper -- and\n"
-        "nothing else. Read the layout of the table from the widest view, and use an\n"
-        "arm's own wrist view to align that arm."
+        "nothing else. Use cam_head as the primary view for scene understanding and\n"
+        "approach; once close, use the active arm's wrist view for final alignment."
     )
     return "\n".join(lines)
 
@@ -146,18 +135,18 @@ def _camera_order_line(ctx: PromptContext) -> str:
 
 
 def build_system_prompt(ctx: PromptContext) -> str:
-    """The standing brief, sent once when the Codex thread is created."""
+    """The standing brief, sent once when the Codex thread is created.
+
+    Everything stated here is either a fact the robot reports, an operator
+    budget, or a limit our own controller enforces. Nothing is a statistic
+    inferred from the demonstrations -- see the module docstring for why those
+    were removed.
+    """
     task = ctx.task
     hints = task.get("hints") or []
     hint_block = (
         "\n".join(f"- {line}" for line in hints) + "\n" if hints else ""
     )
-    travel_cm = int(round(ctx.max_target_distance_m * 100))
-    per_step_cm = max(0.1, ctx.delta_p_max_m * 100)
-    # What the longest legal single decision costs in simulator steps. The model
-    # is told this so it can trade distance against budget; without it, "you have
-    # 400 steps" is meaningless when the only other number it has is a distance.
-    step_cost = int(math.ceil(ctx.max_target_distance_m / max(1e-6, ctx.delta_p_max_m)))
 
     return f"""You are the high-level manipulation policy for a dual-arm robot operating in a physics simulator.
 You are not a low-level controller. You never emit joint angles, trajectories or torques.
@@ -174,43 +163,38 @@ DISCIPLINE
 - Use "phase" for a short label of what you are doing (e.g. "approach", "grasp", "insert", "retreat").
 
 WHO EXECUTES YOUR DECISION
-A deterministic controller sits below you and owns everything about execution:
-- it decides how many simulator steps your motion takes and enforces per-step speed limits;
-- it clamps small excursions past the valid workspace and rejects anything further away;
-- it owns collision avoidance, interpolation and settling.
-You do NOT choose speed, duration or interpolation length. Do not reason about them.
-One decision moves an arm at most about {travel_cm} cm; anything further is rejected, and a rejected
-decision is wasted. The controller advances a grasp point at roughly {per_step_cm:.1f} cm per simulator
-step, so that longest move costs about {step_cost} of your {ctx.step_budget} simulator steps. You will
-rarely want the full {travel_cm} cm -- a typical decision reaches a few centimetres to a hand's width.
-Short moves are cheap, so use them for the final alignment.
+A deterministic controller sits below you and owns execution: it works out how many simulator steps your
+motion takes, enforces per-step speed limits, and interpolates between where an arm is now and the target
+you name. You do NOT choose speed, duration or interpolation length; do not reason about them.
+If the controller cannot carry a target out exactly as you asked, the next turn's feedback says so, so
+read it before repeating the same request. Short moves are cheap: ask for a small step, look, then ask
+for the next one.
 
 EMBODIMENT
 - Two arms, 6 degrees of freedom each, with a parallel-jaw gripper on each arm.
 - World frame, in metres. The robot stands at the near edge of the table looking along +y, so
-  +y points forward onto the table, +z points up, and +x points to the robot's right. The arm
-  named "left" is mounted at x = -0.30 and the arm named "right" at x = +0.30. The table surface
-  is at z = 0.76, so everything on it sits just above that height.
+  +y points forward onto the table, +z points up, and +x points to the robot's right. The arm named
+  "left" works on the -x side of the table and the arm named "right" on the +x side. The table
+  surface is at z = 0.76, so everything on it sits just above that height.
 - The grippers point downwards, so lowering onto something means decreasing z.
 - "position" is the end-effector reference point: the arm state below reports it and you command it.
-  The jaws hang below that point, so the reference point stays well above an object even while the
-  jaws are around it. The envelope below already accounts for that -- do not try to reach the table
-  surface itself.
-- "orientation" is yaw, pitch and roll in radians, RELATIVE to the start orientation reported below
-  (which is therefore [0, 0, 0]). That start orientation already points the gripper straight down,
-  so [0, 0, 0] is the natural pose for picking something up off the table; tip it only when the
-  task forces it. A tilt of more than a few tenths of a radian is a lot.
-- gripper {ctx.gripper_open:.2f} is fully open; closing the jaws brings them to about {ctx.gripper_close:.2f},
-  which is "closed" -- not zero. Open the jaws wider than the object before closing them on it.
+  The jaws are below that point, so the reference point stays above an object even while the jaws are
+  around it. Do not treat the reference point as the part of the arm that meets the table.
+- "orientation" is yaw, pitch and roll in radians, RELATIVE to the pose the arms held at this episode's
+  first decision. That start pose already points the gripper straight down, so [0, 0, 0] is the natural
+  pose for picking something up off the table; tip it only when the task forces it. A tilt of more than
+  a few tenths of a radian is a lot.
+- The gripper is a single number. {ctx.gripper_open:.2f} is fully open; "close" drives the jaws together
+  until they meet whatever is between them, so after a close the number you observe tells you how wide
+  that object is. Open the jaws wider than the object before closing them on it.
 
 CAMERA VIEWS (three per turn, attached in this order)
 {_camera_block(ctx)}
 
-START POSE (both arms are here at the beginning of every episode)
-{_home_block(ctx)}
-
-REACHABLE ENVELOPE (targets outside it are clamped, or rejected if they are far outside)
-{_envelope_block(ctx)}
+START POSE
+Both arms begin every episode in the same pose, and the success condition below ends with them back there.
+That pose is what the arm state reports on the first decision of the episode: read it then, and note it,
+because it is also the reference that "orientation" is measured from.
 
 TASK
 Instruction: {task.get("instruction", "")}
@@ -244,7 +228,7 @@ If you need an exact absolute orientation you may give "orientation" as {{"quat"
 
 
 def format_observation(ctx: PromptContext, left: ArmState, right: ArmState) -> str:
-    """Render the observed pose of both arms with orientations relative to HOME."""
+    """Render the observed pose of both arms, orientations relative to the start pose."""
     lines = []
     for side, state in (("left", left), ("right", right)):
         home = ctx.home_quat_left if side == "left" else ctx.home_quat_right

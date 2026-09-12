@@ -10,7 +10,7 @@ policy_name: codex_agent
 protocol: ws
 host: localhost
 bench_name: null
-task_name: plug_in_charger
+task_name: stack_blocks
 env_cfg_type: null
 seed: null
 eval_batch: false          # one episode == one Codex thread, so single-env only
@@ -37,37 +37,60 @@ bridge:
   use_output_schema: true     # --output-schema; parsed tolerantly regardless
 
 episode:
-  max_sim_steps: 400          # == plug_in_charger.step_lim
+  max_sim_steps: 550          # == stack_blocks.step_lim; the 100 charger demos
+                              # finish in 232 steps, the 100 block demos in 266
   max_codex_calls: 15         # operator constraint: cap on gpt-6 calls per episode
   min_sim_steps_per_call: 5   # reserve, so late decisions cannot be starved of steps
   count_failed_calls: true    # a failed call still costs quota, so it still costs budget
 
 motion:
-  delta_p_max_m: 0.015        # per-simulator-step translation limit (demo p90 is 0.021)
-  delta_theta_max_deg: 5.0    # per-simulator-step rotation limit
+  # Interpolation granularity, not a judgement about the task. The number of
+  # simulator steps a decision costs is derived from these two together with the
+  # distance and the rotation the decision covers, so they have to be set to
+  # something -- but nothing downstream treats them as a limit on where the arm
+  # may go or how fast the *task* should be done.
+  #
+  # They are set to move more slowly than the demonstrations do, which is the only
+  # defensible direction: an open-loop chunk that outruns what the experts did is
+  # not tracking anything.
+  #                 translation p90 / p99 / max      rotation p90 / p99 / max
+  #   charger demos   0.0172 / 0.0262 / 0.0356 m      6.08 / 8.89 / 11.46 deg
+  #   block demos     0.0252 / 0.0394 / 0.0490 m      4.19 / 6.86 /  7.74 deg
+  delta_p_max_m: 0.015
+  delta_theta_max_deg: 5.0
   min_chunk_steps: 2
   max_chunk_steps: 45         # per-decision cap; max_codex_calls x this >= max_sim_steps
   settle_steps: 3             # identical hold steps so physics settles before the next render
-  gripper_open: 1.0
-  gripper_close: 0.36         # observed minimum over the 100 charger demos (open == 1.0)
-  max_target_distance_m: 0.45 # furthest a single decision may move an arm
+  gripper_open: 1.0           # 1.0 is "fully open" on the observed gripper scale
+  # "Close" means drive the jaws together until the object stops them, so the
+  # commanded value is the bottom of the gripper's travel. It used to be 0.25 --
+  # the widest the jaws had been seen to stop at around the smallest block -- which
+  # is a fact about those blocks, not about the gripper; and commanding it when
+  # the jaws were empty left them reading 0.25 with nothing held.
+  gripper_close: 0.0
 
 guardrail:
-  # Reachable workspace, measured over the 100 charger demonstrations in
-  # data/sim_lerobot_v30_ee (task_index == 1) and widened slightly. Targets inside
-  # the margin are clamped; further out are rejected.
-  workspace:
-    left:  {x: [-0.50, -0.05], y: [-0.41, 0.02], z: [0.88, 1.11]}
-    right: {x: [ 0.02,  0.50], y: [-0.41, 0.02], z: [0.88, 1.11]}
-  reject_margin_m: 0.03
-  max_validation_retries: 1
+  # Deliberately empty. The box that used to be here was q01/q99 of the
+  # demonstrations, and the model read the numbers as the geometry of the world
+  # and avoided targets the arm could reach; the failing charger episode then
+  # drove down to exactly the z floor it had been given. A limit that silently
+  # rewrites a decision is worse than no limit, so with nothing we can defend the
+  # controller clamps and rejects nothing: whatever the model asks for is what the
+  # arm is asked to do, and the simulator is the only thing standing between a
+  # downward command and the table.
+  # (motion.py still implements clamping and rejection, and tests cover it, so a
+  # bound can be set here again the day something real pins one down. The keys it
+  # reads are the ones in tests/test_adapter.py's LIMITS fixture -- workspace /
+  # reject_margin_m / max_target_distance_m / max_target_rotation_deg -- so setting
+  # one here really does take effect; none of them is a live key right now.)
   invalid_streak_limit: 3     # consecutive rejections before a free forced return home
 
-# Start pose of both arms. Taken from the first frame of every episode in
-# data/sim_lerobot_v30_ee (std = 0.0 over 100 charger demonstrations).
-home:
-  left:  {pos: [-0.2995, -0.3523, 0.9215], quat: [0.7070, 0.0, 0.0, 0.7072], gripper: 1.0}
-  right: {pos: [ 0.3005, -0.3523, 0.9215], quat: [0.7070, 0.0, 0.0, 0.7072], gripper: 1.0}
+# There is deliberately no `home:` block. The start pose is read off the robot's
+# own first observation of the episode and used as the frame that "orientation"
+# is relative to and as the target of the forced return-home at the end of an
+# episode. A constant here was a second source of truth that could disagree with
+# the run actually happening -- and the prompt quoted it to the model, so a wrong
+# one would have been believed rather than noticed.
 
 # Recorded for the log line only: the policy server never passes these to Codex.
 # The bridge has its own --model / --reasoning-effort flags, and when they are
