@@ -243,6 +243,61 @@ def test_healthy_episode() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# the standing brief
+# --------------------------------------------------------------------------- #
+
+
+def test_the_brief_rides_on_the_thread_creating_turn_only() -> None:
+    """The system prompt must reach Codex, and reach it exactly once.
+
+    ``build_system_prompt`` and ``build_turn_prompt`` describe themselves as two
+    halves of one message ("sent once when the thread is created" / "appended to
+    the standing brief"), but nothing joined them: the adapter sent the turn
+    prompt alone, so the model never learned the embodiment, the task or the
+    reply format. Individually rendered, both prompts look complete, which is
+    why the offline prompt review did not catch it. Hence a request-level
+    assertion on the payload that actually goes out.
+    """
+    print("the standing brief is sent once, on the thread-creating turn")
+    with MockBridge("legal") as bridge:
+        bridge.wait_until_responsive()
+        model = make_model({"bridge_url": bridge.url})
+        step(model, make_obs())
+        step(model, make_obs())
+
+        check(bridge.decide_count == 2, "two decisions reached the bridge")
+        first, second = bridge.decide_payloads[0], bridge.decide_payloads[1]
+
+        # Sentinels: if the turn ordering ever changes, these fire first, so the
+        # two assertions below cannot pass vacuously on the wrong turns.
+        check(first["thread_id"] is None, "turn 1 is the thread-creating turn")
+        check(second["thread_id"] is not None, "turn 2 resumes that thread")
+        check(first["turn_index"] == 0 and second["turn_index"] == 1, "the turns are ordered")
+
+        for label, needle in (
+            ("the opening line", "high-level manipulation policy"),
+            ("the embodiment", "EMBODIMENT"),
+            ("the start pose", "START POSE"),
+            ("the task", "Plug the charger into the power strip."),
+            ("the reply format", "REPLY FORMAT"),
+        ):
+            check(needle in first["prompt"], f"the first prompt carries {label}")
+
+        check(
+            "high-level manipulation policy" not in second["prompt"],
+            "the brief is not repeated once the thread holds it",
+        )
+        check(
+            "TURN 2 of at most" in second["prompt"],
+            "the second prompt is still the per-decision one",
+        )
+        check(
+            len(second["prompt"]) < len(first["prompt"]),
+            "a resumed turn is shorter than the one that introduced the thread",
+        )
+
+
+# --------------------------------------------------------------------------- #
 # the operator's budget
 # --------------------------------------------------------------------------- #
 
@@ -875,6 +930,7 @@ def main() -> int:
 
     for test in (
         test_healthy_episode,
+        test_the_brief_rides_on_the_thread_creating_turn_only,
         test_call_cap_is_enforced,
         test_exhausted_budget_drives_home,
         test_failed_calls_still_cost_budget,

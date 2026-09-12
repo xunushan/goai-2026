@@ -569,6 +569,14 @@ class Model(ModelTemplate):
             right=right,
             feedback=state.feedback,
         )
+        if state.thread_id is None:
+            # This call is the one that creates the Codex thread, so the standing
+            # brief has to ride on it: `codex exec resume` only ever replays what
+            # the thread was given, and there is no second chance to introduce
+            # the embodiment, the task or the reply format. Later turns must NOT
+            # repeat it -- the thread already holds it, and every repeated copy
+            # is paid for out of a budget of ten calls.
+            prompt = f"{build_system_prompt(ctx)}\n\n{prompt}"
         images, image_notes = self._build_images(observation, state)
         notes = obs_notes + image_notes
 
