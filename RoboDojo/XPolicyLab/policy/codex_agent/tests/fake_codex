@@ -1,0 +1,222 @@
+#!/usr/bin/env python3
+"""A stand-in for the Codex CLI, so the bridge can be tested without spending quota.
+
+The operator's constraint is that the real Codex is only called for the official
+run, so every bridge test drives this stub instead. It reproduces the parts of
+``codex exec`` / ``codex exec resume`` the bridge depends on:
+
+* argument shape: ``exec [resume <id>] ...flags... [-i IMG]... -- PROMPT``
+* a ``--json`` event stream on stdout ending in ``turn.completed``
+* ``-o FILE`` receiving the final agent message
+* a non-zero exit with ``session not found`` when resuming an unknown thread
+
+Behaviour is steered entirely by environment variables:
+
+===========================  ==================================================
+``FAKE_CODEX_DIR``           scratch dir for the session list and call counter
+``FAKE_CODEX_REPLY``         a JSON reply, or a JSON list of replies handed out
+                             one per call (the last one repeats)
+``FAKE_CODEX_THREAD_ID``     thread id to report for a fresh thread
+``FAKE_CODEX_SLEEP_S``       sleep this long before answering (timeout tests)
+``FAKE_CODEX_EXIT``          exit with this code after emitting the stream
+``FAKE_CODEX_STDERR``        text to write to stderr
+``FAKE_CODEX_NO_MESSAGE``    emit no agent_message item at all
+``FAKE_CODEX_NO_STREAM``     emit no event stream at all
+``FAKE_CODEX_NO_OUTPUT_FILE``  do not write ``-o`` (test the JSONL fallback)
+``FAKE_CODEX_FENCE``         wrap the reply in a ```json code fence
+``FAKE_CODEX_PROSE``         prefix the reply with this prose
+``FAKE_CODEX_ARGS_OUT``      write the parsed argv as JSON to this path
+===========================  ==================================================
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import sys
+import time
+from pathlib import Path
+
+DEFAULT_REPLY = {
+    "left": {"position": "keep", "orientation": "keep", "gripper": "keep"},
+    "right": {"position": "keep", "orientation": "keep", "gripper": "keep"},
+    "note": "fake codex reply",
+    "phase": "idle",
+}
+
+
+def parse_args(argv: list[str]) -> dict:
+    """Parse the subset of the Codex CLI that the bridge emits."""
+    if not argv or argv[0] != "exec":
+        print(f"fake_codex: expected 'exec', got {argv!r}", file=sys.stderr)
+        raise SystemExit(2)
+
+    parsed = {
+        "subcommand": "exec",
+        "thread_id": None,
+        "json": False,
+        "output_last_message": None,
+        "output_schema": None,
+        "model": None,
+        "config": [],
+        "images": [],
+        "prompt": None,
+        "skip_git_repo_check": False,
+    }
+    rest = argv[1:]
+    if rest and rest[0] == "resume":
+        if len(rest) < 2:
+            print("fake_codex: resume needs a thread id", file=sys.stderr)
+            raise SystemExit(2)
+        parsed["subcommand"] = "resume"
+        parsed["thread_id"] = rest[1]
+        rest = rest[2:]
+
+    index = 0
+    while index < len(rest):
+        token = rest[index]
+        if token == "--":
+            parsed["prompt"] = rest[index + 1] if index + 1 < len(rest) else ""
+            break
+        if token in ("-i", "--image"):
+            index += 1
+            parsed["images"].append(rest[index])
+        elif token in ("-o", "--output-last-message"):
+            index += 1
+            parsed["output_last_message"] = rest[index]
+        elif token == "--output-schema":
+            index += 1
+            parsed["output_schema"] = rest[index]
+        elif token in ("-m", "--model"):
+            index += 1
+            parsed["model"] = rest[index]
+        elif token in ("-c", "--config"):
+            index += 1
+            parsed["config"].append(rest[index])
+        elif token == "--json":
+            parsed["json"] = True
+        elif token == "--skip-git-repo-check":
+            parsed["skip_git_repo_check"] = True
+        elif token.startswith("-"):
+            print(f"fake_codex: unexpected flag {token!r}", file=sys.stderr)
+            raise SystemExit(2)
+        else:
+            # A bare positional would be swallowed as an image path by the real
+            # CLI, which is exactly the bug the `--` separator exists to avoid.
+            print(f"fake_codex: bare positional {token!r}; the prompt must come after '--'",
+                  file=sys.stderr)
+            raise SystemExit(2)
+        index += 1
+    return parsed
+
+
+def main() -> int:
+    parsed = parse_args(sys.argv[1:])
+
+    work_dir = Path(os.environ.get("FAKE_CODEX_DIR", ".")).expanduser()
+    work_dir.mkdir(parents=True, exist_ok=True)
+    sessions_path = work_dir / "sessions.json"
+    counter_path = work_dir / "calls.txt"
+
+    try:
+        sessions = json.loads(sessions_path.read_text(encoding="utf-8"))
+        if not isinstance(sessions, list):
+            sessions = []
+    except (OSError, json.JSONDecodeError):
+        sessions = []
+
+    try:
+        call_index = int(counter_path.read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        call_index = 0
+    counter_path.write_text(str(call_index + 1), encoding="utf-8")
+
+    if parsed["subcommand"] == "resume" and parsed["thread_id"] not in sessions:
+        # The real CLI fails this way, and the bridge keys its one retry on it.
+        print(
+            f"Error: session not found for thread {parsed['thread_id']} in {work_dir}",
+            file=sys.stderr,
+        )
+        return 1
+
+    args_out = os.environ.get("FAKE_CODEX_ARGS_OUT")
+    if args_out:
+        record = dict(parsed)
+        record["cwd"] = os.getcwd()
+        record["call_index"] = call_index
+        record["images_exist"] = [Path(p).is_file() for p in parsed["images"]]
+        Path(args_out).write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+    sleep_for = float(os.environ.get("FAKE_CODEX_SLEEP_S") or 0.0)
+    if sleep_for > 0:
+        time.sleep(sleep_for)
+
+    stderr_text = os.environ.get("FAKE_CODEX_STDERR")
+    if stderr_text:
+        print(stderr_text, file=sys.stderr, flush=True)
+    if parsed["config"]:
+        print(f"fake_codex: config={parsed['config']}", file=sys.stderr, flush=True)
+
+    exit_code = int(os.environ.get("FAKE_CODEX_EXIT") or 0)
+
+    thread_id = parsed["thread_id"]
+    if thread_id is None:
+        thread_id = os.environ.get("FAKE_CODEX_THREAD_ID", "thr_fake_0001")
+        sessions.append(thread_id)
+        sessions_path.write_text(json.dumps(sessions), encoding="utf-8")
+
+    reply = DEFAULT_REPLY
+    raw_reply = os.environ.get("FAKE_CODEX_REPLY")
+    if raw_reply:
+        try:
+            decoded = json.loads(raw_reply)
+        except json.JSONDecodeError as exc:
+            print(f"fake_codex: FAKE_CODEX_REPLY is not JSON: {exc}", file=sys.stderr)
+            return 2
+        if isinstance(decoded, list):
+            reply = decoded[min(call_index, len(decoded) - 1)] if decoded else DEFAULT_REPLY
+        else:
+            reply = decoded
+
+    text = json.dumps(reply)
+    if os.environ.get("FAKE_CODEX_FENCE"):
+        text = f"```json\n{text}\n```"
+    prose = os.environ.get("FAKE_CODEX_PROSE")
+    if prose:
+        text = f"{prose}\n{text}"
+    if os.environ.get("FAKE_CODEX_NO_MESSAGE"):
+        text = ""
+
+    emit = not os.environ.get("FAKE_CODEX_NO_STREAM")
+    if emit:
+        print(json.dumps({"type": "thread.started", "thread_id": thread_id}), flush=True)
+        if text:
+            print(
+                json.dumps(
+                    {"type": "item.completed", "item": {"type": "agent_message", "text": text}}
+                ),
+                flush=True,
+            )
+        print(
+            json.dumps(
+                {
+                    "type": "turn.completed",
+                    "usage": {
+                        "input_tokens": 1234,
+                        "cached_input_tokens": 1000,
+                        "output_tokens": 56,
+                    },
+                }
+            ),
+            flush=True,
+        )
+
+    output_path = parsed["output_last_message"]
+    if output_path and not os.environ.get("FAKE_CODEX_NO_OUTPUT_FILE"):
+        Path(output_path).write_text(text, encoding="utf-8")
+
+    return exit_code
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

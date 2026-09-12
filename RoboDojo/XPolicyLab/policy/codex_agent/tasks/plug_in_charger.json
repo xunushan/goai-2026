@@ -1,0 +1,14 @@
+{
+  "task_name": "plug_in_charger",
+  "instruction": "Plug the charger into the power strip.",
+  "scene": "A power strip lies flat on the table in front of the robot, with several sockets facing up. A charger plug rests on the table next to it. Both objects are within reach of the arms and sit on the table surface.",
+  "success_rule": "The charger is seated fully and upright inside one of the power strip sockets, and the episode ends with both arms back at the start pose and both grippers open.",
+  "hints": [
+    "Grasp the plug by its body, not by the metal prongs.",
+    "Bring the plug directly above the socket, aligned with the socket axis, before pushing it in.",
+    "Push straight down along the socket axis until the plug is seated, then let go.",
+    "Anything you are still holding when the episode ends has not been placed."
+  ],
+  "step_budget": 400,
+  "max_decisions": 10
+}

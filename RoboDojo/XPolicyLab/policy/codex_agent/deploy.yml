@@ -1,0 +1,86 @@
+# codex_agent: a stateful local Codex thread (gpt-6-astra) acting as the
+# high-level policy. It emits target end-effector poses; the interpolator in
+# motion.py turns them into action chunks. No checkpoint, no GPU, no torch.
+#
+# The Codex CLI itself runs on the operator's Mac (see bridge/), reached over an
+# SSH reverse tunnel. `bridge_url` is the flat override that
+# setup_eval_policy_server.sh can set; CODEX_BRIDGE_URL in the environment wins.
+
+policy_name: codex_agent
+protocol: ws
+host: localhost
+bench_name: null
+task_name: plug_in_charger
+env_cfg_type: null
+seed: null
+eval_batch: false          # one episode == one Codex thread, so single-env only
+
+action_type: ee
+
+port: 6000
+
+# May be overridden by CODEX_BRIDGE_URL or --overrides bridge_url=...
+bridge_url: http://localhost:8765
+
+bridge:
+  base_url: http://localhost:8765
+  connect_timeout_s: 5        # healthz probe; distinguishes "bridge down" from "Codex slow"
+  request_timeout_s: 95       # per-turn HTTP budget once the thread exists
+  request_timeout_first_turn_s: 105
+  decision_wall_budget_s: 110 # hard ceiling, must stay under the eval client's 120 s
+  use_output_schema: true     # --output-schema; parsed tolerantly regardless
+
+episode:
+  max_sim_steps: 400          # == plug_in_charger.step_lim
+  max_codex_calls: 10         # hard operator constraint: <=10 gpt-6 calls per episode
+  min_sim_steps_per_call: 5   # reserve, so late decisions cannot be starved of steps
+  count_failed_calls: true    # a failed call still costs quota, so it still costs budget
+
+motion:
+  delta_p_max_m: 0.015        # per-simulator-step translation limit (demo p90 is 0.021)
+  delta_theta_max_deg: 5.0    # per-simulator-step rotation limit
+  min_chunk_steps: 2
+  max_chunk_steps: 45         # 10 decisions x 45 steps >= 400
+  settle_steps: 3             # identical hold steps so physics settles before the next render
+  gripper_open: 1.0
+  gripper_close: 0.36         # observed minimum over the 100 charger demos (open == 1.0)
+  max_target_distance_m: 0.45 # furthest a single decision may move an arm
+
+guardrail:
+  # Reachable workspace, measured over the 100 charger demonstrations in
+  # data/sim_lerobot_v30_ee (task_index == 1) and widened slightly. Targets inside
+  # the margin are clamped; further out are rejected.
+  workspace:
+    left:  {x: [-0.50, -0.05], y: [-0.41, 0.02], z: [0.88, 1.11]}
+    right: {x: [ 0.02,  0.50], y: [-0.41, 0.02], z: [0.88, 1.11]}
+  reject_margin_m: 0.03
+  max_validation_retries: 1
+  invalid_streak_limit: 3     # consecutive rejections before a free forced return home
+
+# Start pose of both arms. Taken from the first frame of every episode in
+# data/sim_lerobot_v30_ee (std = 0.0 over 100 charger demonstrations).
+home:
+  left:  {pos: [-0.2995, -0.3523, 0.9215], quat: [0.7070, 0.0, 0.0, 0.7072], gripper: 1.0}
+  right: {pos: [ 0.3005, -0.3523, 0.9215], quat: [0.7070, 0.0, 0.0, 0.7072], gripper: 1.0}
+
+# Recorded for the log line only: the policy server never passes these to Codex.
+# The bridge has its own --model / --reasoning-effort flags, and when they are
+# left unset the CLI falls back to ~/.codex/config.toml on the Mac. Keep the two
+# in sync by hand if the model changes.
+codex:
+  bin: /Applications/ChatGPT.app/Contents/Resources/codex
+  model: gpt-6-astra
+  reasoning_effort: low
+
+images:
+  camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
+  jpeg_quality: 88
+  max_width: 640
+
+log_io: true
+output_dir: null            # set to a directory to also write decisions.jsonl
+
+# A decision can take 25-30 s, well past the websocket keepalive window; the
+# client detects a dead peer on its own, so protocol-level ping is disabled.
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
