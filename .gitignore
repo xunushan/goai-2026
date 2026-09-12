@@ -10,6 +10,9 @@ data/
 # 仿真评测结果及分析
 eval_results/
 
+# 仿真评测结果数据库（本地）
+/eval/
+
 # 参考论文
 papers/
 
