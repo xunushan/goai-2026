@@ -2,7 +2,7 @@
 """基于末端 XYZ + 夹爪曲线的单臂底层状态划分 (move / grasp / place / hold / idle)。
 
 只做**第 1 层**（单臂、任务无关的底层状态, doc §2.1）；第 2 层的任务级事件映射
-（§12, 由两臂状态 + 任务配置映射到唯一任务标签）尚未实现。
+（§12, 由两臂状态 + 持物历史映射到唯一任务标签）见 tools/xyz_task_event.py。
 
 方法以 docs/xyz_gripper_event_segmentation.md 为准, 参数来自
 configs/xyz_segment_config.json (不写死在代码里)。流程:

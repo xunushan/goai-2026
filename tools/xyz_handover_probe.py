@@ -33,6 +33,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from tools import keyframe_events as ke  # noqa: E402
 from tools import keyframe_detect as kd  # noqa: E402
 from tools import xyz_gripper_segment as xs  # noqa: E402
+from tools import xyz_task_event as te  # noqa: E402
 
 ROOT = ke.ROOT
 DEFAULT_LABEL_DIR = ROOT / "data" / "sim_lerobot_v30_ee" / "xyz_segment"
@@ -40,25 +41,12 @@ DEFAULT_OUT = ROOT / "outputs" / "xyz_handover_probe"
 
 
 def pairings(anchors: pd.DataFrame, k_gap: int = 25) -> list[dict]:
-    """枚举一臂 place × 另一臂 grasp 的候选配对（§12.2 条件 1、2）。"""
-    out = []
-    for A in ("left", "right"):
-        B = "right" if A == "left" else "left"
-        for _, pa in anchors[(anchors.side == A) & (anchors.place_start >= 0)].iterrows():
-            for _, gb in anchors[(anchors.side == B) & (anchors.grasp_start >= 0)].iterrows():
-                p0, p1 = int(pa.place_start), int(pa.place_end)
-                g0, g1 = int(gb.grasp_start), int(gb.grasp_end)
-                if max(g0 - p1, p0 - g1) > k_gap:          # 条件 1
-                    continue
-                if int(gb.close_end) > int(pa.open_end):   # 条件 2
-                    continue
-                out.append({
-                    "releaser": A, "receiver": B,
-                    "place": (p0, p1), "grasp": (g0, g1),
-                    "u": (min(p0, g0), max(p1, g1)),
-                    "overlap": max(0, min(p1, g1) - max(p0, g0)),
-                })
-    return sorted(out, key=lambda d: d["u"][0])
+    """枚举一臂 place × 另一臂 grasp 的候选配对（§12.2 条件 1、2）。
+
+    配对逻辑的唯一实现在生产模块 tools/xyz_task_event.py（第 2 层映射也用同一套），
+    此处仅转发，避免两处分叉。
+    """
+    return te.handover_pairings(anchors, k_gap)
 
 
 def probe_episode(ep: int, ti: int, anchors: pd.DataFrame, states: pd.DataFrame,

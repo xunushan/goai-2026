@@ -100,5 +100,5 @@
       "k_confirm": 4
     }
   },
-  "_layer2": "任务级事件映射(§12)尚未实现，本轮只产出左右臂底层状态。"
+  "_layer2": "任务级事件映射(doc §12)见 tools/xyz_task_event.py，规则全部在代码里按 §12.1/12.2/12.3 实现，不在此配置写死任务知识。fill 的「持筒臂/笔臂」角色由 episode 自动判定(复用 keyframe_events.resolve_fill_roles)：doc §12.1 示例把职责写死成 left=holder/right=pen，但 sim_lerobot_v30_ee 的 100 个 fill episode 里 46 个左臂持筒、54 个右臂持筒，固定映射会标错一半。"
 }
