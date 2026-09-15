@@ -9,15 +9,18 @@
 c_t = 持物历史 (holding) + 事件区间 (grasp/place 的起止帧, 取自 anchors 表)。
 映射规则全部来自 docs/xyz_gripper_event_segmentation.md §12, 代码里不加任务知识:
 
+统一层级: grasp/place > move > hold > idle (move 优先于 hold —— 静止持物只是背景状态,
+另一臂在移动时不能被它压住)。同一层级内再按任务自己的臂/物体优先级排。
+
   §12.1 fill_pen_holder  —— 角色 (持筒臂/笔臂) 由 episode 自动判定;
-                            优先级 笔臂 grasp/place > 笔臂 move/hold(持笔) >
-                            持筒臂 grasp/place > 持筒臂 move/hold(持筒) > move > idle
-  §12.2 plug_in_charger  —— 优先级 handover > insert > grasp_plug/place_plug/hold_plug
-                            > move > idle
+                            层级 grasp/place(笔臂先于持筒臂) > move_pen/move_holder/move
+                            > hold_pen/hold_holder > idle
+  §12.2 plug_in_charger  —— 优先级 handover > insert > grasp_plug/place_plug
+                            > move > hold_plug > idle
                             handover = 递交侧 place ∪ 接取侧 grasp 的**并集**
                             insert   = 最后一个非交接、且在末次 handover 之后的 place
-  §12.3 stack_bowl       —— 优先级 place_bowl > grasp_bowl > move_bowl > hold_bowl
-                            > move > idle (不按左右臂设固定优先级)
+  §12.3 stack_bowl       —— 层级 place_bowl > grasp_bowl > move_bowl > move
+                            > hold_bowl > idle (不按左右臂设固定优先级)
 
 ★ fill 角色是数据事实, 不是配置常量: doc §12.1 的示例配置把职责写死成
   left=holder / right=pen, 但 sim_lerobot_v30_ee 的 100 个 fill episode 中
@@ -63,7 +66,8 @@ EVENT_CN = {
     "grasp_pen": "抓笔", "place_pen": "放笔",
     "hold_pen": "持笔静止", "move_pen": "运笔",
     "handover": "交接", "insert": "插入",
-    "grasp_plug": "抓插头", "place_plug": "放插头", "hold_plug": "持插头静止",
+    "grasp_plug": "抓插头", "place_plug": "放插头",
+    "hold_plug": "持插头静止", "move_plug": "运插头",
     "grasp_bowl": "抓碗", "place_bowl": "放碗",
     "hold_bowl": "持碗静止", "move_bowl": "运碗",
 }
@@ -141,31 +145,51 @@ def insert_event(anchors_ep: pd.DataFrame, pairs: list[dict],
 def map_fill_pen_holder(left, right, left_holding, right_holding, holder) -> str:
     """§12.1 参考实现 (doc 里把 left 写死为 holder, 此处角色作为入参)。
 
-    doc 的深层顺序: 笔臂 "place(持笔) > grasp > move(持笔) > hold(持笔)" 全部先于
-    持筒臂, 因为右臂只有在抓笔/放笔/已持笔时才覆盖左臂的稳定持筒状态。
+    层级严格按 doc 的总优先级 grasp_* / place_* > move_* > hold_* > idle:
+
+      第 1 层 grasp/place —— 笔臂先于持筒臂 (doc: 右臂只有在抓笔/放笔时才覆盖左臂);
+      第 2 层 move        —— 任一手臂在移动时先出 move (持物带后缀, 空手为 move);
+      第 3 层 hold        —— 两臂都不动时才轮到 hold;
+      第 4 层 idle。
+
+    ★ 持筒臂的 hold 是"稳定持筒"的背景状态 (doc §12.1), 只要另一臂在移动, 背景状态
+      就不能压过 move —— 原参考实现把 hold_pen/hold_holder 排在 move 之前, 是错的。
     """
     pen = "right" if holder == "left" else "left"
     st = {"left": left, "right": right}
     hd = {"left": left_holding, "right": right_holding}
-    for arm, kind in ((pen, "pen"), (holder, "holder")):
-        s = st[arm]
-        if s == "place" and hd[arm]:
-            return f"place_{kind}"
-        if s == "grasp":
-            return f"grasp_{kind}"
-        if s == "move" and hd[arm]:
-            return f"move_{kind}"
-        if s == "hold" and hd[arm]:
-            return f"hold_{kind}"
-    return "move" if "move" in (left, right) else "idle"
+    # 1. grasp / place —— 笔臂先于持筒臂
+    if st[pen] == "place" and hd[pen]:
+        return "place_pen"
+    if st[pen] == "grasp":
+        return "grasp_pen"
+    if st[holder] == "place" and hd[holder]:
+        return "place_holder"
+    if st[holder] == "grasp":
+        return "grasp_holder"
+    # 2. move —— 主动运动覆盖另一侧的背景持物
+    if st[pen] == "move":
+        return "move_pen" if hd[pen] else "move"
+    if st[holder] == "move" and hd[holder]:
+        return "move_holder"
+    # 3. hold —— 两臂都不移动时才轮到背景持物状态
+    if st[pen] == "hold" and hd[pen]:
+        return "hold_pen"
+    if st[holder] == "hold" and hd[holder]:
+        return "hold_holder"
+    # 4. 兜底
+    if st[holder] == "move":
+        return "move"
+    return "idle"
 
 
 def map_plug_base(left, right, left_holding, right_holding) -> str:
     """§12.2 非交接、非插入帧的单臂物体语义映射。
 
-    优先级参照 §12.3 的"更精细的操作事件优先": place_plug > grasp_plug > hold_plug。
-    move 不带物体后缀 (doc §12.2 只列出 grasp_plug/place_plug/hold_plug, §14 的
-    move_* 分组里也没有 move_plug), 故运输插头仍输出 move。
+    层级 place_plug > grasp_plug > move_plug / move > hold_plug > idle —— move 先于
+    hold (doc §12.2: 一只手臂静止持有插头、另一只手臂仍空手接近时, 标签应为 move,
+    主动运动覆盖背景持物状态)。持插头运输带后缀 move_plug (doc 事件序列
+    `move → handover → move_plug / hold_plug → insert`), 空手移动为 move。
     """
     st, hd = {"left": left, "right": right}, {"left": left_holding, "right": right_holding}
     for s in ("place", "grasp"):
@@ -173,15 +197,21 @@ def map_plug_base(left, right, left_holding, right_holding) -> str:
             if st[arm] == s:
                 return f"{s}_plug"
     for arm in SIDES:
+        if st[arm] == "move" and hd[arm]:
+            return "move_plug"
+    if "move" in (left, right):
+        return "move"
+    for arm in SIDES:
         if st[arm] == "hold" and hd[arm]:
             return "hold_plug"
-    return "move" if "move" in (left, right) else "idle"
+    return "idle"
 
 
 def map_stack_bowl(left, right, left_holding, right_holding) -> str:
-    """§12.3 叠碗映射。对左右臂对称, 优先级 place_bowl > grasp_bowl > move_bowl
-    > hold_bowl > move > idle (不按左右臂设固定优先级)。
+    """§12.3 叠碗映射。对左右臂对称, 不按左右臂设固定优先级。
 
+    层级 place_bowl > grasp_bowl > move_bowl > move > hold_bowl > idle ——
+    move 先于 hold (持碗静止是背景状态, 另一臂在动时应出 move)。
     move_bowl 仅在"当前确实持碗"时输出 —— 空手移动不能带物体后缀 (doc §12.1)。
     """
     st, hd = {"left": left, "right": right}, {"left": left_holding, "right": right_holding}
@@ -192,10 +222,12 @@ def map_stack_bowl(left, right, left_holding, right_holding) -> str:
     for arm in SIDES:
         if st[arm] == "move" and hd[arm]:
             return "move_bowl"
+    if "move" in (left, right):
+        return "move"
     for arm in SIDES:
         if st[arm] == "hold":
             return "hold_bowl"
-    return "move" if "move" in (left, right) else "idle"
+    return "idle"
 
 
 def per_side_from_anchors(anchors_ep: pd.DataFrame) -> dict:
