@@ -1,0 +1,271 @@
+{
+  "_comment": "真实数据集 (data/real_lerobot_v30_ee, 6 任务 x 6 episode = 36 集) 的 XYZ+夹爪事件划分参数。方法见 docs/xyz_gripper_event_segmentation.md。与仿真用的 configs/xyz_segment_config.json 平行，互不覆盖；仿真那份的数值一律不搬过来。",
+  "_why_separate": [
+    "① 检测前必须逐臂归一化。真实数据两臂的闭合值不同且不为 0（实测 task0 右臂停在 ≈0.67、task2 两臂 ≈0.35、task4 两臂 ≈0.55），doc §3.2 明确要求『阈值应使用归一化开度，而不是直接绑定某一种夹爪的原始数值』。绝对阈值下 task4 检出 0 个周期。",
+    "② 逐任务检测参数必须不同（见 detect_by_task）。真实遥操各任务的夹爪行程与抖动幅度差异极大：task5 要 min_prominence=0.01 才不漏检未抓稳的尝试，task0/task2 要 0.15 才不把保持期抖动当成新抓取。",
+    "③ XYZ 尺度逐任务差异 3 倍以上，D_in/D_out/M 必须逐任务标定（见 tasks.*.grasp/place）。"
+  ],
+  "dataset": {
+    "csv": "data/real_lerobot_v30_ee/real_lerobot_v30_ee.csv",
+    "tasks_parquet": "data/real_lerobot_v30_ee/meta/tasks.parquet",
+    "video_dir": "outputs/episode_insight/interactive_real/videos",
+    "_video_note": "真实视频同为 640x720 三视角合成（上=cam_high，左下=左腕，右下=右腕），与仿真同布局，xyz_gripper_segment.VIEW_BOX 可直接复用。"
+  },
+  "normalize": {
+    "lo_pct": 2.0,
+    "hi_pct": 98.0,
+    "_note": "对每个 (episode, 臂) 用自身 [p2, p98] 线性归一化后再检测。归一化只用于检测，图与 CSV 仍出原始开度（归一化是单调线性变换，锚点位置不变）。"
+  },
+  "detect": {
+    "eps": 0.02,
+    "min_len": 2,
+    "min_prominence": 0.2,
+    "hold_min_len": 3,
+    "open_level": 0.9,
+    "_note": "基线值，实际由 detect_by_task 逐任务整段覆盖。参数语义见 tools/keyframe_detect.detect_gripper_keyframes。"
+  },
+  "detect_by_task": {
+    "0": {
+      "min_prominence": 0.15,
+      "open_level": 0.5,
+      "eps": 0.02,
+      "_evidence": "6 集逐集检出 3+1=4 个周期（笔筒 1 次 + 笔 3 次），与人工真值一致。"
+    },
+    "1": {
+      "min_prominence": 0.05,
+      "open_level": 0.7,
+      "eps": 0.02,
+      "_evidence": "6 集逐集检出 3+3=6 个周期（左右臂各抓 3 个不同大小的物体），与人工真值一致。"
+    },
+    "2": {
+      "min_prominence": 0.15,
+      "open_level": 0.6,
+      "eps": 0.02,
+      "_evidence": "6 集逐集检出 4 个周期，与人工真值一致。"
+    },
+    "3": {
+      "min_prominence": 0.03,
+      "open_level": 0.45,
+      "eps": 0.01,
+      "_evidence": "ep300 检出 3 个（左 2 + 右 1），ep301-305 各检出 2 个（左 1 + 右 1）；用户已确认 ep301-305 确实是 2 次抓取。"
+    },
+    "4": {
+      "min_prominence": 0.03,
+      "open_level": 0.35,
+      "eps": 0.02,
+      "_evidence": "6 集逐集检出 2+1=3 个周期，与人工真值一致。"
+    },
+    "5": {
+      "min_prominence": 0.01,
+      "open_level": 0.4,
+      "eps": 0.01,
+      "_evidence": "ep501 检出 7 个（左 1 + 右 6），ep502-506 各检出 5 个（左 1 + 右 4）；与用户人工计数一致（含抓空重试、抓紧后按住充电器）。"
+    }
+  },
+  "defaults": {
+    "grasp": {
+      "d_in": 0.02,
+      "d_out": 0.028,
+      "max_lookback": 30,
+      "k_d": 4
+    },
+    "place": {
+      "d_in": 0.02,
+      "d_out": 0.028,
+      "max_lookback": 30,
+      "k_d": 4
+    },
+    "k_confirm": 4,
+    "flat": {
+      "eps_flat": 0.002,
+      "k_flat": 12,
+      "_note": "『持续平台』判定。两条规则：(a) close_start 的回溯用严格平台 —— |Δg| < eps_flat 连续 >= k_flat 帧。实测真实数据平台帧的 |Δg| 恰为 0（遥操保持时数值逐帧不变），故 eps_flat 可以取得很小；取 0.002 而非 0 是为了容忍保持期的单帧轻微漂移。k_flat=12 的依据：叠碗等任务下降是阶梯状的，阶梯暂停 7~10 帧，需拒绝它们、又不能拒绝 task3 ep300 左臂那个只有 16 帧的 0.535 平台。(b) 保持平台用『最低点 + 容差带』而非严格平台 —— 最后一段闭合常是缓慢蠕动（task1 ep110 右臂 65 帧从 0.914 爬到 0.620 再 5 帧掉到 0.138），逐帧 |Δg| 全程超 eps，切不出平台；tol_hold=0.01 即容差带半宽，不足 k_flat 帧时按 2x/4x 逐级放宽。见 tools/real_xyz_gripper_segment.py 的 _flat_runs / _hold_around_min。",
+      "tol_hold": 0.01,
+      "hold_settle_frames": 50,
+      "_settle_note": "『手臂停稳』判据：该臂静止段连续 >= 本帧数视为真正停稳（2.0s @25fps）。保持/释放锚点只在本周期第一次停稳之前取（见 tools/real_xyz_gripper_segment.py 的 _refine_anchors 缺陷 3）。取 50 的依据：填笔 ep0 右臂 place 的停稳段长 66 帧、抓取段长 693 帧；task5 ep501 左臂 107 帧；ep502 左臂 80 帧 —— 都 >=50；而同一周期内闭合过程中的短暂停顿（fill ep0 的 30/13 帧、ep501 的 42/6/13 帧）都 <50，不会被误当成停稳。"
+    },
+    "speed": {
+      "v_static": 0.002,
+      "k_static": 5,
+      "smooth": 5,
+      "_evidence": "实测真实数据平滑速率 51.1% 的帧恰为 0，p75=0.0023，p90=0.0077，无清晰双峰。取 0.002 使约 74% 的帧判为静止，与仿真侧 configs/xyz_segment_config.json 的取值一致。"
+    }
+  },
+  "tasks": {
+    "0": {
+      "slug": "fill_pen_holder",
+      "cn": "装笔筒",
+      "note": "左臂持笔筒、右臂重复抓笔/运笔/放笔。标定：锚点前 10 帧距离 p50=0.0107、20 帧 0.0410、40 帧 0.1420；理想 lead（最后一次离开 0.035m 邻域）p50=19、p90=36 帧。取 D_in=0.020 使最终定位约 15 帧，M=30 封住 p90。",
+      "grasp": {
+        "d_in": 0.02,
+        "d_out": 0.028,
+        "max_lookback": 30,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.02,
+        "d_out": 0.028,
+        "max_lookback": 30,
+        "k_d": 4
+      }
+    },
+    "1": {
+      "slug": "put_objects_into_basket",
+      "cn": "物体入筐",
+      "note": "两臂各抓放 3 个不同大小的物体，运动尺度是全数据集最大的。标定：锚点前 10 帧距离 p50 已达 0.0312、40 帧 0.2139；理想 lead p50=11、p90=22 帧（贴近目标很快）。故 D 同比放大到 0.035 才取得与其他任务相当的最终定位时长，M 反而只要 20。",
+      "grasp": {
+        "d_in": 0.035,
+        "d_out": 0.049,
+        "max_lookback": 20,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.035,
+        "d_out": 0.049,
+        "max_lookback": 20,
+        "k_d": 4
+      }
+    },
+    "2": {
+      "slug": "stack_and_cover_blocks",
+      "cn": "叠并盖积木",
+      "note": "标定：锚点前 10 帧距离 p50=0.0126、20 帧 0.0298；理想 lead p50=22、p90=52 帧。取 D_in=0.020、M=40。",
+      "grasp": {
+        "d_in": 0.02,
+        "d_out": 0.028,
+        "max_lookback": 40,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.02,
+        "d_out": 0.028,
+        "max_lookback": 40,
+        "k_d": 4
+      }
+    },
+    "3": {
+      "slug": "stack_bowls",
+      "cn": "叠碗",
+      "note": "标定：锚点前 10 帧距离 p50=0.0062、20 帧 0.0322；理想 lead p50=22、p90=96 帧（放碗后手臂停在原位等待，属用户说明的『放开了但没有完全打开，等在那里』）。取 D_in=0.015、M=40 —— p90 那批长等待由 M 截断后归入 hold，符合 doc §2.1『末端基本静止且未完成释放 = hold』。",
+      "grasp": {
+        "d_in": 0.015,
+        "d_out": 0.021,
+        "max_lookback": 40,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.015,
+        "d_out": 0.021,
+        "max_lookback": 40,
+        "k_d": 4
+      }
+    },
+    "4": {
+      "slug": "stand_up_bottles",
+      "cn": "立瓶子",
+      "note": "标定：锚点前 10 帧距离 p50=0.0076、20 帧 0.0130、40 帧 0.0567；理想 lead p50=34、p90=72 帧。接近很早就完成、之后长时间精细对准，故 D_in 取 0.010、M=50。",
+      "grasp": {
+        "d_in": 0.01,
+        "d_out": 0.014,
+        "max_lookback": 50,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.01,
+        "d_out": 0.014,
+        "max_lookback": 50,
+        "k_d": 4
+      }
+    },
+    "5": {
+      "slug": "insert_charger",
+      "cn": "插充电器",
+      "note": "全数据集最精细的任务。标定：锚点前 40 帧距离 p50 仍只有 0.0152（末端长时间贴在目标附近），理想 lead p50=64、p90=126 帧。取 D_in=0.008、M=40：M 有意压小 —— 仿真侧 configs/xyz_segment_config.json task1 的实测结论是『若取 M=40 会把交接前 37 帧的静止等待段整个吞进 place（那些帧应为 hold）』，真实数据等待更久，故不能放开 M。",
+      "grasp": {
+        "d_in": 0.008,
+        "d_out": 0.011,
+        "max_lookback": 40,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.008,
+        "d_out": 0.011,
+        "max_lookback": 40,
+        "k_d": 4
+      }
+    }
+  },
+  "_episodes": {
+    "_note": "本次打标的 episode 白名单，与 configs/real_lerobot_v30_ee.json 一致（那 36 集）。",
+    "0": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "1": [
+      105,
+      106,
+      107,
+      108,
+      109,
+      110
+    ],
+    "2": [
+      294,
+      295,
+      296,
+      297,
+      298,
+      299
+    ],
+    "3": [
+      300,
+      301,
+      302,
+      303,
+      304,
+      305
+    ],
+    "4": [
+      400,
+      401,
+      402,
+      403,
+      404,
+      405
+    ],
+    "5": [
+      501,
+      502,
+      503,
+      504,
+      505,
+      506
+    ]
+  },
+  "_gt_cycles": {
+    "_note": "用户人工计数的抓取周期真值（左+右合计），仅供逐集对照，不参与算法。t3 与 t5 按集区分。",
+    "by_task": {
+      "0": 4,
+      "1": 6,
+      "2": 4,
+      "3": 2,
+      "4": 3,
+      "5": 5
+    },
+    "by_episode": {
+      "300": 3,
+      "501": 7
+    }
+  },
+  "_anchor_map": {
+    "close_start": "doc §4.2 close_start, 夹爪开始有效闭合",
+    "hold_start": "doc §4.2 close_end, 闭合结束并进入稳定保持（= 抓取锚点 t_c 的配对终点）",
+    "hold_end": "doc §4.2 open_start, 夹爪开始有效张开（= 放置/插入锚点 t_o）",
+    "open_full": "doc §4.2 open_end, 打开结束并回到稳定状态; 哨兵 -1 = 周期未回开(无真实释放)"
+  },
+  "_layer2": "任务级事件映射 (doc §12) 尚未实现，本轮只产出左右臂底层五状态 (move/grasp/place/hold/idle)。"
+}
