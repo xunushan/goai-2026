@@ -67,9 +67,13 @@ hysteresis:
 # chunk 的手臂 xyz 速度剖面里找「低速谷值」相位边界，取最早一个 prominence >= δ_T
 # 的作为本次执行步数 h（无候选则回落 h_max），实现变长 chunk 返回。
 # 互斥：与 temporal_ensemble_coeff 启用态（temporal_ensemble_active）不可同时开，
-# 二者都要接管返回给客户端的动作数，同时开直接报错。
-# 注意：eval_batch 多 env 批路径会取各 env 的最小 h 对齐长度（客户端按
-# len(actions[0]) 切段），因此开启时批内所有 env 的实际执行步数一致。
+# 二者都要接管返回给客户端的动作数，同时开直接报错。批路径的逐 env 缓冲也没有与
+# 重叠 chunk 平均一起验证过，启用本项前先确认 temporal_ensemble_coeff 为 null。
+# 注意：eval_batch 多 env 批路径下**每个 env 按自己的 h 独立重规划**（deploy.py 给
+# 每个 env 维护动作缓冲，缓冲耗尽才重新推理），因此批内各 env 的执行步数可以不同。
+# 服务端 model.py 的 get_action_batch 里那段「批内取最小 h 对齐」是死代码：ws 客户端
+# 每次只送 1 个 env，len(action_list) > 1 永不成立；只有把 batch_inference 打开才会
+# 复活，届时会静默抹掉 PACE 选出的 h，需一并处理。
 pace:
   enabled: false
   h_max: null            # null = 跟随 actions_per_chunk（= 论文的 H_max，保证关闭/回落时行为不变）
