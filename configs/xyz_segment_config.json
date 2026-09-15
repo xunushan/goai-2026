@@ -1,0 +1,59 @@
+{
+  "_comment": "基于末端 XYZ + 夹爪曲线的事件划分参数（方法见 docs/xyz_gripper_event_segmentation.md）。唯一来源，勿把数值写死在代码里。",
+  "_flow": "夹爪锚点(detect_gripper_keyframes: close_start/hold_start/hold_end/open_full) → XYZ 反查最终操作邻域起点(find_approach_start, 迟滞 D_in/D_out + 连续性 K_d + 最大回看 M) → 状态机 → move/grasp/place",
+  "_anchor_map": {
+    "close_start": "§3.2 close_start, 夹爪开始有效闭合",
+    "hold_start": "§3.2 close_end, 闭合结束进入稳定保持 = 抓取锚点 t_c 的配对终点",
+    "hold_end": "§3.2 open_start, 夹爪开始张开 (放置/插入锚点 t_o)",
+    "open_full": "§3.2 open_end, 完全张开; 哨兵 -1 = 周期不完整(未回开)"
+  },
+  "_param_doc": {
+    "d_in": "§6 进入邻域阈值 (米)。由 §10.1 标定：统计 200-299 全部 264 个抓取周期「锚点前 N 帧的距离」分布，close_start 前 15 帧 p50=0.052 / 前 20 帧 p50=0.072 / 前 25 帧 p50=0.089；取 D_in=0.055 使最终定位阶段中位约 15 帧(~0.6s)",
+    "d_out": "§6 判定离开邻域的外阈, 建议 1.2~1.5 x d_in",
+    "max_lookback": "§6 最大回看长度 M, 防止把过长区间标成抓取/放置",
+    "k_d": "§6 起点后要求连续满足邻域条件的帧数",
+    "k_confirm": "§4/§5 动作完成后的稳定确认帧数, 归入同一事件"
+  },
+  "detect": {
+    "eps": 0.02,
+    "min_len": 2,
+    "min_prominence": 0.2,
+    "hold_min_len": 3,
+    "open_level": 0.9
+  },
+  "defaults": {
+    "grasp": {
+      "d_in": 0.055,
+      "d_out": 0.08,
+      "max_lookback": 40,
+      "k_d": 4
+    },
+    "place": {
+      "d_in": 0.055,
+      "d_out": 0.08,
+      "max_lookback": 40,
+      "k_d": 4
+    },
+    "k_confirm": 4
+  },
+  "tasks": {
+    "2": {
+      "slug": "stack_bowls",
+      "cn": "叠碗",
+      "note": "§11.3 底层碗整理为可选步骤, 由是否存在完整开合周期自动决定; 第二次抓取中的小幅短时开合重抓由 detect.min_prominence 过滤",
+      "grasp": {
+        "d_in": 0.055,
+        "d_out": 0.08,
+        "max_lookback": 40,
+        "k_d": 4
+      },
+      "place": {
+        "d_in": 0.055,
+        "d_out": 0.08,
+        "max_lookback": 40,
+        "k_d": 4
+      },
+      "k_confirm": 4
+    }
+  }
+}
