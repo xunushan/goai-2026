@@ -26,7 +26,11 @@ def eval_one_episode_batch(TASK_ENV, model_client):
         model_client.call(func_name="update_obs_batch", obs=obs_list)
         actions = model_client.call(func_name="get_action_batch", obs=env_idx_list)  # Get Action according to observation chunk
 
-        chunk_size = len(actions[0]) # Get the chunk size
+        # 各 env 的 chunk 长度可能不同（PACE 逐 env 选执行视野 h），而 take_action_batch
+        # 要求各 env 步数一致，故取批内最小长度对齐（同论文多臂取最早边界的规则）。
+        # PACE 关闭时各 env 长度恒等于 actions_per_chunk，min 退化为 len(actions[0])，
+        # 与旧行为完全一致。
+        chunk_size = min(len(env_actions) for env_actions in actions) # Get the chunk size
         for action_idx in range(chunk_size): # Iterate over the action chunk
             current_action_list = [env_actions[action_idx] for env_actions in actions] # Get the current action list
             TASK_ENV.take_action_batch(current_action_list, env_idx_list) # Take the action
