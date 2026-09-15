@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""基于末端 XYZ + 夹爪曲线的事件划分 (move / grasp / place)。
+"""基于末端 XYZ + 夹爪曲线的单臂底层状态划分 (move / grasp / place / hold / idle)。
+
+只做**第 1 层**（单臂、任务无关的底层状态, doc §2.1）；第 2 层的任务级事件映射
+（§12, 由两臂状态 + 任务配置映射到唯一任务标签）尚未实现。
 
 方法以 docs/xyz_gripper_event_segmentation.md 为准, 参数来自
 configs/xyz_segment_config.json (不写死在代码里)。流程:
@@ -7,22 +10,23 @@ configs/xyz_segment_config.json (不写死在代码里)。流程:
   ① 夹爪锚点   —— 复用 tools/keyframe_detect.detect_gripper_keyframes (§3.2):
                   close_start(开始闭合) / close_end(闭合结束=hold_start) /
                   open_start(开始张开=hold_end) / open_end(完全张开=open_full)
-  ② XYZ 反查   —— find_approach_start (§6/§9.1): 以动作锚点处的末端位置为参考,
-                  向前找「最后一次离开邻域(D_out)的下一帧」, 再要求其后连续 K_d 帧
-                  落在 D_in 内; 回看不超过 M 帧。
-  ③ 状态机     —— (§8) MOVE_EMPTY/GRASP_APPROACH/GRIP_CLOSING → move/grasp,
-                  MOVE_HOLDING/PLACE_APPROACH/RELEASING → move/place。
-                  抓取区间 = [grasp_start, close_end + K_confirm];
-                  放置区间 = [place_start, open_end + K_confirm]。
-                  open_full == INCOMPLETE(-1) 的周期无真实释放 → 不产生放置区间。
+  ② XYZ 反查   —— find_approach_start (§6/§7 迟滞 + §9.1): 以动作锚点处的末端位置为
+                  参考, 向前找「最后一次离开邻域(D_out)的下一帧」, 再要求其后连续 K_d
+                  帧落在 D_in 内; 回看不超过 M 帧。
+  ③ 状态划分   —— (§8/§9, 优先级 grasp/place > move > hold/idle)
+                  grasp 区间 = [grasp_start, close_end + K_confirm];
+                  place 区间 = [place_start, open_end + K_confirm];
+                  open_full == INCOMPLETE(-1) 的周期无真实释放 → 不产生放置区间;
+                  其余帧按平滑速度分: v > V_static → move;
+                  v <= V_static 且持物(事件历史, 非夹爪开度) → hold; 否则 idle。
 
 产物 (默认 outputs/xyz_segment_<slug>/):
   events_ep<EP>.json     §12 格式的事件区间 + 动作锚点 + 参考位置 (逐臂/逐事件)
-  labels_ep<EP>.csv      逐帧 left_stage / right_stage (move|grasp|place)
-  segment_ep<EP>.png     逐臂预览: 夹爪开度 + 到锚点的距离 + 三类标签色带
+  labels_ep<EP>.csv      逐帧 left_state/right_state (五状态) + left/right_holding
+  segment_ep<EP>.png     逐臂预览: 夹爪开度+到锚点距离 / 平滑速度+V_static / 状态色带
   boundary/              边界帧图片, 按时间命名 (取自三视角合成视频)
   boundary_sheet_ep<EP>.png  边界帧拼图 (标注臂/事件/边界名/时间)
-  summary.json           参数 + 每 episode 事件数/区间长度统计
+  summary.json           参数 + 每 episode 事件数/区间长度/状态占比统计
 
 用法:
     python tools/xyz_gripper_segment.py --task 2 --episodes 200,201,202,203,204,205
@@ -52,9 +56,17 @@ DEFAULT_VIDEO_DIR = ROOT / "outputs" / "episode_insight" / "interactive_sim" / "
 XYZ_SLICE = {"left": slice(0, 3), "right": slice(8, 11)}
 GRIP_IDX = {"left": ke.GRIP_L, "right": ke.GRIP_R}
 SIDES = ("left", "right")
-STAGES = ("move", "grasp", "place")
-STAGE_COLOR = {"move": "#eceff1", "grasp": "#4c78a8", "place": "#e45756"}
-STAGE_CN = {"move": "移动", "grasp": "抓取", "place": "放置"}
+
+# 底层单臂状态 (doc §2.1); move/grasp/place 是旧三标签版本的名字, hold/idle 由
+# 平滑速度 + 持物历史从原 move 里细分出来 (move_v3 = move | hold | idle)。
+STATES = ("move", "grasp", "place", "hold", "idle")
+STATE_COLOR = {"move": "#a8c5e0", "grasp": "#2a78d6", "place": "#e45756",
+               "hold": "#f2a900", "idle": "#e6e9ec"}
+STATE_CN = {"move": "移动", "grasp": "抓取", "place": "放置", "hold": "持物静止", "idle": "空手静止"}
+
+# 动作区间 (grasp/place) 的配色, 与五状态同色系但单独取键名, 避免和 STATES 混用。
+EVENT_COLOR = {"grasp": "#2a78d6", "place": "#e45756"}
+EVENT_CN = {"grasp": "抓取", "place": "放置"}
 
 # 合成视频 (640x720) 分区: 上 640x480 = cam_high, 左下 320x240 = 左腕, 右下 = 右腕。
 # 由 200-205 的区块运动能量与对应臂 |v| 的相关性确认
@@ -135,6 +147,48 @@ def find_approach_start(
 # 状态机: 三标签
 # ---------------------------------------------------------------------------
 
+def smoothed_speed(xyz: np.ndarray, w: int) -> np.ndarray:
+    """末端逐帧速率 (米/帧) 的移动平均平滑。首帧速度为 0。"""
+    v = np.zeros(len(xyz))
+    if len(xyz) > 1:
+        v[1:] = np.linalg.norm(np.diff(xyz, axis=0), axis=-1)
+    if w > 1:
+        v = np.convolve(v, np.ones(w) / w, mode="same")
+    return v
+
+
+def static_runs(v: np.ndarray, v_static: float, k_static: int) -> np.ndarray:
+    """静止掩码: 平滑速度 <= v_static 且连续至少 k_static 帧 (doc §8)。"""
+    still = v <= v_static
+    out = np.zeros(len(v), dtype=bool)
+    i = 0
+    while i < len(v):
+        if still[i]:
+            j = i
+            while j + 1 < len(v) and still[j + 1]:
+                j += 1
+            if j - i + 1 >= k_static:
+                out[i:j + 1] = True
+            i = j + 1
+        else:
+            i += 1
+    return out
+
+
+def holding_history(events: list, side: str, T: int) -> np.ndarray:
+    """持物历史 (doc §8): 有效 grasp 完成(confirm_end)置真, 有效 place 完成后置假。
+
+    place 区间执行期间仍为真 (§12.1 说明), 到 place 结束后才切假。
+    没有配对 place 的周期(未回开 / 无释放)持物保持为真到 episode 末尾。
+    """
+    hold = np.zeros(T, dtype=bool)
+    for g in [e for e in events if e["arm"] == side and e["event"] == "grasp"]:
+        rel = [p["confirm_end"] for p in events
+               if p["arm"] == side and p["event"] == "place" and p["cycle"] == g["cycle"]]
+        hold[g["confirm_end"]: (rel[0] + 1) if rel else T] = True
+    return hold
+
+
 def segment_episode(
     episode_index: int,
     ti: int,
@@ -152,7 +206,7 @@ def segment_episode(
     T = len(state)
     per_side = ke.detect_sides(state, frame, detect_kwargs)
 
-    labels = {s: np.full(T, "move", dtype=object) for s in SIDES}
+    labels = {s: np.full(T, ke.NONE_LABEL, dtype=object) for s in SIDES}
     events: list[dict] = []
     notes: list[str] = []
 
@@ -203,13 +257,28 @@ def segment_episode(
                 "approach_lead_frames": int(t_os - p_start),
             })
 
+    # ---- 底层第 2 步 (doc §8/§9): 剩余帧按平滑速度分 move / hold / idle ----
+    # 优先级 grasp/place > move > hold/idle: grasp/place 已写入, 只处理剩下的帧。
+    # hold vs idle 由持物历史决定, 不能用夹爪开度判断 (不同物体被夹住时稳定开度不同)。
+    speed, holding = {}, {}
+    for s in SIDES:
+        speed[s] = smoothed_speed(state[:, XYZ_SLICE[s]], int(p["speed"]["smooth"]))
+        holding[s] = holding_history(events, s, T)
+        rest = labels[s] == ke.NONE_LABEL      # 未被 grasp/place 覆盖的帧
+        still = static_runs(speed[s], float(p["speed"]["v_static"]),
+                            int(p["speed"]["k_static"]))
+        lab = np.where(still, np.where(holding[s], "hold", "idle"), "move")
+        labels[s] = np.where(rest, lab, labels[s]).astype(object)
+        assert not (labels[s] == ke.NONE_LABEL).any(), "存在未赋状态的帧"
+
     return {"episode_index": episode_index, "task_index": ti, "params": p,
             "events": events, "labels": labels, "per_side": per_side,
+            "speed": speed, "holding": holding,
             "T": T, "frame": frame, "state": state, "notes": notes}
 
 
 def stage_shares(labels: dict, T: int) -> dict:
-    return {s: {k: round(float((labels[s] == k).mean() * 100), 2) for k in STAGES}
+    return {s: {k: round(float((labels[s] == k).mean() * 100), 2) for k in STATES}
             for s in SIDES}
 
 
@@ -247,29 +316,33 @@ def _setup_mpl():
 
 
 def plot_segment(res: dict, task_name: str, out_path: Path) -> None:
-    """4 行: [左臂 夹爪+距离] [左臂 标签带] [右臂 夹爪+距离] [右臂 标签带]。"""
+    """6 行 (每臂 3 行): [夹爪+到锚点距离] [平滑速度 + V_static] [五状态色带]。"""
+
     plt = _setup_mpl()
     T, labels, per_side = res["T"], res["labels"], res["per_side"]
     state, frame = res["state"], res["frame"]
     x = np.arange(T)
 
     fig, axes = plt.subplots(
-        4, 1, figsize=(14, 9), sharex=True,
-        gridspec_kw={"height_ratios": [1.5, 0.30, 1.5, 0.30]})
+        6, 1, figsize=(14, 11.2), sharex=True,
+        gridspec_kw={"height_ratios": [1.35, 0.75, 0.26] * 2})
     fig.suptitle(
         f"{task_name}  episode {res['episode_index']}  ({T} frames)   "
-        f"事件划分: 移动/抓取/放置   D_in={res['params']['grasp']['d_in']} "
-        f"D_out={res['params']['grasp']['d_out']} "
-        f"M={res['params']['grasp']['max_lookback']}/{res['params']['place']['max_lookback']} "
-        f"K_d={res['params']['grasp']['k_d']} K_confirm={res['params']['k_confirm']}",
-        fontsize=11, y=0.975)
+        f"单臂底层状态: 移动/抓取/放置/持物静止/空手静止\n"
+        f"grasp D_in={res['params']['grasp']['d_in']} D_out={res['params']['grasp']['d_out']} "
+        f"M={res['params']['grasp']['max_lookback']}   "
+        f"place D_in={res['params']['place']['d_in']} D_out={res['params']['place']['d_out']} "
+        f"M={res['params']['place']['max_lookback']}   "
+        f"K_d={res['params']['grasp']['k_d']} K_confirm={res['params']['k_confirm']}   "
+        f"V_static={res['params']['speed']['v_static']} K_static={res['params']['speed']['k_static']}",
+        fontsize=10, y=0.985)
 
     # keyframe_detect 的锚点名 → 本文档 §3.2 的锚点名
     anchors = {k: (c, ls, f"{k} = 文档 {cn}") for k, c, ls, cn in kd.KEYFRAME_STYLES
                for cn in [{"close_start": "close_start", "hold_start": "close_end",
                            "hold_end": "open_start", "open_full": "open_end"}[k]]}
 
-    for row, s in ((0, "left"), (2, "right")):
+    for row, s in ((0, "left"), (3, "right")):
         ax = axes[row]
         col = kd.C_LEFT if s == "left" else kd.C_RIGHT
         grip = state[:, GRIP_IDX[s]]
@@ -301,9 +374,10 @@ def plot_segment(res: dict, task_name: str, out_path: Path) -> None:
         for ev in [e for e in res["events"] if e["arm"] == s]:
             is_g = ev["event"] == "grasp"
             ax.axvspan(ev["approach_start"], ev["confirm_end"],
-                       color=STAGE_COLOR[ev["event"]], alpha=0.13)
-            ax.annotate(f"{'抓取' if is_g else '放置'} lead={ev['approach_lead_frames']}f",
-                        xy=(ev["approach_start"], 1.02), fontsize=7.5, color=STAGE_COLOR[ev["event"]],
+                       color=EVENT_COLOR[ev["event"]], alpha=0.13)
+            ax.annotate(f"{EVENT_CN[ev['event']]} lead={ev['approach_lead_frames']}f",
+                        xy=(ev["approach_start"], 1.02), fontsize=7.5,
+                        color=EVENT_COLOR[ev["event"]],
                         rotation=0, ha="left", va="bottom")
         handles = [plt.Line2D([], [], color=c, ls=ls, lw=1.4, label=lbl)
                    for c, ls, lbl in anchors.values()]
@@ -311,26 +385,52 @@ def plot_segment(res: dict, task_name: str, out_path: Path) -> None:
                     plt.Line2D([], [], color="#5f5f5f", lw=1.2, ls=":", label="到锚点距离")]
         ax.legend(handles=handles, loc="upper right", fontsize=7.5, ncol=3, framealpha=0.9)
 
-        axb = axes[row + 1]
+        # 平滑速度 + V_static（doc §8 分 move / hold / idle 的依据）
+        axs = axes[row + 1]
+        axs.fill_between(x, 0, res["params"]["speed"]["v_static"], color="#f2a900", alpha=0.18)
+        axs.plot(x, res["speed"][s], color="#4a4a4a", lw=1.1, label=f"{s} 平滑速率")
+        axs.axhline(res["params"]["speed"]["v_static"], color="#c0392b", lw=0.9, ls="--",
+                    label=f"V_static={res['params']['speed']['v_static']}")
+        axs.set_ylabel("速率 (m/帧)", fontsize=8)
+        axs.set_ylim(bottom=0)
+        axs.grid(True, lw=0.5)
+        axs.legend(loc="upper right", fontsize=7, ncol=2, framealpha=0.9)
+
+        # 五状态色带
+        axb = axes[row + 2]
         vals = labels[s]
-        for k in STAGES:
-            idx = np.flatnonzero(vals == k)
-            if idx.size:
-                axb.broken_barh([(int(idx[0]), int(idx[-1]) - int(idx[0]) + 1)],
-                                (0, 1), facecolors=STAGE_COLOR[k])
+        for k in STATES:
+            for a_, b_ in _runs_of(vals, k):
+                axb.broken_barh([(a_, b_ - a_)], (0, 1), facecolors=STATE_COLOR[k])
         for m in np.flatnonzero(vals[1:] != vals[:-1]) + 1:
             axb.axvline(int(m), color="#ffffff", lw=0.8)
         axb.set_ylim(0, 1)
         axb.set_yticks([])
-        axb.set_ylabel(f"{s}\n标签", fontsize=8, rotation=0, ha="right", va="center")
+        axb.set_ylabel(f"{s}\n状态", fontsize=8, rotation=0, ha="right", va="center")
         axb.grid(False)
 
-    axes[3].set_xlabel("frame_index")
-    handles = [plt.Line2D([], [], color=STAGE_COLOR[k], lw=8, label=STAGE_CN[k]) for k in STAGES]
-    fig.legend(handles=handles, loc="lower center", ncol=3, fontsize=9, frameon=False)
-    fig.tight_layout(rect=(0, 0.035, 1, 0.955))
+    axes[5].set_xlabel("frame_index")
+    handles = [plt.Line2D([], [], color=STATE_COLOR[k], lw=8, label=STATE_CN[k]) for k in STATES]
+    fig.legend(handles=handles, loc="lower center", ncol=5, fontsize=9, frameon=False)
+    fig.tight_layout(rect=(0, 0.028, 1, 0.955))
     fig.savefig(out_path)
     plt.close(fig)
+
+
+def _runs_of(seq: np.ndarray, value: str) -> list[tuple[int, int]]:
+    """seq 中连续等于 value 的区段 [start, end)。"""
+    m = seq == value
+    out, i = [], 0
+    while i < len(m):
+        if m[i]:
+            j = i
+            while j + 1 < len(m) and m[j + 1]:
+                j += 1
+            out.append((i, j + 1))
+            i = j + 1
+        else:
+            i += 1
+    return out
 
 
 def plot_boundary_sheet(rows: list, out_path: Path, episode_index: int, fps: float) -> None:
@@ -350,9 +450,9 @@ def plot_boundary_sheet(rows: list, out_path: Path, episode_index: int, fps: flo
         for j in (0, 1):
             axes[i, j].set_xticks([]); axes[i, j].set_yticks([])
             for sp in axes[i, j].spines.values():
-                sp.set_color(STAGE_COLOR[r["event"]]); sp.set_linewidth(2.2)
+                sp.set_color(EVENT_COLOR[r["event"]]); sp.set_linewidth(2.2)
         axes[i, 1].set_title(
-            f"{r['side']}  {STAGE_CN[r['event']]}  {r['boundary']}   "
+            f"{r['side']}  {EVENT_CN[r['event']]}  {r['boundary']}   "
             f"t={r['frame'] / fps:.3f}s (frame {r['frame']})",
             fontsize=9, pad=3)
     fig.tight_layout(rect=(0, 0, 1, 0.99))
@@ -421,7 +521,7 @@ def main() -> None:
     ap.add_argument("--no-video", action="store_true", help="不导出边界帧图片")
     ap.add_argument("--no-plot", action="store_true")
     ap.add_argument("--dataset-label-dir", default=None,
-                    help="把「每 episode 左右臂锚点帧 + 逐帧三类标签」落盘到该数据集子目录供复用"
+                    help="把「每 episode 左右臂锚点帧 + 逐帧五状态」落盘到该数据集子目录供复用"
                          " (如 data/sim_lerobot_v30_ee/xyz_segment); 不给则只在 outputs/ 出图")
     args = ap.parse_args()
 
@@ -468,7 +568,9 @@ def main() -> None:
         pd.DataFrame({
             "episode_index": ep, "frame_index": frame,
             "timestamp": np.round(np.asarray(frame, dtype=float) / fps, 4),
-            "left_stage": res["labels"]["left"], "right_stage": res["labels"]["right"],
+            "left_state": res["labels"]["left"], "right_state": res["labels"]["right"],
+            "left_holding": res["holding"]["left"].astype(int),
+            "right_holding": res["holding"]["right"].astype(int),
         }).to_csv(out_dir / f"labels_ep{ep}.csv", index=False)
 
         # ---- 预览图 ----
@@ -479,7 +581,11 @@ def main() -> None:
         rows = boundary_frames(res["events"], res["T"])
         n_png = 0
         if not args.no_video:
-            vid = Path(args.video_dir) / f"{slug}_{ep}.mp4"
+            # 合成视频命名不统一: fill 用 3 位补零 (fill_pen_holder_000.mp4),
+            # plug/stack 用原样 (plug_in_charger_145.mp4)。两种都试。
+            cands = [Path(args.video_dir) / f"{slug}_{ep}.mp4",
+                     Path(args.video_dir) / f"{slug}_{ep:03d}.mp4"]
+            vid = next((c for c in cands if c.exists()), cands[0])
             imgs = read_video_frames(vid, {r["frame"] for r in rows})
             if not imgs:
                 print(f"  [warn] 未找到/无法解码合成视频: {vid} (跳过边界帧导出)")
@@ -501,7 +607,11 @@ def main() -> None:
         ds_labels.append(pd.DataFrame({
             "episode_index": ep, "frame_index": frame,
             "timestamp": np.round(np.asarray(frame, dtype=float) / fps, 4),
-            "left_stage": res["labels"]["left"], "right_stage": res["labels"]["right"],
+            "left_state": res["labels"]["left"], "right_state": res["labels"]["right"],
+            # 持物历史是第 2 层映射的显式入参 (doc §12.1 map_fill_pen_holder(left, right,
+            # left_holding, right_holding)), 故与状态一并落盘供复用
+            "left_holding": res["holding"]["left"].astype(int),
+            "right_holding": res["holding"]["right"].astype(int),
         }))
 
         # ---- 汇总 ----
@@ -512,7 +622,9 @@ def main() -> None:
                                   if e["event"] == "grasp"],
             "place_lead_frames": [e["approach_lead_frames"] for e in res["events"]
                                   if e["event"] == "place"],
-            "stage_share_pct": stage_shares(res["labels"], res["T"]),
+            "state_share_pct": stage_shares(res["labels"], res["T"]),
+            "holding_share_pct": {s: round(float(res["holding"][s].mean() * 100), 2)
+                                  for s in SIDES},
             "n_boundary_stills": n_png,
             "notes": res["notes"],
         }
@@ -521,8 +633,8 @@ def main() -> None:
         for s in SIDES:
             print(f"  {s:5s} 标签: {rle(res['labels'][s])}")
             print(f"        {s:5s} 占比: " + "  ".join(
-                f"{STAGE_CN[k]}={summary['episodes'][str(ep)]['stage_share_pct'][s][k]:5.1f}%"
-                for k in STAGES))
+                f"{STATE_CN[k]}={summary['episodes'][str(ep)]['state_share_pct'][s][k]:5.1f}%"
+                for k in STATES))
         for e in res["events"]:
             key = "close_start" if e["event"] == "grasp" else "open_start"
             print(f"  {e['arm']:5s} {e['event']:5s} cyc{e['cycle']}: "
@@ -544,7 +656,7 @@ def main() -> None:
         anch.to_csv(dl / f"gripper_anchors_task{tag}.csv", index=False)
         labels = pd.concat(ds_labels, ignore_index=True).sort_values(
             ["episode_index", "frame_index"]).reset_index(drop=True)
-        labels.to_csv(dl / f"stage_labels_task{tag}.csv", index=False)
+        labels.to_csv(dl / f"arm_states_task{tag}.csv", index=False)
         (dl / f"meta_task{tag}.json").write_text(json.dumps({
             "generated_from": "tools/xyz_gripper_segment.py",
             "method": "docs/xyz_gripper_event_segmentation.md",
@@ -554,11 +666,15 @@ def main() -> None:
                 "gripper_anchors": "每臂每抓取周期一行的锚点帧 (close_start/close_end/"
                                    "open_start/open_end) + 本方案事件区间 (grasp_*/place_*) "
                                    "+ 参考位置; -1 = 不适用/未回开",
-                "stage_labels": "逐帧三分类 left_stage/right_stage ∈ {move, grasp, place}",
+                "arm_states": "逐帧单臂底层状态 left_state/right_state ∈ "
+                              "{move, grasp, place, hold, idle} (doc §2.1/§8)",
+                "layer2": "任务级事件映射 (§12) 未实现, 本表不含 left_event/right_event",
+                "holding": "left_holding/right_holding = 持物历史 (§8): 有效 grasp 完成后置 1, "
+                           "配对 place 结束后置 0; 是 §12 映射的显式入参, 不是夹爪开度",
             }}, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
         print(f"\n数据集标签目录: {dl}  "
               f"(gripper_anchors_task{tag}.csv: {len(anch)} 行锚点, "
-              f"stage_labels_task{tag}.csv: {len(labels)} 帧)")
+              f"arm_states_task{tag}.csv: {len(labels)} 帧)")
 
     print(f"产物目录: {out_dir}")
 
