@@ -9,9 +9,12 @@
 #   groups_csv   要评的组，逗号分隔 task:seed，如 stack_bowls:0
 #
 # 流程：快照 deploy.yml -> 按 views/model_class 改写并回读校验 -> 每个 ckpt 起一次
-# 策略服务（screen）-> 逐个 (ckpt,task,seed) 跑 eval-num 8 的 smoke -> 结果 stage 到
+# 策略服务（screen）-> 逐个 (ckpt,task,seed) 跑 eval-num 的 smoke -> 结果 stage 到
 # /tmp/eval_stage/<model>/<ckpt>_<task>_s<seed>.json。幂等：stage 文件已存在则跳过。
 # 仅 staging，不写 DB（入库由智能体按 checkpoint-sim-eval 铁律执行）。
+#
+# 环境变量 EVAL_NUM 可覆盖每组的 episode 数（默认 8，正式评测口径）。eval_num 小于
+# sim 的 num_envs 时由 eval_env.reset 把多余 env 位补 None 并跳过，只跑真实 episode。
 set -uo pipefail
 
 MODEL="$1"
@@ -27,7 +30,7 @@ DEPLOY="${ROBO}/XPolicyLab/policy/X_VLA/deploy.yml"
 LOG_DIR=/data/outputs
 STAGE="/tmp/eval_stage/${MODEL}"
 PORT=6000
-EVAL_NUM=8
+EVAL_NUM="${EVAL_NUM:-8}"
 
 mkdir -p "${STAGE}" "${LOG_DIR}"
 SELFLOG="${LOG_DIR}/${MODEL}_eval_run_$(date +%Y%m%d_%H%M%S).log"
