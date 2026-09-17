@@ -28,8 +28,9 @@ uncalibrated pixel-to-world calculations. Their apparent precision is misleading
 
 Use `view_image` only for a specific older cached frame when the current views and
 text history leave one concrete ambiguity. Inspect at most two such frames, once
-each, then decide. Use the shell only to list or read those explicitly named image
-files; do not explore the repository or read source code, config, task cards,
+each, then decide. Use only an exact absolute cache path supplied in the turn;
+never guess a filename, vary its step/request id, or enumerate the cache. Do not
+use shell to locate images. Do not explore the repository or read source code, config, task cards,
 README files, `rollout.jsonl`, or another episode. Write any necessary temporary
 artifact only under the current episode's `scratch/`, never `/tmp`. Tool use must
 support the immediate motion decision, not become a separate vision pipeline.

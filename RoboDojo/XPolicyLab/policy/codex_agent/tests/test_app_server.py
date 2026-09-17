@@ -100,6 +100,15 @@ def test_required_skills_are_discovered_from_workspace_paths() -> None:
         }
 
 
+def test_skill_body_is_embedded_in_thread_instructions() -> None:
+    server = CodexAppServer(workspace=WORKSPACE)
+    instructions = server._base_instructions()
+    assert "BEGIN REQUIRED SKILL codex_agent" in instructions
+    assert "Deciding the next motion" in instructions
+    assert "do not call shell to read them" in instructions
+    assert "never construct, guess, probe, or enumerate image paths" in instructions
+
+
 def test_observations_are_grouped_by_camera_then_step() -> None:
     with tempfile.TemporaryDirectory(prefix="policy-observations-test-") as directory:
         record_dir = Path(directory)
@@ -181,6 +190,8 @@ def test_failed_image_turns_still_trigger_rotation() -> None:
 
 def test_rollover_replays_all_text_and_only_latest_images() -> None:
     state = object.__new__(BridgeState)
+    state.workspace = WORKSPACE
+    state.episode_id = "ep-test"
     state.history = [
         {
             "observation_text": f"observation-{index}",
@@ -203,6 +214,7 @@ def test_rollover_replays_all_text_and_only_latest_images() -> None:
         assert f"observation-{index}" in text
         assert f"evidence-{index}" in text
     assert sum(item["type"] == "image" for item in items) == 1
+    assert str(WORKSPACE / "output/ep-test/observations/cam_head/000000.jpg") in text
 
 
 def test_live_app_server_tool_and_skill_isolation() -> None:
@@ -286,6 +298,7 @@ def test_timeout_interrupts_turn_and_discards_only_thread() -> None:
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
     test_required_skills_are_discovered_from_workspace_paths()
+    test_skill_body_is_embedded_in_thread_instructions()
     test_observations_are_grouped_by_camera_then_step()
     test_images_and_three_turn_rotation()
     test_failed_image_turns_still_trigger_rotation()

@@ -149,9 +149,16 @@ class BridgeState:
         }]
         for entry in self.history:
             items.append({"type": "text", "text": entry["observation_text"]})
+            exact_paths = [
+                str(record.episode_dir(self.workspace, str(self.episode_id)) / path)
+                for path in entry["image_paths"]
+            ]
             items.append({
                 "type": "text",
-                "text": "Historical image cache: " + ", ".join(entry["image_paths"]),
+                "text": (
+                    "Historical image cache (only these exact paths may be viewed): "
+                    + ", ".join(exact_paths)
+                ),
             })
             for name, url in entry["images"]:
                 items.append({"type": "text", "text": f"Historical camera image: {name}"})
