@@ -1,37 +1,61 @@
-# codex_bridge — the local half of `codex_agent`
+# codex_bridge — the policy service for `codex_agent`
 
-The `codex_agent` policy is a **stateful Codex thread**. The policy server runs
-on the GPU machine, but the Codex CLI and its credentials live on the operator's
-Mac, so this small HTTP server sits in between: it owns the Codex subprocess,
-remembers the thread id across turns, and answers the policy server over the
-tunnel.
+`codex_agent` is a **stateful Codex session**: one thread that sees a picture of
+the robot, says where to move next, sees the result, and decides again. The policy
+server runs on the GPU machine, but the Codex CLI and its credentials live on the
+operator's Mac, so this small HTTP server sits in between.
 
 ```
 Mac                                        GPU machine
-┌──────────────────────────┐               ┌──────────────────────────────┐
-│ codex_bridge :8765       │               │ codex_agent policy server    │
-│   └ codex exec / resume  │◄── ssh -R ────┤   └ dials localhost:8765     │
-│     (gpt-6-astra)        │               │       sim client (ws://…)    │
-└──────────────────────────┘               └──────────────────────────────┘
+┌────────────────────────────────────┐     ┌──────────────────────────────────┐
+│ codex_bridge :8765                 │     │ codex_agent policy server        │
+│   └ codex app-server --stdio       │◄─R──┤   └ dials localhost:8765         │
+│     cwd = codex_agent/workspace    │     │       sim client (ws://…)        │
+└────────────────────────────────────┘     └──────────────────────────────────┘
 ```
 
-Everything below runs **on the Mac**. Two processes: the bridge, and a tunnel.
+The division of labour is the point of the layout. **The GPU side owns strategy**:
+it reads the simulator, enforces the guardrail, turns an accepted target into an
+action chunk, and accounts for the step budget. **This service owns transport**:
+it turns a structured observation into one turn of text, hands the images through
+unchanged, and writes down what happened. It holds no policy text — the embodiment
+contract is `workspace/AGENTS.md` and the decision procedure is
+`workspace/.agents/skills/codex_agent/SKILL.md`, both read by Codex itself.
+
+Everything below runs **on the Mac**, inside `codex_agent/`. Two processes: the
+bridge, and a tunnel.
 
 ## 1. Start the bridge
 
 ```bash
-cd RoboDojo/XPolicyLab/policy/codex_agent/bridge
-python3 server.py --quiet
+cd RoboDojo/XPolicyLab/policy/codex_agent
+/Applications/ChatGPT.app/Contents/Resources/codex --version   # see the version note below
+python3 -m bridge.bridge --quiet
 ```
 
-Defaults: binds `127.0.0.1:8765`, Codex at
-`/Applications/ChatGPT.app/Contents/Resources/codex`, model read from
-`~/.codex/config.toml`, read-only sandbox, 75 s per turn (90 s for the first,
-which pays the CLI's cold start). Useful flags: `--model`, `--reasoning-effort`,
-`--port`, `--token`, `--runs-dir`, `--workdir`, `--timeout-s`.
+Run it **from `codex_agent/`**: the package is imported as `bridge.*`, and
+`--workspace` defaults to `codex_agent/workspace`, resolved relative to this
+package rather than to the current directory. Pass `--workspace` only if the
+workspace lives somewhere else.
 
-Nothing but a tunnel can reach it: the bind address is loopback, and the sandbox
-is read-only, so a confused model cannot edit files on the Mac.
+`--codex-bin` defaults to `codex` on `PATH`. On a Mac with the ChatGPT app the CLI
+is inside the bundle and there is no `codex` on `PATH`, so either pass
+`--codex-bin /Applications/ChatGPT.app/Contents/Resources/codex` or put a symlink
+on `PATH`.
+
+Defaults: binds `127.0.0.1:8765`, 75 s per decision (90 s for the one that opens a
+thread, which also has to read the workspace), and rotation every 8 image-bearing
+turns. Useful flags: `--model`, `--reasoning-effort`, `--port`, `--token`,
+`--workspace`, `--max-live-image-turns`, `--timeout-s`, `--timeout-first-turn-s`.
+
+`python3 -m bridge.bridge --help` is the authority on the flag list; there is no
+config file.
+
+**Version note.** This bridge speaks `codex app-server --stdio`, the JSON-RPC
+protocol behind the app server. `app-server` is marked `[experimental]` in
+`codex --help`, so the protocol can move between CLI versions. Verified against
+`codex-cli 0.154.0-alpha.6.2`. Re-check after upgrading the CLI; the failure mode
+of a changed protocol is a bridge that starts and then fails every turn.
 
 ## 2. Open the tunnel
 
@@ -59,8 +83,7 @@ budget on holds and scores zero.
 ## 3. Point the policy server at it
 
 Nothing to do when the port is 8765. To use a different host or port, start the
-policy server with `CODEX_BRIDGE_URL` set (it is forwarded as a `bridge_url`
-override):
+policy server with `CODEX_BRIDGE_URL` set:
 
 ```bash
 export CODEX_BRIDGE_URL=http://localhost:9000
@@ -71,74 +94,139 @@ Precedence: `CODEX_BRIDGE_URL` → flat `bridge_url` in `deploy.yml` →
 
 ## HTTP contract
 
-`GET /healthz` → `{ok, model, codex_bin, workdir, runs_dir, timeout_s, stats}`.
+`GET /healthz` → `{ok, model, reasoning_effort, codex_bin, workspace, episode_id,
+cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, stats}`.
 
-`POST /v1/decide`
+`POST /v1/decide` — one observation in, one decision out:
 
 ```jsonc
 {
   "episode_id": "ep-1",
-  "thread_id": null,            // null on the first turn; the bridge creates and returns one
-  "turn_index": 0,
-  "prompt": "…",                // the turn prompt; the system prompt rides in it too
-  "schema": { … },              // optional JSON schema for --output-schema
-  "images": [{"name": "cam_head", "format": "jpeg", "b64": "…"}]
+  "request_id": "ep-1-000042",        // identifies this turn in the log; retries reuse it
+  "step_id": 42,                      // simulator step the observation was taken at
+  "turn_index": 41,                   // 0-based decision counter
+  "task": {"instruction": "…", "scene": "…", "success_rule": "…", "hints": ["…"]},
+  "budget": {"max_decisions": 100, "max_sim_steps": 550,
+             "remaining_decisions": 59, "remaining_steps": 320},
+  "observation": {
+    "left":  {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0},
+    "right": {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0}
+  },
+  "feedback": ["…"],                  // prose about the previous decision, written on the GPU side
+  "images": [{"name": "cam_head", "mime": "image/jpeg", "b64": "…"}]
 }
 ```
 
-Images are validated by **magic bytes**, not by the declared `format`, so a
-truncated payload is rejected with `bad_request` instead of reaching Codex as a
-corrupt attachment. Per-image and total size caps apply.
+`orientation` is radians, already resolved against the episode's start pose by the
+adapter — the bridge never sees a quaternion and does no frame maths, so the one
+implementation of "relative to home" stays on the side that owns the pose.
 
-→ `200 {ok, thread_id, parsed, text, usage, latency_ms, runs_dir, error_kind, timed_out}`
+Two checks on the way in. Images are validated by **magic bytes**, not by the
+declared `mime`, so a truncated payload is rejected rather than reaching Codex as
+a corrupt attachment; and the `images[].name` list must equal the camera list
+`workspace/AGENTS.md` names, in order, because the turn text lists those views by
+name and a mismatch would hand the model three pictures under labels that
+contradict them.
 
-`parsed` is the decision object the model produced, already stripped of fences
-and prose. `thread_id` must be echoed back on the next turn — that is what makes
-the agent stateful across processes. Failures come back as `{ok: false,
-error_kind, error, …}` with `502` for Codex-side problems and `500` for bridge
-bugs; either way the policy server degrades to a hold rather than raising.
+→ `200 {ok, request_id, decision, note, phase, usage, latency_ms, record_dir}`
 
-`error_kind` values, as the bridge reports them: `codex_timeout`,
-`codex_unparseable` (a reply that is prose, not a JSON object),
-`codex_empty_reply`, `codex_failed`, `codex_spawn_failed`, `thread_not_found`,
-`bad_request`, `bridge_internal_error`. The client adds two of its own for
-trouble that happens before a reply exists: `bridge_unreachable` and
-`bridge_bad_response`. `bad_request` arrives as `400` with the reason spelled
-out; everything else from Codex arrives as `502`. A stale `thread_id`
-(`thread_not_found`) is rebuilt once from scratch.
+```jsonc
+"decision": {
+  "left":  {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0},
+  "right": "keep",
+  "note": "moving the left arm towards the socket",
+  "phase": "reach"
+}
+```
 
-## Audit trail
+`decision` is the object the model produced, already stripped of fences and prose,
+in exactly the shape the adapter's `protocol.parse_decision` understands:
+`"keep"`, a 3-element or 4-element list, or `{"quat": [w, x, y, z]}` per component.
 
-Every turn is written to `~/codex_bridge/runs/<episode_id>/turn_NNN/`:
+Failures come back as `{ok: false, error_kind, error, latency_ms, record_dir}` with
+`400` for a request we will not act on, `504` for a timeout, `502` for anything
+that went wrong behind us, and `500` for a bridge bug. **Every path returns an
+HTTP response** — the episode degrades to a hold rather than hanging, because a
+120 s websocket timeout on the eval client discards the whole episode.
 
-| file | contents |
+| `error_kind` | meaning |
 | --- | --- |
-| `prompt.txt` | exactly what the model was asked |
-| `images/` | the JPEGs that were attached |
-| `stdout.jsonl` | the raw `--json` event stream |
-| `last_message.txt` | Codex's final message |
-| `result.json` | parsed decision, usage, latency, errors |
+| `bad_request` | the packet is malformed; the reason is spelled out |
+| `bridge_internal_error` | a bug in the bridge |
+| `policy_timeout` | no final answer inside the wall clock |
+| `policy_overloaded` | `serverOverloaded`; retryable |
+| `policy_usage_exhausted` | `usageLimitExceeded`; not retryable |
+| `policy_turn_failed` | the turn ended in a failure status |
+| `policy_invalid_response` | the turn completed with no parseable JSON object |
+| `app_server_closed` | the subprocess died or its stdout ended |
+| `app_server_start_failed` | the subprocess could not be launched |
+| `app_server_not_bound` | no episode bound, so no workspace to run in |
+| `app_server_protocol` | a response that does not fit the protocol |
+| `app_server_rpc` | the server answered a request with an error |
 
-These are the primary debugging artefact for a failed episode: read the
-`result.json` chain to see what the model decided and why, without spending
-another call.
+`policy_overloaded` and `policy_usage_exhausted` are kept distinct on purpose: the
+adapter retries the first and gives up on the second. The client adds two kinds of
+its own for trouble that happens before a reply exists: `bridge_unreachable` and
+`bridge_bad_response`.
+
+## The workspace and the audit trail
+
+`workspace/` is the Codex workspace: `AGENTS.md`, the skill, and `.codex/config.toml`
+for a human running `codex` by hand. The bridge does not rely on that config file —
+a project-local `.codex/config.toml` is only honoured once the workspace is trusted,
+so the bridge passes the same permissions with `-c` at launch:
+
+- read the workspace and `output/`;
+- write `output/<episode>/scratch/`, and nothing else;
+- `shell_tool` and `view_image` enabled; `web_search`, `computer_use`,
+  `multi_agent`, `multi_agent_v2` disabled.
+
+Because permissions are fixed when the process starts, **a new episode means a new
+process** — the write scope names the episode directory. Episodes run serially, so
+that happens once per episode rather than once per decision.
+
+Everything the bridge receives is written down under `workspace/output/<episode_id>/`:
+
+| path | contents |
+| --- | --- |
+| `rollout.jsonl` | one line per turn: request ids, the decision, usage, latency, errors |
+| `observations/NNNNNN_<request_id>/<camera>.<jpg\|png>` | the images, **byte for byte as received** |
+| `scratch/` | the one place the model may write |
+
+Images are stored at the resolution they arrived in: nothing is cropped, rescaled
+or re-encoded, so a recorded episode is evidence of exactly what the model was
+shown rather than a lossy copy of it. The suffix comes from the sniffed magic
+bytes. Re-sending a `request_id` with identical bytes is an idempotent retry;
+re-sending it with *different* bytes is refused rather than overwriting evidence.
+A failed turn still gets a line, and it carries no `decision` — an invented action
+in the log would be indistinguishable from one the model actually chose.
+
+Reading a failed episode back is the point of all this: `rollout.jsonl` shows what
+the model decided and why, without spending another call.
+
+## Thread rotation
+
+The model remembers its own thread, and images accumulate in it with no way to
+delete them. After `--max-live-image-turns` image-bearing turns (8 by default, the
+same window the reference controller uses) the thread is dropped and a new one is
+opened, with the earlier decisions replayed as **words**: turn number, phase and
+note, up to 8 of them. Dropping the thread and replaying text is the only
+mechanism available for forgetting images. `0` disables rotation.
+
+The thread itself never crosses the network. The adapter sends an episode id; the
+bridge decides whether that is the id the current thread was opened for. A caller
+that has to round-trip a thread id is a caller that can send back the wrong one.
 
 ## Operational notes
 
-- **Timeout doubles as the kill switch.** Codex runs in its own session
-  (`start_new_session`); on timeout the whole group gets SIGTERM, then SIGKILL
-  after 2 s. A turn that overruns still produces an HTTP response — the episode
-  degrades to a hold, it never hangs. The 120 s websocket timeout on the eval
-  client is the real ceiling, so bridge timeouts (75 s / 90 s) stay well inside
-  it.
-- **One thread per episode.** The policy server sends `thread_id: null` when the
-  simulator reports a new `episode_idx`; the bridge creates a fresh thread and
-  the old thread is simply dropped.
-- **Quota.** Each decision is one real Codex call and they are expensive (~25-30 s,
-  substantial tokens). The policy allows at most `episode.max_codex_calls`
-  (15 in the shipped `deploy.yml`) per episode. Nothing in `tests/` calls Codex — `tests/fake_codex`
-  stands in for the CLI and `tests/mock_bridge.py` stands in for this server — so
-  the allowance is spent only on real runs.
+- **Timeout doubles as the kill switch.** The App Server runs in its own session
+  (`start_new_session`); on timeout the whole group gets SIGTERM, then SIGKILL.
+  The 120 s websocket timeout on the eval client is the real ceiling, so bridge
+  timeouts (75 s / 90 s) stay well inside it.
+- **Quota.** Each decision is one real Codex call, and a full episode at 100 calls
+  is 45-50 minutes. Nothing in `tests/` calls Codex: `tests/fake_app_server` stands
+  in for the CLI and `tests/mock_bridge.py` stands in for this server, so the
+  allowance is spent only on real runs.
 - **Token.** With `--token` (or `CODEX_BRIDGE_TOKEN`) every request must carry
   `X-Bridge-Token`; the policy server reads the same variable. Optional on a
   reverse tunnel, since the bridge is loopback-only on both ends.

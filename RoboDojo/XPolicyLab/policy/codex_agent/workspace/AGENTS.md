@@ -23,28 +23,18 @@ Read it and follow it.
   command it. The jaws are below that point, so the reference point stays above an
   object even while the jaws are around it. Do not treat the reference point as the
   part of the arm that meets the table.
-- "orientation" is yaw, pitch and roll in radians, RELATIVE to the pose the arms
-  held at this episode's first decision. That start pose already points the gripper
-  straight down, so [0, 0, 0] is the natural pose for picking something up off the
-  table; tip it only when the task forces it. A tilt of more than a few tenths of a
-  radian is a lot.
+- "orientation" is the absolute end-effector quaternion `[w, x, y, z]` in the
+  world frame.
 - The gripper is a single number on a scale where 1.00 is fully open. "close" drives
   the jaws together until they meet whatever is between them, so after a close the
   number you observe tells you how wide that object is. Open the jaws wider than the
   object before closing them on it.
 
-## START POSE
-
-Both arms begin every episode in the same pose. That pose is what the arm state
-reports on the first decision of the episode: read it then, and note it, because it
-is also the reference that "orientation" is measured from.
-
 ## PER-DECISION LIMIT
 
-Each decision may move an arm at most 0.05 m and rotate it at most 0.35 rad away
-from the pose it is in when the decision is taken. This is the controller's limit,
-not advice: a larger jump is refused before it is carried out, the arm does not
-move at all, and the decision still counts against your budget.
+Keep each requested target within 0.05 m and 0.35 rad of that arm's currently
+measured pose. This is the motion scale the policy must follow when choosing its
+next target; plan longer travel as multiple observation-driven decisions.
 
 ## WHAT A DECISION DOES NOT TELL YOU
 

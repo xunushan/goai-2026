@@ -1,11 +1,3 @@
-# codex_agent: a stateful local Codex thread (gpt-6-astra) acting as the
-# high-level policy. It emits target end-effector poses; the interpolator in
-# motion.py turns them into action chunks. No checkpoint, no GPU, no torch.
-#
-# The Codex CLI itself runs on the operator's Mac (see bridge/), reached over an
-# SSH reverse tunnel. `bridge_url` is the flat override that
-# setup_eval_policy_server.sh can set; CODEX_BRIDGE_URL in the environment wins.
-
 policy_name: codex_agent
 protocol: ws
 host: localhost
@@ -13,103 +5,32 @@ bench_name: null
 task_name: stack_blocks
 env_cfg_type: null
 seed: null
-eval_batch: false          # one episode == one Codex thread, so single-env only
+eval_batch: false
 
 action_type: ee
-
 port: 6000
 
-# May be overridden by CODEX_BRIDGE_URL or --overrides bridge_url=...
+# The GPU policy service reaches the local bridge through the reverse tunnel.
+# CODEX_BRIDGE_URL or the flat bridge_url override takes precedence.
 bridge_url: http://localhost:8765
-
 bridge:
-  base_url: http://localhost:8765
-  # healthz probe; distinguishes "bridge down" from "Codex slow". The probe
-  # traverses the reverse SSH tunnel, so it pays an sshd channel-open round trip
-  # on top of the Mac's own latency -- 5 s was short enough that a busy GPU box
-  # read as "bridge down" and the whole episode degraded to holds. It runs only
-  # while thread_id is None, so probe + request_timeout_first_turn_s must still
-  # stay under the eval client's hard 120 s.
-  connect_timeout_s: 10
-  request_timeout_s: 95       # per-turn HTTP budget once the thread exists
-  request_timeout_first_turn_s: 105
-  decision_wall_budget_s: 110 # hard ceiling, must stay under the eval client's 120 s
-  use_output_schema: true     # --output-schema; parsed tolerantly regardless
+  request_timeout_s: 105
 
-episode:
-  max_sim_steps: 550          # == stack_blocks.step_lim; the 100 charger demos
-                              # finish in 232 steps, the 100 block demos in 266
-  max_codex_calls: 15         # operator constraint: cap on gpt-6 calls per episode
-  min_sim_steps_per_call: 5   # reserve, so late decisions cannot be starved of steps
-  count_failed_calls: true    # a failed call still costs quota, so it still costs budget
-
+# Deterministic interpolation only. These are per-simulator-step increments,
+# not workspace bounds or task-specific limits.
 motion:
-  # Interpolation granularity, not a judgement about the task. The number of
-  # simulator steps a decision costs is derived from these two together with the
-  # distance and the rotation the decision covers, so they have to be set to
-  # something -- but nothing downstream treats them as a limit on where the arm
-  # may go or how fast the *task* should be done.
-  #
-  # They are set to move more slowly than the demonstrations do, which is the only
-  # defensible direction: an open-loop chunk that outruns what the experts did is
-  # not tracking anything.
-  #                 translation p90 / p99 / max      rotation p90 / p99 / max
-  #   charger demos   0.0172 / 0.0262 / 0.0356 m      6.08 / 8.89 / 11.46 deg
-  #   block demos     0.0252 / 0.0394 / 0.0490 m      4.19 / 6.86 /  7.74 deg
-  delta_p_max_m: 0.015
-  delta_theta_max_deg: 5.0
-  min_chunk_steps: 2
-  max_chunk_steps: 45         # per-decision cap; max_codex_calls x this >= max_sim_steps
-  settle_steps: 3             # identical hold steps so physics settles before the next render
-  gripper_open: 1.0           # 1.0 is "fully open" on the observed gripper scale
-  # "Close" means drive the jaws together until the object stops them, so the
-  # commanded value is the bottom of the gripper's travel. It used to be 0.25 --
-  # the widest the jaws had been seen to stop at around the smallest block -- which
-  # is a fact about those blocks, not about the gripper; and commanding it when
-  # the jaws were empty left them reading 0.25 with nothing held.
+  delta_p_max_m: 0.005
+  delta_theta_max_rad: 0.035
+  max_target_translation_m: 0.05
+  max_target_rotation_rad: 0.35
+  settle_steps: 3
+  gripper_open: 1.0
   gripper_close: 0.0
 
-guardrail:
-  # Deliberately empty. The box that used to be here was q01/q99 of the
-  # demonstrations, and the model read the numbers as the geometry of the world
-  # and avoided targets the arm could reach; the failing charger episode then
-  # drove down to exactly the z floor it had been given. A limit that silently
-  # rewrites a decision is worse than no limit, so with nothing we can defend the
-  # controller clamps and rejects nothing: whatever the model asks for is what the
-  # arm is asked to do, and the simulator is the only thing standing between a
-  # downward command and the table.
-  # (motion.py still implements clamping and rejection, and tests cover it, so a
-  # bound can be set here again the day something real pins one down. The keys it
-  # reads are the ones in tests/test_adapter.py's LIMITS fixture -- workspace /
-  # reject_margin_m / max_target_distance_m / max_target_rotation_deg -- so setting
-  # one here really does take effect; none of them is a live key right now.)
-  invalid_streak_limit: 3     # consecutive rejections before a free forced return home
-
-# There is deliberately no `home:` block. The start pose is read off the robot's
-# own first observation of the episode and used as the frame that "orientation"
-# is relative to and as the target of the forced return-home at the end of an
-# episode. A constant here was a second source of truth that could disagree with
-# the run actually happening -- and the prompt quoted it to the model, so a wrong
-# one would have been believed rather than noticed.
-
-# Recorded for the log line only: the policy server never passes these to Codex.
-# The bridge has its own --model / --reasoning-effort flags, and when they are
-# left unset the CLI falls back to ~/.codex/config.toml on the Mac. Keep the two
-# in sync by hand if the model changes.
-codex:
-  bin: /Applications/ChatGPT.app/Contents/Resources/codex
-  model: gpt-6-astra
-  reasoning_effort: medium
-
 images:
-  camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
   jpeg_quality: 88
-  max_width: 640
 
-log_io: true
-output_dir: null            # set to a directory to also write decisions.jsonl
-
-# A decision can take 25-30 s, well past the websocket keepalive window; the
-# client detects a dead peer on its own, so protocol-level ping is disabled.
+# Decisions can exceed the websocket keepalive interval; request timeouts above
+# provide the relevant failure boundary.
 ws_ping_interval_s: null
 ws_ping_timeout_s: null

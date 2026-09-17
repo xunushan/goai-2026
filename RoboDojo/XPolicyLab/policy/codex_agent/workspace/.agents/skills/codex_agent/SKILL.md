@@ -33,9 +33,8 @@ Ask for one motion that advances the task, then look again.
 - Use `"keep"` for every component that does not need to change. Keep is free.
 - Do not reason about speed, duration or interpolation. A deterministic controller
   owns execution of the requested target.
-- Stay inside the per-decision limit stated in `AGENTS.md`. A target beyond it is
-  refused outright, the arm does not move at all, and the decision still counts
-  against your budget -- so an over-large request costs you two decisions, not one.
+- Stay inside the per-decision motion scale stated in `AGENTS.md`; split longer
+  travel across multiple observation-driven decisions.
 
 ## 4. Separate motion from grasp and release
 
@@ -74,17 +73,16 @@ action:
 
 ```json
 {"left":  {"position": "keep" | [x, y, z],
-           "orientation": "keep" | [yaw, pitch, roll],
+           "orientation": "keep" | [w, x, y, z],
            "gripper": "keep" | "open" | "close"},
   "right": {"position": "keep" | [x, y, z],
-           "orientation": "keep" | [yaw, pitch, roll],
+           "orientation": "keep" | [w, x, y, z],
            "gripper": "keep" | "open" | "close"},
   "note": "one or two sentences describing what you see and why you chose this motion",
   "phase": "short label"}
 ```
 
-If you need an exact absolute orientation you may give `"orientation"` as
-`{"quat": [w, x, y, z]}` instead of yaw/pitch/roll.
+Quaternion order is exactly `[w, x, y, z]` as stated in `AGENTS.md`.
 
 `note` and `phase` are required and are read by humans: `note` is what you see and
 why, `phase` is a short label such as `approach`, `grasp`, `insert`, `retreat`.
