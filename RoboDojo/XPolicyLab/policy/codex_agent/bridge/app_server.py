@@ -43,8 +43,16 @@ from typing import Any
 # controller's ``live_image_window``.
 DEFAULT_MAX_LIVE_IMAGE_TURNS = 3
 
-SKILL_PATH = ".agents/skills/codex_agent/SKILL.md"
-REQUIRED_SKILLS = ("codex_agent",)
+SKILLS_ROOT = Path(".agents/skills")
+
+
+def discover_workspace_skills(workspace: Path) -> dict[str, str]:
+    """Return every project skill as ``name -> workspace-relative SKILL.md``."""
+    root = Path(workspace) / SKILLS_ROOT
+    return {
+        path.parent.name: path.relative_to(workspace).as_posix()
+        for path in sorted(root.glob("*/SKILL.md"))
+    }
 
 # The DeepSeek provider cannot come from the workspace's `.codex/config.toml`.
 # Codex loads that file, but refuses these two keys from a project-local source
@@ -98,6 +106,7 @@ class CodexAppServer:
         self.model = model
         self.effort = effort
         self.max_live_image_turns = max_live_image_turns
+        self.required_skills = discover_workspace_skills(self.workspace)
         self.process: subprocess.Popen[str] | None = None
         self.thread_id: str | None = None
         self._episode_id: str | None = None
@@ -167,19 +176,24 @@ class CodexAppServer:
         self._disable_unrelated_skills()
 
     def _disable_unrelated_skills(self) -> None:
-        """Expose only the policy skill to the model-visible skill catalog."""
+        """Expose exactly the skills present in this policy workspace."""
+        if not self.required_skills:
+            raise AppServerError(
+                "app_server_start_failed",
+                f"no workspace skills found under {SKILLS_ROOT.as_posix()}/",
+            )
         result = self._request("skills/list", {"cwds": [str(self.workspace)], "forceReload": True})
         required_found: set[str] = set()
         for entry in result.get("data", []):
             for skill in entry.get("skills", []):
                 name = skill.get("name")
-                if name in REQUIRED_SKILLS and skill.get("scope") == "repo":
+                if name in self.required_skills and skill.get("scope") == "repo":
                     required_found.add(name)
                     continue
                 path = skill.get("path")
                 if isinstance(path, str):
                     self._request("skills/config/write", {"path": path, "enabled": False})
-        missing = sorted(set(REQUIRED_SKILLS) - required_found)
+        missing = sorted(set(self.required_skills) - required_found)
         if missing:
             raise AppServerError(
                 "app_server_start_failed",
@@ -267,14 +281,17 @@ class CodexAppServer:
         self.start()
         if self.thread_id is not None:
             return self.thread_id
+        skills = ", ".join(
+            f"{name} at {path}" for name, path in self.required_skills.items()
+        )
         params: dict[str, Any] = {
             "cwd": str(self.workspace),
             "approvalPolicy": "never",
             "sandbox": "workspace-write",
             "ephemeral": False,
             "baseInstructions": (
-                "For every robot decision, follow the workspace skill codex_agent at "
-                f"{SKILL_PATH} and the embodiment contract in AGENTS.md. "
+                f"For every robot decision, follow the workspace policy skills: {skills}. "
+                "Also follow the embodiment contract in AGENTS.md. "
                 f"Historical images for this rollout are read-only under "
                 f"output/{self._episode_id}/observations/. "
                 "Return only the required JSON object."

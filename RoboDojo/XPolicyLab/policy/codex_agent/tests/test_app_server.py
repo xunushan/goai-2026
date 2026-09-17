@@ -7,6 +7,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 PACKAGE = Path(__file__).resolve().parents[1]
@@ -14,8 +15,8 @@ sys.path.insert(0, str(PACKAGE.parent))
 
 from codex_agent.bridge.app_server import (  # noqa: E402
     AppServerError,
-    REQUIRED_SKILLS,
     CodexAppServer,
+    discover_workspace_skills,
 )
 from codex_agent.bridge.bridge import (  # noqa: E402
     BridgeState,
@@ -84,6 +85,19 @@ def test_each_turn_contains_the_fresh_observation() -> None:
     assert "left: position [2.0000, 0.0000, 0.0000]" in second
     assert "feedback-1" in first and "feedback-2" in second
     assert "Scene:" not in first and "Success when:" not in first
+
+
+def test_required_skills_are_discovered_from_workspace_paths() -> None:
+    with tempfile.TemporaryDirectory(prefix="policy-skills-test-") as directory:
+        workspace = Path(directory)
+        for name in ("agent_policy", "geometric_grounding"):
+            skill = workspace / ".agents" / "skills" / name / "SKILL.md"
+            skill.parent.mkdir(parents=True, exist_ok=True)
+            skill.write_text(f"---\nname: {name}\ndescription: test\n---\n", encoding="utf-8")
+        assert discover_workspace_skills(workspace) == {
+            "agent_policy": ".agents/skills/agent_policy/SKILL.md",
+            "geometric_grounding": ".agents/skills/geometric_grounding/SKILL.md",
+        }
 
 
 def test_images_and_three_turn_rotation() -> None:
@@ -177,7 +191,7 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
             for skill in entry["skills"]
             if skill["enabled"]
         }
-        assert enabled == set(REQUIRED_SKILLS)
+        assert enabled == set(server.required_skills)
 
         runtime_home = Path(server._runtime_home.name)
         environment = os.environ.copy()
@@ -205,6 +219,7 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
 
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
+    test_required_skills_are_discovered_from_workspace_paths()
     test_images_and_three_turn_rotation()
     test_failed_image_turns_still_trigger_rotation()
     test_rollover_replays_exactly_three_earlier_decisions()
