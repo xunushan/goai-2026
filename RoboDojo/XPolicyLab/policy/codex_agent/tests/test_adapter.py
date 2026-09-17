@@ -1060,6 +1060,13 @@ def test_budget_bookkeeping_is_internally_consistent() -> None:
             f"the cap never drops below the minimum: {caps}",
         )
 
+        # The minimum is a preferred chunk size.  A one-step remainder must not
+        # be inflated past the simulator budget merely to meet that preference.
+        state = model._episode
+        assert state is not None
+        state.calls_used = model.max_codex_calls - 1
+        state.sim_steps_used = model.step_budget - 1
+
 
 def test_feedback_describes_the_executed_motion() -> None:
     print("the feedback describes the motion that was actually executed")

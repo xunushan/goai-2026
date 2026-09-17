@@ -574,9 +574,14 @@ class Model(ModelTemplate):
         """Spread the remaining simulator steps across the remaining decisions."""
         remaining_calls = max(1, self.max_codex_calls - state.calls_used)
         remaining_steps = max(0, self.step_budget - state.sim_steps_used)
+        if remaining_steps == 0:
+            return 0
         reserve = self.min_sim_steps_per_call * max(0, remaining_calls - 1)
         cap = remaining_steps - reserve
-        return int(max(self.min_chunk_steps, min(self.max_chunk_steps, cap)))
+        # A final one-step remainder is valid.  The minimum chunk length is a
+        # preferred size, never permission to run past the episode budget.
+        preferred = max(self.min_chunk_steps, min(self.max_chunk_steps, cap))
+        return int(min(remaining_steps, preferred))
 
     def _budget_exhausted(self, state: EpisodeState) -> str:
         if state.calls_used >= self.max_codex_calls:
@@ -875,10 +880,11 @@ class Model(ModelTemplate):
                 quat=ctx.home_quat_right,
                 gripper=self.motion.gripper_open,
             )
-            cap = max(
-                self.min_chunk_steps,
-                min(self.max_chunk_steps, self.step_budget - state.sim_steps_used),
-            )
+            remaining_steps = max(0, self.step_budget - state.sim_steps_used)
+            # This path is entered only after the normal budget check, so retain
+            # a non-empty chunk for the simulator while never exceeding a
+            # positive remainder.
+            cap = max(1, min(self.max_chunk_steps, remaining_steps))
         else:
             left_command = right_command = ArmCommand()
             cap = max(1, self._hold_length)
