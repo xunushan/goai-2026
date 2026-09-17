@@ -14,9 +14,10 @@ demo.json。
 ★ 不直接裁切 outputs/episode_insight/interactive_sim/videos 的合成图: 那是
   cam_high + cam_left_wrist(纵向压扁) 的拼图, 右腕视角缺失且画质有损。
 
-用法:
-    python tools/in_context_demo.py --task stack_bowls --episode 203
-    python tools/in_context_demo.py --all
+用法 (须用 lerobot 环境: parquet 由 arrow 25 写出, base 的 pyarrow 19 读会报
+"Repetition level histogram size mismatch"):
+    /opt/anaconda3/envs/lerobot/bin/python tools/in_context_demo.py --task stack_bowls --episode 203
+    /opt/anaconda3/envs/lerobot/bin/python tools/in_context_demo.py --all
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ import argparse
 import csv
 import itertools
 import json
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -63,57 +65,35 @@ STAGE_BY_EVENT = {
     "handover": "handover",
 }
 
-# 人工标注 (逐帧看过 head 相机画面后撰写): (task, episode, 段序号) -> (observation, result)
+# 人工标注 (逐帧看过 head 相机画面后撰写): (task, episode, frame_index) -> (observation, result)
 # 未列出的 keyframe 只输出数值, observation/result 为空
 ANNOTATIONS = {
     # --- stack_bowls, episode 203 (右臂叠前两只, 左臂叠第三只) ---
-    ("stack_bowls", 203, 0): ("right jaws open, closing in on the first upright bowl; left arm parked at home", "aligned"),
-    ("stack_bowls", 203, 1): ("right jaws just closed on the bowl rim, bowl tilted as it leaves the table", "grasped"),
-    ("stack_bowls", 203, 2): ("right arm carrying the bowl left across the table toward the centre; left arm parked", "transported"),
-    ("stack_bowls", 203, 3): ("right arm has set the bowl down and its jaws are about to open; left arm parked", "placed"),
-    ("stack_bowls", 203, 4): ("right jaws open, swinging in on the next upright bowl; two other bowls still upright on the table", "aligned"),
-    ("stack_bowls", 203, 5): ("right jaws just closed on the bowl rim, bowl lifting clear of the table", "grasped"),
-    ("stack_bowls", 203, 6): ("right arm carrying the bowl above the table centre; the first bowl waits below", "transported"),
-    ("stack_bowls", 203, 7): ("right arm lowering the bowl into the first one, rims overlapping as the nest forms", "nested"),
-    ("stack_bowls", 203, 8): ("left arm swinging in on the last loose bowl while the right arm withdraws; a nested pair already sits at the centre", "aligned"),
-    ("stack_bowls", 203, 9): ("left jaws just closed on the last bowl, lifting it clear of the table", "grasped"),
-    ("stack_bowls", 203, 10): ("left arm carrying the last bowl toward the nested pair; right arm parked", "transported"),
-    ("stack_bowls", 203, 11): ("left arm lowering the last bowl onto the nested pair", "nested"),
-    ("stack_bowls", 203, 12): ("both arms back at their home poses; the three bowls rest as one nested stack at the table centre", "task_complete"),
+    # 键 = (task, episode, frame_index), 帧号比去重后的序号稳定
+    ("stack_bowls", 203, 24): ("right jaws open, closing in on the first upright bowl; left arm parked at home", "aligned"),
+    ("stack_bowls", 203, 52): ("right jaws just closed on the bowl rim, bowl tilted as it leaves the table", "grasped"),
+    ("stack_bowls", 203, 74): ("right arm carrying the bowl left across the table toward the centre; left arm parked", "transported"),
+    ("stack_bowls", 203, 103): ("right arm has set the bowl down and its jaws are about to open; left arm parked", "placed"),
+    ("stack_bowls", 203, 366): ("both arms back at their home poses; the three bowls rest as one nested stack at the table centre", "task_complete"),
 
-    # --- fill_pen_holder, episode 0 (左臂持筒, 右臂依次插 4 支笔: 青/紫/金/黑) ---
-    ("fill_pen_holder", 0, 0): ("left jaws open, reaching for the orange pen holder lying on the table; four pens scattered to the right; right arm parked", "aligned"),
-    ("fill_pen_holder", 0, 1): ("left jaws have closed on the pen holder, lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 2): ("left arm carrying the holder upright to its working position at the table centre", "transported"),
-    ("fill_pen_holder", 0, 3): ("left arm holds the holder upright off the table; right jaws open, swinging in on the first pen", "aligned"),
-    ("fill_pen_holder", 0, 4): ("right jaws just closed on the first (teal) pen, lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 5): ("right arm carrying the teal pen upright toward the holder", "transported"),
-    ("fill_pen_holder", 0, 6): ("right arm lowering the teal pen into the holder", "inserted"),
-    ("fill_pen_holder", 0, 7): ("teal pen seated in the holder; right jaws open, swinging back to the table for the next pen", "aligned"),
-    ("fill_pen_holder", 0, 8): ("right jaws just closed on the second (purple) pen, lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 9): ("right arm carrying the purple pen upright toward the holder", "transported"),
-    ("fill_pen_holder", 0, 10): ("right arm lowering the purple pen into the holder, beside the first one", "inserted"),
-    ("fill_pen_holder", 0, 11): ("two pens seated; right jaws open, swinging back to the table for the third pen", "aligned"),
-    ("fill_pen_holder", 0, 12): ("right jaws just closed on the third (gold) pen, lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 13): ("right arm carrying the gold pen upright toward the holder", "transported"),
-    ("fill_pen_holder", 0, 14): ("right arm lowering the gold pen into the holder", "inserted"),
-    ("fill_pen_holder", 0, 15): ("three pens seated; right jaws open, swinging back to the table for the last pen", "aligned"),
-    ("fill_pen_holder", 0, 16): ("right jaws just closed on the last (black) pen, lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 17): ("right arm carrying the last pen upright toward the holder", "transported"),
-    ("fill_pen_holder", 0, 18): ("right arm lowering the last pen into the holder, completing all four", "inserted"),
-    ("fill_pen_holder", 0, 19): ("all four pens seated; right arm withdrawing clear of the holder", "aligned"),
-    ("fill_pen_holder", 0, 20): ("left arm lowering the loaded holder back onto the table", "placed"),
-    ("fill_pen_holder", 0, 21): ("both arms at their home poses; the holder stands upright on the table with all four pens in it", "task_complete"),
+    # --- fill_pen_holder, episode 0 (左臂持筒, 右臂插第一支笔: 青色) ---
+    # 后 3 个插笔循环与第一组同型, 按事件类型去重时已丢弃
+    ("fill_pen_holder", 0, 37): ("left jaws open, reaching for the orange pen holder lying on the table; four pens scattered to the right; right arm parked", "aligned"),
+    ("fill_pen_holder", 0, 84): ("left jaws have closed on the pen holder, lifting it off the table", "grasped"),
+    ("fill_pen_holder", 0, 112): ("left arm carrying the holder upright to its working position at the table centre", "transported"),
+    ("fill_pen_holder", 0, 188): ("left arm holds the holder upright off the table; right jaws just closed on the first (teal) pen, lifting it off the table", "grasped"),
+    ("fill_pen_holder", 0, 263): ("right arm carrying the teal pen upright toward the holder held by the left arm", "transported"),
+    ("fill_pen_holder", 0, 304): ("right arm lowering the teal pen into the holder", "inserted"),
+    ("fill_pen_holder", 0, 878): ("all four pens seated; left arm lowering the loaded holder back onto the table", "placed"),
+    ("fill_pen_holder", 0, 933): ("both arms at their home poses; the holder stands upright on the table with all four pens in it", "task_complete"),
 
     # --- plug_in_charger, episode 150 (右臂取充电器, 交给左臂, 左臂插入插座) ---
-    ("plug_in_charger", 150, 0): ("right jaws open, closing in on the charger lying on the table; the power strip sits to the left; left arm parked", "aligned"),
-    ("plug_in_charger", 150, 1): ("right jaws just closed on the charger, lifting it off the table", "grasped"),
-    ("plug_in_charger", 150, 2): ("right arm carrying the charger up and toward the table centre; left arm parked", "transported"),
-    ("plug_in_charger", 150, 3): ("left jaws open, swinging in to meet the carried charger; power strip waiting on the left", "aligned"),
-    ("plug_in_charger", 150, 4): ("left jaws closing on the charger while the right jaws still hold it — both arms meet at the exchange point", "received"),
-    ("plug_in_charger", 150, 5): ("left arm carrying the charger toward the power strip; right arm withdrawing", "transported"),
-    ("plug_in_charger", 150, 6): ("left jaws hold the charger against the power-strip socket and are just starting to open", "inserted"),
-    ("plug_in_charger", 150, 7): ("both arms back at their home poses; the charger sits inserted in the power strip", "task_complete"),
+    ("plug_in_charger", 150, 15): ("right jaws open, closing in on the charger lying on the table; the power strip sits to the left; left arm parked", "aligned"),
+    ("plug_in_charger", 150, 33): ("right jaws just closed on the charger, lifting it off the table", "grasped"),
+    ("plug_in_charger", 150, 68): ("right arm carrying the charger up and toward the table centre; left arm parked", "transported"),
+    ("plug_in_charger", 150, 106): ("left jaws closing on the charger while the right jaws still hold it — both arms meet at the exchange point", "received"),
+    ("plug_in_charger", 150, 157): ("left jaws hold the charger against the power-strip socket and are just starting to open", "inserted"),
+    ("plug_in_charger", 150, 191): ("both arms back at their home poses; the charger sits inserted in the power strip", "task_complete"),
 }
 
 # 相机键名与数据集一致 (info.json 的 features)
@@ -186,7 +166,25 @@ def load_episode_segments(rows, min_len: int = 3):
             # 两帧几乎重复, 退回段中
             if i + 1 < len(segs) and segs[i + 1]["rep"] - s["rep"] < 10:
                 s["rep"] = (s["start"] + s["end"]) // 2
-    return segs
+    return dedupe_by_type(segs)
+
+
+def dedupe_by_type(segs):
+    """每个事件**类型**只留 1 帧, 取该类型首次出现的那一段。
+
+    类型键 = (stage, event)。用 event 而非只 stage, 是为了让 fill 的
+    grasp_holder / grasp_pen、place_holder / place_pen 各自成类 —— 否则
+    4 个插笔循环会被压成同一个 grasp/place, 持筒与持笔就分不开了。
+    后续重复的插笔循环(grasp_pen / move_pen / place_pen 再次出现)随之丢弃。
+    """
+    seen, out = set(), []
+    for s in segs:
+        key = (s["stage"], s["event"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
 
 
 def load_episode_arrays(episode: int):
@@ -250,6 +248,8 @@ def build(task: str, episode: int):
     segs = load_episode_segments(rows)
     arr = load_episode_arrays(episode)
     vidx = video_index(episode)
+    # 去重后序号会变, 旧图残留会与 demo.json 对不上 —— 先清空该任务图像目录
+    shutil.rmtree(OUT_ROOT / task / "images", ignore_errors=True)
     keyframes = []
     for i, s in enumerate(segs):
         fidx = s["rep"]
@@ -263,7 +263,7 @@ def build(task: str, episode: int):
             name = f"{i:03d}-{stage}-{tag}.jpg"
             grab(info["path"], info["from"] + fidx / FPS, OUT_ROOT / task / "images" / name)
             imgs[feat] = f"images/{name}"
-        obs, res = ANNOTATIONS.get((task, episode, i), ("", ""))
+        obs, res = ANNOTATIONS.get((task, episode, fidx), ("", ""))
         keyframes.append({
             "frame_index": fidx,
             "event": s["event"],
