@@ -421,7 +421,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE))
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--model", default=None, help="Model id, e.g. gpt-6-astra")
-    parser.add_argument("--reasoning-effort", default=None, choices=["minimal", "low", "medium", "high"])
+    parser.add_argument(
+        "--reasoning-effort",
+        default="medium",
+        choices=["low", "medium", "high", "max"],
+        help="model reasoning level (default: medium for bounded policy latency)",
+    )
     parser.add_argument("--timeout-s", type=float, default=75.0, help="wall clock for one decision")
     parser.add_argument(
         "--timeout-first-turn-s",

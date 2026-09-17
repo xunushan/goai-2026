@@ -22,6 +22,7 @@ from codex_agent.bridge.bridge import (  # noqa: E402
     BridgeState,
     _data_url,
     _render_turn,
+    build_parser,
 )
 from codex_agent.bridge.schema import ArmObservation, ImageInput, Observation  # noqa: E402
 from codex_agent.bridge.record import relative_paths, store_images  # noqa: E402
@@ -85,6 +86,10 @@ def test_each_turn_contains_the_fresh_observation() -> None:
     assert "left: position [2.0000, 0.0000, 0.0000]" in second
     assert "feedback-1" in first and "feedback-2" in second
     assert "Scene:" not in first and "Success when:" not in first
+
+
+def test_default_reasoning_effort_is_medium() -> None:
+    assert build_parser().parse_args([]).reasoning_effort == "medium"
 
 
 def test_required_skills_are_discovered_from_workspace_paths() -> None:
@@ -298,6 +303,7 @@ def test_timeout_interrupts_turn_and_discards_only_thread() -> None:
 
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
+    test_default_reasoning_effort_is_medium()
     test_required_skills_are_discovered_from_workspace_paths()
     test_thread_instructions_reference_live_skill_without_copying_it()
     test_observations_are_grouped_by_camera_then_step()
