@@ -100,12 +100,12 @@ def test_required_skills_are_discovered_from_workspace_paths() -> None:
         }
 
 
-def test_skill_body_is_embedded_in_thread_instructions() -> None:
+def test_thread_instructions_reference_live_skill_without_copying_it() -> None:
     server = CodexAppServer(workspace=WORKSPACE)
     instructions = server._base_instructions()
-    assert "BEGIN REQUIRED SKILL codex_agent" in instructions
-    assert "Deciding the next motion" in instructions
-    assert "do not call shell to read them" in instructions
+    assert "codex_agent at .agents/skills/codex_agent/SKILL.md" in instructions
+    assert "Deciding the next motion" not in instructions
+    assert "source of truth" in instructions
     assert "never construct, guess, probe, or enumerate image paths" in instructions
 
 
@@ -229,6 +229,7 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
     assert args[args.index("plugins") - 1] == "--disable"
     assert 'permissions.rollout_agent.extends=":workspace"' in args
     filesystem = next(value for value in args if value.startswith("permissions.rollout_agent.filesystem="))
+    assert f'{json.dumps(str(WORKSPACE / ".agents/skills"))} = "read"' in filesystem
     assert f'{json.dumps(str(WORKSPACE / "output"))} = "none"' in filesystem
     observations = WORKSPACE / "output" / "context-smoke-test" / "observations"
     assert f'{json.dumps(str(observations))} = "read"' in filesystem
@@ -298,7 +299,7 @@ def test_timeout_interrupts_turn_and_discards_only_thread() -> None:
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
     test_required_skills_are_discovered_from_workspace_paths()
-    test_skill_body_is_embedded_in_thread_instructions()
+    test_thread_instructions_reference_live_skill_without_copying_it()
     test_observations_are_grouped_by_camera_then_step()
     test_images_and_three_turn_rotation()
     test_failed_image_turns_still_trigger_rotation()

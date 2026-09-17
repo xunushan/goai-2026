@@ -215,6 +215,7 @@ class CodexAppServer:
             f"{json.dumps(str(path))} = {json.dumps(access)}"
             for path, access in (
                 (self.workspace, "read"),
+                (self.workspace / SKILLS_ROOT, "read"),
                 (self.workspace / "output", "none"),
                 (observations, "read"),
                 (scratch, "write"),
@@ -304,24 +305,19 @@ class CodexAppServer:
         return self.thread_id
 
     def _base_instructions(self) -> str:
-        """Load policy skills once per thread instead of asking the model to cat them.
-
-        Skill discovery tells Codex that a skill exists, but the model normally
-        invokes shell to read its body. Policy decisions must not depend on that
-        preliminary tool call succeeding, and repeated read attempts were a
-        direct source of timeouts.
-        """
-        sections = []
-        for name, relative_path in self.required_skills.items():
-            body = (self.workspace / relative_path).read_text(encoding="utf-8")
-            sections.append(f"\n--- BEGIN REQUIRED SKILL {name} ---\n{body}\n--- END REQUIRED SKILL {name} ---")
+        """Point at live workspace skills without copying their contents."""
+        skills = ", ".join(
+            f"{name} at {relative_path}"
+            for name, relative_path in self.required_skills.items()
+        )
         return (
-            "Follow the embodiment contract in AGENTS.md and every required policy skill below. "
-            "Their complete contents are already present here; do not call shell to read them. "
+            f"For every robot decision, read and follow the workspace policy skills: {skills}. "
+            "Follow the embodiment contract in AGENTS.md. The skill files are read-only and are "
+            "the source of truth; do not copy, rewrite, or modify them. "
             "Current camera images are attached to each turn. For historical images, call "
             "view_image only with an exact absolute cache path explicitly supplied in the turn; "
             "never construct, guess, probe, or enumerate image paths. Return only the required "
-            "JSON object.\n" + "\n".join(sections)
+            "JSON object."
         )
 
     @property
