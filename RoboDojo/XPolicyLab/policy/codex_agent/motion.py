@@ -150,6 +150,7 @@ def _action(left: ArmPlan, right: ArmPlan, t: float) -> dict[str, np.ndarray]:
 
 
 def hold_chunk(left: ArmState, right: ArmState) -> list[dict[str, np.ndarray]]:
+    """Return one unchanged action frame; executing it still costs one sim step."""
     left_plan = plan_arm(left, KEEP, MotionConfig())
     right_plan = plan_arm(right, KEEP, MotionConfig())
     return [_action(left_plan, right_plan, 1.0)]

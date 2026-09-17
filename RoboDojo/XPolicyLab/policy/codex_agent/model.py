@@ -128,6 +128,9 @@ class Model(ModelTemplate):
                 raise
             print(f"[codex_agent] decision failed; holding position: {exc}", flush=True)
             if self.episode is not None:
+                # hold_chunk contains one executable action frame. It commands
+                # the measured pose/gripper unchanged, but the simulator still
+                # advances by one step when it consumes that frame.
                 self.episode.steps_used += 1
             return hold_chunk(*self.last_arms)
 
@@ -173,6 +176,8 @@ class Model(ModelTemplate):
         )
         if not result.ok:
             state.feedback = [f"Policy call failed ({result.error_kind}); the robot held position."]
+            # The one-frame hold is motionless, not free: executing it advances
+            # the simulator and therefore consumes one simulator-step budget.
             state.steps_used += 1
             return hold_chunk(left, right)
 
