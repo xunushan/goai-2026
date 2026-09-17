@@ -21,6 +21,19 @@ what you actually see in the current views. If the scene does not match what you
 expected from your last decision, trust the images and the numbers, and re-plan --
 the previous decision is not evidence about the present.
 
+The current camera images are already attached to the turn. Inspect them directly;
+do not use shell commands to reopen, crop, resize, tile, draw grids on, or repeatedly
+measure the same images. Do not run ad-hoc colour thresholds, masks, pixel scans, or
+uncalibrated pixel-to-world calculations. Their apparent precision is misleading.
+
+Use `view_image` only for a specific older cached frame when the current views and
+text history leave one concrete ambiguity. Inspect at most two such frames, once
+each, then decide. Use the shell only to list or read those explicitly named image
+files; do not explore the repository or read source code, config, task cards,
+README files, `rollout.jsonl`, or another episode. Write any necessary temporary
+artifact only under the current episode's `scratch/`, never `/tmp`. Tool use must
+support the immediate motion decision, not become a separate vision pipeline.
+
 ## 3. Move in small deliberate steps
 
 Ask for one motion that advances the task, then look again.

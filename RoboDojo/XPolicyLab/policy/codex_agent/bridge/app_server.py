@@ -222,7 +222,6 @@ class CodexAppServer:
         ) + "}"
         return [
             "-c", 'default_permissions="rollout_agent"',
-            "-c", 'permissions.rollout_agent.extends=":workspace"',
             "-c", "permissions.rollout_agent.filesystem=" + filesystem,
             "--enable", "shell_tool",
             "--enable", "view_image",
@@ -287,7 +286,6 @@ class CodexAppServer:
         params: dict[str, Any] = {
             "cwd": str(self.workspace),
             "approvalPolicy": "never",
-            "sandbox": "workspace-write",
             "ephemeral": False,
             "baseInstructions": (
                 f"For every robot decision, follow the workspace policy skills: {skills}. "
@@ -378,8 +376,13 @@ class CodexAppServer:
         while True:
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise AppServerError("policy_timeout", "Timed out waiting for Codex App Server")
-            event = self._next_message(remaining)
+                self._interrupt_timed_out_turn(thread_id, turn_id)
+            try:
+                event = self._next_message(remaining)
+            except AppServerError as error:
+                if error.kind != "policy_timeout":
+                    raise
+                self._interrupt_timed_out_turn(thread_id, turn_id)
             params = event.get("params", {})
             # A rotated-away thread still has a turn in flight, and its events keep
             # arriving. Anything not from the thread and turn we asked about is not
@@ -407,6 +410,29 @@ class CodexAppServer:
                 raise AppServerError("policy_invalid_response", "Codex completed without a final JSON response")
             usage = params.get("usage") or turn.get("usage") or {}
             return answer, usage if isinstance(usage, dict) else {}
+
+    def _interrupt_timed_out_turn(self, thread_id: str, turn_id: str) -> None:
+        """Stop a late turn and force the next request onto a clean thread."""
+        try:
+            # Do not wait for the response: a wedged server must not turn the
+            # bounded decision timeout into another unbounded wait.
+            self._next_id += 1
+            self._send({
+                "jsonrpc": "2.0",
+                "id": self._next_id,
+                "method": "turn/interrupt",
+                "params": {"threadId": thread_id, "turnId": turn_id},
+            })
+        except (AppServerError, OSError):
+            # The timeout remains the externally meaningful failure. Even when
+            # interruption cannot be confirmed, do not reuse the suspect thread.
+            pass
+        finally:
+            # The simulator episode remains active. BridgeState owns its history
+            # and will replay it when the next request opens a replacement thread.
+            self.thread_id = None
+            self._live_image_turns = 0
+        raise AppServerError("policy_timeout", "Timed out waiting for Codex App Server; turn interrupted")
 
     # ----------------------------------------------------------------- #
     # JSON-RPC plumbing

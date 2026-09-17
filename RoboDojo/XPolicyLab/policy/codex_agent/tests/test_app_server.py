@@ -215,7 +215,8 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
     assert args[args.index("shell_tool") - 1] == "--enable"
     assert args[args.index("view_image") - 1] == "--enable"
     assert args[args.index("plugins") - 1] == "--disable"
-    filesystem = args[args.index("permissions.rollout_agent.extends=\":workspace\"") + 2]
+    assert 'permissions.rollout_agent.extends=":workspace"' not in args
+    filesystem = next(value for value in args if value.startswith("permissions.rollout_agent.filesystem="))
     assert f'{json.dumps(str(WORKSPACE / "output"))} = "none"' in filesystem
     observations = WORKSPACE / "output" / "context-smoke-test" / "observations"
     assert f'{json.dumps(str(observations))} = "read"' in filesystem
@@ -256,6 +257,32 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
         server.close()
 
 
+def test_timeout_interrupts_turn_and_discards_only_thread() -> None:
+    server = RecordingAppServer()
+    server.thread_id = "thread-1"
+    server._live_image_turns = 2
+    messages: list[dict] = []
+
+    def send(message: dict) -> None:
+        messages.append(message)
+
+    server._send = send  # type: ignore[method-assign]
+    try:
+        CodexAppServer._wait_for_final(server, "thread-1", "turn-1", 0)
+    except AppServerError as error:
+        assert error.kind == "policy_timeout"
+    else:
+        raise AssertionError("timeout unexpectedly completed")
+    assert messages == [{
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "turn/interrupt",
+        "params": {"threadId": "thread-1", "turnId": "turn-1"},
+    }]
+    assert server.thread_id is None
+    assert server._live_image_turns == 0
+
+
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
     test_required_skills_are_discovered_from_workspace_paths()
@@ -264,6 +291,7 @@ def main() -> int:
     test_failed_image_turns_still_trigger_rotation()
     test_rollover_replays_all_text_and_only_latest_images()
     test_live_app_server_tool_and_skill_isolation()
+    test_timeout_interrupts_turn_and_discards_only_thread()
     print("app-server context tests passed")
     return 0
 

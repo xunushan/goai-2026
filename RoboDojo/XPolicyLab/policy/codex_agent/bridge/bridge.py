@@ -260,7 +260,9 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                 images=image_inputs,
                 output_schema=output_schema(),
                 timeout_s=timeout_s,
-                replay=state.replay() if rotating else None,
+                # A normal image rotation and timeout recovery both replace only
+                # the Codex thread, never the simulator episode.
+                replay=state.replay() if fresh_thread and state.history else None,
             )
             decision = _parse_reply(text)
         except AppServerError as exc:
