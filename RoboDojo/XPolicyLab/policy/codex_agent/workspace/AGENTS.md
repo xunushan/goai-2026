@@ -63,6 +63,8 @@ close, use the active arm's wrist view for final alignment.
 
 ## FILES
 
-- `observations/` holds the camera images of past decisions, one directory per
-  simulator step. It is read-only, and it is evidence: never edit or delete it.
-- `scratch/` is the one directory you may write to. Use it for working notes.
+- `output/<episode_id>/observations/` holds the camera images of past decisions,
+  one directory per simulator step. The current episode path is stated in the
+  session instructions. It is read-only evidence: never edit or delete it.
+- `output/<episode_id>/scratch/` is the one directory you may write to. Use it for
+  working notes.

@@ -174,10 +174,11 @@ for a human running `codex` by hand. The bridge does not rely on that config fil
 a project-local `.codex/config.toml` is only honoured once the workspace is trusted,
 so the bridge passes the same permissions with `-c` at launch:
 
-- read the workspace and `output/`;
-- write `output/<episode>/scratch/`, and nothing else;
-- only `view_image` enabled; shell, plugins, apps, recommendations, web search,
-  computer use and multi-agent tools disabled;
+- read the workspace and the current episode's `observations/`, but not
+  `rollout.jsonl` or other episodes;
+- write the current episode's `scratch/`, and nothing else;
+- `shell_tool` and `view_image` enabled; plugins, apps, recommendations, web
+  search, computer use and multi-agent tools disabled;
 - only the workspace `codex_agent` skill exposed to the model.
 
 Because permissions are fixed when the process starts, **a new episode means a new

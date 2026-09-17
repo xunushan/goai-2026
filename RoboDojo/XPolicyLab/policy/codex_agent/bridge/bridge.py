@@ -142,11 +142,11 @@ class BridgeState:
     def rollover_context(self) -> str | None:
         """The earlier decisions, as words, for a thread that is about to rotate.
 
-        The most recent decision is left out: the turn text it is part of already
-        carries its outcome in full, and repeating it would read as two different
-        accounts of the same event.
+        Keep exactly the latest three completed decisions. The current turn also
+        carries execution feedback, but that is not a replacement for the policy's
+        own note and phase from the previous decision.
         """
-        earlier = self.history[:-1][-ROLLOVER_TURNS:]
+        earlier = self.history[-ROLLOVER_TURNS:]
         if not earlier:
             return None
         lines = ["EARLIER DECISIONS (their images are no longer attached)"]

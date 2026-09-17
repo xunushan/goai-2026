@@ -266,9 +266,3 @@ def _validate_arm_reply(value: Any, name: str) -> None:
         _vector(item, length, f"{name}.{field}")
     if value["gripper"] not in ("keep", "open", "close"):
         raise PolicyValidationError(f"{name}.gripper must be 'keep', 'open' or 'close'")
-    if value["gripper"] != "keep" and (
-        value["position"] != "keep" or value["orientation"] != "keep"
-    ):
-        raise PolicyValidationError(
-            f"{name} cannot move and change the gripper in the same decision"
-        )

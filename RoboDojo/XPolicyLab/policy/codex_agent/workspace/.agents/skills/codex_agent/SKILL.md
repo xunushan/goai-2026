@@ -36,17 +36,20 @@ Ask for one motion that advances the task, then look again.
 - Stay inside the per-decision motion scale stated in `AGENTS.md`; split longer
   travel across multiple observation-driven decisions.
 
-## 4. Separate motion from grasp and release
+## 4. Coordinate motion with grasp and release
 
-Do not close or open a gripper while moving that arm. During approach, alignment,
-insertion, or withdrawal, use `"keep"` for the gripper. A target you submitted is
-not proof that the arm arrived or that contact is safe.
+Prefer to finish approach and alignment before changing the gripper. During most
+travel use `"keep"`; a target you submitted is not proof that the arm arrived or
+that contact is safe. A short final motion may change the gripper at the same time
+when the manipulation itself requires it, such as closing during the final
+downward grasp. Use that only after fresh views establish alignment and clearance.
 
 After positioning, inspect the next observation before changing the gripper. Use
 the active arm's wrist close-up for the jaws and nearby object, and the head view
 to check the wider scene, clearance, and support. Confirm that the observed arm
-state is consistent with the intended pose. Only then issue a separate gripper
-decision, with position and orientation set to `"keep"`.
+state is consistent with the intended pose. Normally issue a separate gripper
+decision with position and orientation set to `"keep"`; combine them only for the
+short contact motion described above.
 
 Never close the gripper merely to probe alignment or estimate object width. The
 gripper number does not provide that information. Close only after the fresh head

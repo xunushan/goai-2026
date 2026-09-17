@@ -44,6 +44,7 @@ from typing import Any
 DEFAULT_MAX_LIVE_IMAGE_TURNS = 3
 
 SKILL_PATH = ".agents/skills/codex_agent/SKILL.md"
+REQUIRED_SKILLS = ("codex_agent",)
 
 # The DeepSeek provider cannot come from the workspace's `.codex/config.toml`.
 # Codex loads that file, but refuses these two keys from a project-local source
@@ -168,18 +169,21 @@ class CodexAppServer:
     def _disable_unrelated_skills(self) -> None:
         """Expose only the policy skill to the model-visible skill catalog."""
         result = self._request("skills/list", {"cwds": [str(self.workspace)], "forceReload": True})
-        policy_skill_found = False
+        required_found: set[str] = set()
         for entry in result.get("data", []):
             for skill in entry.get("skills", []):
-                if skill.get("name") == "codex_agent" and skill.get("scope") == "repo":
-                    policy_skill_found = True
+                name = skill.get("name")
+                if name in REQUIRED_SKILLS and skill.get("scope") == "repo":
+                    required_found.add(name)
                     continue
                 path = skill.get("path")
                 if isinstance(path, str):
                     self._request("skills/config/write", {"path": path, "enabled": False})
-        if not policy_skill_found:
+        missing = sorted(set(REQUIRED_SKILLS) - required_found)
+        if missing:
             raise AppServerError(
-                "app_server_start_failed", "workspace skill codex_agent was not discovered"
+                "app_server_start_failed",
+                f"required workspace skills were not discovered: {missing}",
             )
 
     def _permission_args(self) -> list[str]:
@@ -192,11 +196,13 @@ class CodexAppServer:
         bridge actually relies on.
         """
         scratch = self.workspace / "output" / str(self._episode_id) / "scratch"
+        observations = self.workspace / "output" / str(self._episode_id) / "observations"
         filesystem = "{" + ",".join(
             f"{json.dumps(str(path))} = {json.dumps(access)}"
             for path, access in (
                 (self.workspace, "read"),
-                (self.workspace / "output", "read"),
+                (self.workspace / "output", "none"),
+                (observations, "read"),
                 (scratch, "write"),
             )
         ) + "}"
@@ -204,8 +210,8 @@ class CodexAppServer:
             "-c", 'default_permissions="rollout_agent"',
             "-c", 'permissions.rollout_agent.extends=":workspace"',
             "-c", "permissions.rollout_agent.filesystem=" + filesystem,
+            "--enable", "shell_tool",
             "--enable", "view_image",
-            "--disable", "shell_tool",
             "--disable", "plugins",
             "--disable", "apps",
             "--disable", "recommended_plugins",
@@ -269,6 +275,8 @@ class CodexAppServer:
             "baseInstructions": (
                 "For every robot decision, follow the workspace skill codex_agent at "
                 f"{SKILL_PATH} and the embodiment contract in AGENTS.md. "
+                f"Historical images for this rollout are read-only under "
+                f"output/{self._episode_id}/observations/. "
                 "Return only the required JSON object."
             ),
         }
@@ -328,9 +336,12 @@ class CodexAppServer:
             turn_id = str(result["turn"]["id"])
         except (KeyError, TypeError) as error:
             raise AppServerError("app_server_protocol", "turn/start did not return a turn id") from error
-        answer, usage = self._wait_for_final(thread_id, turn_id, timeout_s)
+        # Once turn/start accepted the turn, its images belong to this thread even
+        # if the model later times out or fails. Count submission, not completion,
+        # so failures cannot silently grow the live image window past its bound.
         if images:
             self._live_image_turns += 1
+        answer, usage = self._wait_for_final(thread_id, turn_id, timeout_s)
         return answer, usage
 
     def _thread_for_next_turn(self) -> str:
