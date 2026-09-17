@@ -27,6 +27,7 @@ import os
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 from pathlib import Path
 
 import numpy as np
@@ -41,6 +42,7 @@ from codex_agent.model import Model, load_task_card  # noqa: E402
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from mock_bridge import (  # noqa: E402
     FAILURE_MODES,
+from codex_agent.motion import ArmCommand, ArmState, ChunkInfo  # noqa: E402
     MockBridge,
     legal_reply,
     unused_port,
@@ -1088,6 +1090,21 @@ def test_feedback_describes_the_executed_motion() -> None:
             "measured after the motion completed" in prompt,
             "the model is told the state is post-motion",
         )
+
+def test_truncated_gripper_feedback_requires_a_new_decision() -> None:
+    print("a discarded gripper command is not presented as pending")
+    model = make_model()
+    feedback = model._build_feedback(
+        SimpleNamespace(command=ArmCommand(gripper=0.0), clamped=False),
+        SimpleNamespace(command=ArmCommand(), clamped=False),
+        ChunkInfo(truncated=True, truncated_arms=["left"], gripper_deferred=True),
+        ArmState(HOME_LEFT_POS, HOME_QUAT, 1.0),
+        ArmState(HOME_RIGHT_POS, HOME_QUAT, 1.0),
+    )
+    text = " ".join(feedback)
+    check("not executed" in text, "the gripper is described as discarded")
+    check("will take effect" not in text, "the feedback does not promise a deferred command")
+
         check("-0.000" not in prompt, "no negative zero leaked into the prompt")
 
 
@@ -1123,6 +1140,7 @@ def main() -> int:
         test_bridge_url_precedence,
         test_config_is_validated,
         test_budget_bookkeeping_is_internally_consistent,
+        test_truncated_gripper_feedback_requires_a_new_decision,
         test_feedback_describes_the_executed_motion,
     ):
         test()

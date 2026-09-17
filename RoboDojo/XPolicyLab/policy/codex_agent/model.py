@@ -829,8 +829,8 @@ class Model(ModelTemplate):
             )
         if info.gripper_deferred:
             lines.append(
-                "Your gripper command was held over because the arm had not arrived; it will "
-                "take effect once the arm reaches the target."
+                "Your gripper command was not executed because the motion was cut short. "
+                "Reassess the new observation and issue it again only after the arm arrives."
             )
         lines.append(
             "The arm state reported above is measured after the motion completed, so compare it "

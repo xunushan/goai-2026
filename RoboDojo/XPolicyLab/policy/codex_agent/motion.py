@@ -549,9 +549,9 @@ def interpolate_chunk(
         if right_plan.moved:
             info.truncated_arms.append("right")
 
-    # A gripper change only takes effect once the arm has actually arrived; if the
-    # chunk was truncated the gripper is deferred to the next decision instead of
-    # closing/opening mid-flight.
+    # A gripper change only takes effect once the arm has actually arrived.  If
+    # the chunk is truncated, discard the change rather than closing/opening
+    # mid-flight; the next decision must reassess and explicitly request it.
     apply_gripper = not truncated
     info.gripper_deferred = (not apply_gripper) and (
         abs(left_plan.gripper_end - left_plan.gripper_start) > _EPS
