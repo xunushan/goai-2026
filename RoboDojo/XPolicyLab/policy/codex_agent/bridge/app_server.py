@@ -222,6 +222,12 @@ class CodexAppServer:
         ) + "}"
         return [
             "-c", 'default_permissions="rollout_agent"',
+            # A filesystem-only profile has no executable sandbox base and makes
+            # every shell command abort (exit 134). Inherit the executable
+            # workspace profile, then narrow output with the path-specific map.
+            # thread/start deliberately does not pass a sandbox override, so
+            # these more-specific deny/read/write rules remain authoritative.
+            "-c", 'permissions.rollout_agent.extends=":workspace"',
             "-c", "permissions.rollout_agent.filesystem=" + filesystem,
             "--enable", "shell_tool",
             "--enable", "view_image",

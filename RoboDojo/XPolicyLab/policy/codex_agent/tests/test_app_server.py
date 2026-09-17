@@ -215,7 +215,7 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
     assert args[args.index("shell_tool") - 1] == "--enable"
     assert args[args.index("view_image") - 1] == "--enable"
     assert args[args.index("plugins") - 1] == "--disable"
-    assert 'permissions.rollout_agent.extends=":workspace"' not in args
+    assert 'permissions.rollout_agent.extends=":workspace"' in args
     filesystem = next(value for value in args if value.startswith("permissions.rollout_agent.filesystem="))
     assert f'{json.dumps(str(WORKSPACE / "output"))} = "none"' in filesystem
     observations = WORKSPACE / "output" / "context-smoke-test" / "observations"

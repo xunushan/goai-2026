@@ -228,7 +228,9 @@ def output_schema() -> dict[str, Any]:
         "properties": {
             "left": _arm_schema(),
             "right": _arm_schema(),
-            "note": {"type": "string", "minLength": 1, "maxLength": 30},
+            # Brevity is a prompt preference, not grounds for discarding an
+            # otherwise executable pose decision.
+            "note": {"type": "string", "minLength": 1},
             "phase": {"type": "string", "minLength": 1, "maxLength": 10},
         },
     }
@@ -249,8 +251,6 @@ def validate_response(value: Any) -> dict[str, Any]:
         raise PolicyValidationError(f"the reply must contain exactly {sorted(wanted)}")
     if not isinstance(value["note"], str) or not value["note"].strip():
         raise PolicyValidationError("the reply's note must be a non-empty string")
-    if len(value["note"]) > 30:
-        raise PolicyValidationError("the reply's note must be at most 30 characters")
     if not isinstance(value["phase"], str) or not value["phase"].strip():
         raise PolicyValidationError("the reply's phase must be a non-empty string")
     if len(value["phase"]) > 10:

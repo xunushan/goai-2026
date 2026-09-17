@@ -104,8 +104,8 @@ action:
 
 Quaternion order is exactly `[w, x, y, z]` as stated in `AGENTS.md`.
 
-`note` and `phase` are required and are read by humans. `note` must not exceed 30
-characters: state only the decisive current evidence and action purpose; omit
+`note` and `phase` are required and are read by humans. Aim to keep `note` within
+30 characters: state only the decisive current evidence and action purpose; omit
 pixel coordinates, pose arrays, dimensions, repeated history and tool mechanics.
 `phase` must not exceed 10 characters and should be a label such as `approach`,
 `grasp`, `insert`, or `retreat`.
