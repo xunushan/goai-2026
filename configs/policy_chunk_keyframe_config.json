@@ -1,0 +1,24 @@
+{
+  "_comment": "策略 rollout（仿真评测日志 CSV）上的 chunk 级关键帧判定参数。方法同 docs/xyz_gripper_event_segmentation.md §4~§9，但距离阈值是对**命令轨迹**重新标定的，不能直接沿用 configs/xyz_segment_config.json 里训练集的数值（那边是 0.055，在本数据上会让反查 lead 顶满 max_lookback）。本文件是该流程参数的唯一来源，勿把数值写死在代码里。",
+  "_why_recalibrated": "configs/xyz_segment_config.json 的 tasks.2 (stack_bowls) d_in=0.055 标定自 sim 训练集 expert 轨迹；实测套到 rollout 命令轨迹上，env 3 的 approach_lead 达 35~40 帧、顶住 max_lookback=40，即回看不到真实邻域边界。",
+  "_calibration": "doc §11.1：统计 6 个 episode 共 20 个周期「锚点前 N 帧的窗口内最大距离」分位，取使最终定位阶段中位 10~15 帧的取值。实测 —— grasp 锚点前 15 帧中位 0.0473 m / 20 帧 0.0691 m；place 前 15 帧中位 0.0335 m / 20 帧 0.0468 m。故 grasp 取 d_in=0.045、place 取 d_in=0.035。",
+  "chunk_size": 30,
+  "_chunk_size_doc": "本配置默认 30，对应 deploy.yml 的 actions_per_chunk=30（策略一次预测并执行 30 帧）。CLI --chunk 可覆盖。",
+  "segment": {
+    "grasp": {
+      "d_in": 0.045,
+      "d_out": 0.065,
+      "max_lookback": 40,
+      "k_d": 4
+    },
+    "place": {
+      "d_in": 0.035,
+      "d_out": 0.05,
+      "max_lookback": 40,
+      "k_d": 4
+    },
+    "k_confirm": 4,
+    "_k_confirm_doc": "doc §5/§6 动作完成后的稳定确认帧数，归入同一事件；沿用训练集口径 4。"
+  },
+  "_detect": "夹爪锚点检测参数沿用 configs/xyz_segment_config.json 的 detect 段（eps/min_len/min_prominence/hold_min_len/open_level），本文件不重复定义，由工具从那边读取。"
+}
