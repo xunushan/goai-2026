@@ -11,7 +11,12 @@ CSV 字段（一行 = 一个仿真帧）：
   task            任务指令（instruction）
   episode_index   按 request 计数器归零切分（服务端收到 reset 帧会重置
                   _request_index），一个 reset 组 = 一个 episode
-  env_idx         并行仿真环境编号（episode 内多 env 并行，各自独立轨迹）
+  env_idx         并行仿真环境编号（episode 内多 env 并行，各自独立轨迹）。
+                  **注意**：eval-num=N 时 N 个 episode 是同一 reset 组内的 N 个
+                  并行 env，request 全程不归零，因此 episode_index 恒为 0，
+                  真正的「一个 episode」要按 env_idx（或 episode_uuid）区分。
+  episode_uuid    该 env 的 8 位 hex uuid，与评测视频文件名
+                  episode_<uuid>_cam_*.mp4 一致；旧日志无此字段时为空串
   frame_index     该 env 在 episode 内的帧号；首帧 0 即仿真初始 state
   state_*         16 维 state（l_x..l_g, r_x..r_g），仅 chunk 边界帧有值，
                   其余帧为空字符串
@@ -47,11 +52,16 @@ STATE_NAMES = [
 STATE_PREFIX = "state_"
 ACTION_PREFIX = "action_"
 
-_IO_RE = re.compile(r"^\[([^]]+)\] \[x_vla\]\[io\] (.*)$")
+# 行首的 `[...] ` 时间戳前缀是可选的：老日志由 logging 加前缀，现行服务端
+# 直接 print（`[x_vla][io] {...}`），两者都要能解析。
+_IO_RE = re.compile(r"^(?:\[([^]]+)\] )?\[x_vla\]\[io\] (.*)$")
 
 
 def parse_events(log_path: str) -> list[tuple[str, dict]]:
-    """解析日志中的 [x_vla][io] 事件，返回 [(ts, payload_dict), ...]。"""
+    """解析日志中的 [x_vla][io] 事件，返回 [(ts, payload_dict), ...]。
+
+    ts 为行首时间戳前缀；现行日志无前缀时为空字符串。
+    """
     events: list[tuple[str, dict]] = []
     with open(log_path, encoding="utf-8", errors="replace") as fh:
         for line in fh:
@@ -64,7 +74,7 @@ def parse_events(log_path: str) -> list[tuple[str, dict]]:
                 continue
             if not isinstance(payload, dict) or "event" not in payload:
                 continue
-            events.append((m.group(1), payload))
+            events.append((m.group(1) or "", payload))
     return events
 
 
@@ -129,6 +139,9 @@ def episode_to_rows(episode: list[tuple[str, dict]], ep_index: int) -> tuple[lis
     missing_action = 0
     for env_idx, requests in sorted(env_requests.items()):
         task = str(obs_by_req[requests[0]].get("instruction", ""))
+        # 8 位 hex uuid，与评测视频文件名 episode_<uuid>_cam_*.mp4 一致；
+        # 新日志才有，缺失时留空。
+        uuid = str(obs_by_req[requests[0]].get("episode_idx", ""))
         for k, request in enumerate(requests):
             obs = obs_by_req[request]
             act = act_by_req.get(request)
@@ -157,7 +170,7 @@ def episode_to_rows(episode: list[tuple[str, dict]], ep_index: int) -> tuple[lis
                         action_row[7] = left_cmd[step]
                     if step < len(right_cmd):
                         action_row[15] = right_cmd[step]
-                rows.append([task, ep_index, env_idx, frame] + state_row + action_row)
+                rows.append([task, ep_index, env_idx, uuid, frame] + state_row + action_row)
     return rows, missing_action
 
 
@@ -181,7 +194,7 @@ def main() -> int:
         rows.extend(ep_rows)
 
     columns = (
-        ["task", "episode_index", "env_idx", "frame_index"]
+        ["task", "episode_index", "env_idx", "episode_uuid", "frame_index"]
         + [f"{STATE_PREFIX}{name}" for name in STATE_NAMES]
         + [f"{ACTION_PREFIX}{name}" for name in STATE_NAMES]
     )

@@ -115,8 +115,14 @@ def plot_episode_state(
     task_slug: str,
     episode_index: int,
     out_path: Path,
+    subtitle: str | None = None,
 ) -> None:
-    """绘制单个 episode 的 3 子图 (xyz / 旋转角 / gripper) 并保存 PNG。"""
+    """绘制单个 episode 的 3 子图 (xyz / 旋转角 / gripper) 并保存 PNG。
+
+    subtitle 用于覆盖默认的 `episode <i>  (<n> frames)` 副标题——当 state 是
+    稀疏采样（如策略日志只在 chunk 边界上报）时，`state.shape[0]` 是采样点数
+    而非 episode 帧数，调用方应显式传入真实帧数以免误导。
+    """
     import matplotlib
 
     matplotlib.use("Agg")
@@ -134,8 +140,9 @@ def plot_episode_state(
     })
 
     fig, axes = plt.subplots(2, 2, figsize=(14, 8.5))
-    fig.suptitle(f"{task_name}\nepisode {episode_index}  ({n_frames} frames)",
-                 fontsize=11, y=0.99)
+    if subtitle is None:
+        subtitle = f"episode {episode_index}  ({n_frames} frames)"
+    fig.suptitle(f"{task_name}\n{subtitle}", fontsize=11, y=0.99)
 
     # ---- 位置 xyz: 左右臂各一个子图, 散点无实线, 便于看轨迹变化 ----
     for ax, name, sl, prefix in [
