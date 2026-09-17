@@ -49,6 +49,12 @@ def model(result):
 
 def main() -> int:
     validate_response(decision())
+    try:
+        validate_response({**decision(), "note": "x" * 161})
+    except PolicyValidationError:
+        pass
+    else:
+        raise AssertionError("schema accepted an overly long note")
     gripper_while_moving = decision()
     gripper_while_moving["left"]["gripper"] = "close"
     validate_response(gripper_while_moving)

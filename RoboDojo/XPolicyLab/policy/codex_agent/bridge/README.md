@@ -127,7 +127,7 @@ a corrupt attachment; and the `images[].name` list must equal the camera list
 name and a mismatch would hand the model three pictures under labels that
 contradict them.
 
-→ `200 {ok, request_id, decision, note, phase, usage, latency_ms, record_dir}`
+→ `200 {ok, decision}`
 
 ```jsonc
 "decision": {
@@ -190,7 +190,7 @@ Everything the bridge receives is written down under `workspace/output/<episode_
 | path | contents |
 | --- | --- |
 | `rollout.jsonl` | one line per turn: request ids, the decision, usage, latency, errors |
-| `observations/NNNNNN_<request_id>/<camera>.<jpg\|png>` | the images, **byte for byte as received** |
+| `observations/<camera>/NNNNNN_<request_id>.<jpg\|png>` | the images, **byte for byte as received** |
 | `scratch/` | the one place the model may write |
 
 Images are stored at the resolution they arrived in: nothing is cropped, rescaled

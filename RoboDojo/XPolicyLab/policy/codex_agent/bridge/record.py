@@ -2,7 +2,7 @@
 
 Two artefacts per episode, both under ``workspace/output/<episode_id>/``:
 
-``observations/{step_id:06d}_{request_id}/<camera>.<ext>``
+``observations/<camera>/{step_id:06d}_{request_id}.<ext>``
     The images, at the resolution they arrived in. The bytes are written exactly
     as they were received -- no resize, no re-encode, no recompress. That is the
     point: the record has to be evidence of what the model was shown, and an
@@ -55,7 +55,7 @@ def request_slug(request_id: str, *, limit: int = 40) -> str:
     return (slug or "request")[:limit]
 
 
-def turn_dir_name(step_id: int, request_id: str) -> str:
+def turn_file_stem(step_id: int, request_id: str) -> str:
     return f"{step_id:06d}_{request_slug(request_id)}"
 
 
@@ -93,9 +93,6 @@ def store_images(
     request_id: str,
 ) -> tuple[Path, ...]:
     """Write the packet's images verbatim and return where they landed."""
-    directory = record_dir / OBSERVATIONS_DIRNAME / turn_dir_name(step_id, request_id)
-    directory.mkdir(parents=True, exist_ok=True)
-
     written: list[Path] = []
     for image in images:
         sniffed = detect_magic(image.data)
@@ -108,7 +105,9 @@ def store_images(
                 raise PolicyValidationError(
                     f"image {image.name!r} is declared {image.mime} but its bytes are {kind}"
                 )
-        path = directory / f"{image.name}{suffix}"
+        directory = record_dir / OBSERVATIONS_DIRNAME / image.name
+        directory.mkdir(parents=True, exist_ok=True)
+        path = directory / f"{turn_file_stem(step_id, request_id)}{suffix}"
         path.write_bytes(image.data)
         written.append(path)
     return tuple(written)
@@ -145,8 +144,6 @@ def turn_record(
     observation_state: dict[str, Any],
     ok: bool,
     decision: dict[str, Any] | None = None,
-    note: str | None = None,
-    phase: str | None = None,
     usage: dict[str, Any] | None = None,
     latency_ms: int | None = None,
     error_kind: str | None = None,
@@ -167,8 +164,6 @@ def turn_record(
         "recorded_at": datetime.now(timezone.utc).isoformat(timespec="milliseconds"),
         "ok": ok,
         "decision": decision,
-        "note": note,
-        "phase": phase,
         "usage": usage,
         "latency_ms": latency_ms,
         "error_kind": error_kind,

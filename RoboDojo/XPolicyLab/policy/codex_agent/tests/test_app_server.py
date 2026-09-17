@@ -20,11 +20,11 @@ from codex_agent.bridge.app_server import (  # noqa: E402
 )
 from codex_agent.bridge.bridge import (  # noqa: E402
     BridgeState,
-    ROLLOVER_TURNS,
     _data_url,
     _render_turn,
 )
 from codex_agent.bridge.schema import ArmObservation, ImageInput, Observation  # noqa: E402
+from codex_agent.bridge.record import relative_paths, store_images  # noqa: E402
 
 WORKSPACE = PACKAGE / "workspace"
 
@@ -100,6 +100,23 @@ def test_required_skills_are_discovered_from_workspace_paths() -> None:
         }
 
 
+def test_observations_are_grouped_by_camera_then_step() -> None:
+    with tempfile.TemporaryDirectory(prefix="policy-observations-test-") as directory:
+        record_dir = Path(directory)
+        images = tuple(
+            ImageInput(name, "image/jpeg", b"\xff\xd8\xff\xd9")
+            for name in ("cam_head", "cam_left_wrist", "cam_right_wrist")
+        )
+        paths = store_images(
+            images, record_dir=record_dir, step_id=12, request_id="ep-test-000003"
+        )
+        assert relative_paths(paths, record_dir) == [
+            "observations/cam_head/000012_ep-test-000003.jpg",
+            "observations/cam_left_wrist/000012_ep-test-000003.jpg",
+            "observations/cam_right_wrist/000012_ep-test-000003.jpg",
+        ]
+
+
 def test_images_and_three_turn_rotation() -> None:
     server = RecordingAppServer()
     encoded_images = [
@@ -107,12 +124,19 @@ def test_images_and_three_turn_rotation() -> None:
         for name in ("cam_head", "cam_left_wrist", "cam_right_wrist")
     ]
     for turn in range(4):
+        replay = None
+        if turn == 3:
+            replay = [
+                {"type": "text", "text": "historical observation"},
+                {"type": "image", "url": "data:image/jpeg;base64,/9j/2Q=="},
+                {"type": "text", "text": "historical structured decision"},
+            ]
         server.decide(
             text=f"observation-{turn}",
             images=encoded_images,
             output_schema={"type": "object"},
             timeout_s=1,
-            rollover_context="three-step-summary" if turn == 3 else None,
+            replay=replay,
         )
 
     assert [request["threadId"] for request in server.turn_requests] == [
@@ -120,16 +144,20 @@ def test_images_and_three_turn_rotation() -> None:
     ]
     for turn, request in enumerate(server.turn_requests):
         inputs = request["input"]
-        assert f"observation-{turn}" in inputs[0]["text"]
-        assert [item.get("text") for item in inputs if item["type"] == "text"][1:] == [
+        assert any(f"observation-{turn}" in item.get("text", "") for item in inputs)
+        camera_labels = [
+            item.get("text") for item in inputs
+            if item["type"] == "text" and item.get("text", "").startswith("Camera image:")
+        ]
+        assert camera_labels == [
             "Camera image: cam_head",
             "Camera image: cam_left_wrist",
             "Camera image: cam_right_wrist",
         ]
         image_items = [item for item in inputs if item["type"] == "image"]
-        assert len(image_items) == 3
+        assert len(image_items) == (4 if turn == 3 else 3)
         assert all(item["url"] == "data:image/jpeg;base64,/9j/2Q==" for item in image_items)
-    assert server.turn_requests[3]["input"][0]["text"].startswith("three-step-summary\n\n")
+    assert server.turn_requests[3]["input"][0]["text"] == "historical observation"
 
 
 def test_failed_image_turns_still_trigger_rotation() -> None:
@@ -151,19 +179,30 @@ def test_failed_image_turns_still_trigger_rotation() -> None:
     ]
 
 
-def test_rollover_replays_exactly_three_earlier_decisions() -> None:
-    assert ROLLOVER_TURNS == 3
+def test_rollover_replays_all_text_and_only_latest_images() -> None:
     state = object.__new__(BridgeState)
     state.history = [
-        {"turn_index": index, "phase": f"phase-{index}", "note": f"note-{index}"}
+        {
+            "observation_text": f"observation-{index}",
+            "decision": {
+                "left": {"position": "keep", "orientation": "keep", "gripper": "keep"},
+                "right": {"position": "keep", "orientation": "keep", "gripper": "keep"},
+                "note": f"evidence-{index}",
+                "phase": f"phase-{index}",
+            },
+            "image_paths": [f"observations/cam_head/{index:06d}.jpg"],
+            "images": [] if index < 7 else [
+                ("cam_head", "data:image/jpeg;base64,/9j/2Q==")
+            ],
+        }
         for index in range(8)
     ]
-    text = state.rollover_context()
-    assert text is not None
-    assert "turn 6 [phase-5] note-5" in text
-    assert "turn 7 [phase-6] note-6" in text
-    assert "turn 8 [phase-7] note-7" in text
-    assert "turn 5 " not in text
+    items = state.replay()
+    text = json.dumps(items, ensure_ascii=False)
+    for index in range(8):
+        assert f"observation-{index}" in text
+        assert f"evidence-{index}" in text
+    assert sum(item["type"] == "image" for item in items) == 1
 
 
 def test_live_app_server_tool_and_skill_isolation() -> None:
@@ -220,9 +259,10 @@ def test_live_app_server_tool_and_skill_isolation() -> None:
 def main() -> int:
     test_each_turn_contains_the_fresh_observation()
     test_required_skills_are_discovered_from_workspace_paths()
+    test_observations_are_grouped_by_camera_then_step()
     test_images_and_three_turn_rotation()
     test_failed_image_turns_still_trigger_rotation()
-    test_rollover_replays_exactly_three_earlier_decisions()
+    test_rollover_replays_all_text_and_only_latest_images()
     test_live_app_server_tool_and_skill_isolation()
     print("app-server context tests passed")
     return 0

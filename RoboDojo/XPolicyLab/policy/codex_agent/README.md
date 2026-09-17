@@ -22,7 +22,7 @@ workspace**、一个只做传输与校验的 bridge。
 | F | 提示词在 GPU 侧整段渲染后过隧道：文本有多个作者 | ✅ | 当轮文本由 `bridge/bridge.py` 直接组装，常驻规则在 `workspace/AGENTS.md` / `SKILL.md`；GPU 侧只发结构化观测包（`observation.py`） |
 | G | 提示词里写着一堆**我们说不清出处的数字**：起始位姿、示范数据统计出来的工作空间盒、桌面高度 z=0.76 | ✅ | 全部删除。只留两类：单次决策增量上界（0.05 m / 0.35 rad）与夹爪标度端点（0 / 1）；其余数值只能是本轮实测值或操作员预算 |
 | H | 图片在 GPU 侧被缩到长边 480，而原图后续另有用途 | ✅ | **不裁不缩**（照 GPT-Policy）：`encode_image` 只做 JPEG 质量转换，bridge 原样落盘收到的字节；`max_edge` / `max_width` 现在都是硬报错 |
-| I | 没有审计留痕：收发的图片、每轮 turn 只存在于日志行里 | ✅ | `workspace/output/<episode_id>/`：`rollout.jsonl` 一行一轮、`observations/NNNNNN_<request_id>/<camera>.jpg|png` 逐字节原样、`scratch/` 是唯一可写目录 |
+| I | 没有审计留痕：收发的图片、每轮 turn 只存在于日志行里 | ✅ | `workspace/output/<episode_id>/`：`rollout.jsonl` 一行一轮、`observations/<camera>/NNNNNN_<request_id>.jpg|png` 逐字节原样、`scratch/` 是唯一可写目录 |
 | J | 推理过程不可见，模型有没有真去读 workspace、有没有回看历史帧都无从判断 | ✅ | 权限模型（`workspace/.codex/config.toml` + bridge 用 `-c` 显式下发）：`view_image` / `shell_tool` 开，`web_search` / `computer_use` / `multi_agent` 关 |
 
 **第一步**（已完成，保留在此）：`guardrail:` 段补上单次决策上界、

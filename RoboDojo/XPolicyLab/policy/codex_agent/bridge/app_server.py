@@ -41,7 +41,7 @@ from typing import Any
 # Enough turns of memory to keep a decision in view, few enough that the image
 # context does not grow without bound. The same number as the reference
 # controller's ``live_image_window``.
-DEFAULT_MAX_LIVE_IMAGE_TURNS = 3
+DEFAULT_MAX_LIVE_IMAGE_TURNS = 8
 
 SKILLS_ROOT = Path(".agents/skills")
 
@@ -325,7 +325,7 @@ class CodexAppServer:
         images: list[tuple[str, str]],
         output_schema: dict[str, Any],
         timeout_s: float,
-        rollover_context: str | None = None,
+        replay: list[dict[str, Any]] | None = None,
     ) -> tuple[str, dict[str, Any]]:
         """One turn, returning ``(final text, usage)``.
 
@@ -334,11 +334,13 @@ class CodexAppServer:
         same table are not something a model can tell apart -- and the label is
         the same name the turn text just listed.
         """
+        rotating = self.rotation_due
         thread_id = self._thread_for_next_turn()
-        inputs: list[dict[str, Any]] = [{
+        inputs: list[dict[str, Any]] = list(replay or ())
+        inputs.append({
             "type": "text",
-            "text": (rollover_context + "\n\n" if rollover_context else "") + text,
-        }]
+            "text": text,
+        })
         for name, url in images:
             inputs.append({"type": "text", "text": f"Camera image: {name}"})
             inputs.append({"type": "image", "url": url})
@@ -356,6 +358,8 @@ class CodexAppServer:
         # Once turn/start accepted the turn, its images belong to this thread even
         # if the model later times out or fails. Count submission, not completion,
         # so failures cannot silently grow the live image window past its bound.
+        if rotating and replay:
+            self._live_image_turns = 1 if any(item.get("type") == "image" for item in replay) else 0
         if images:
             self._live_image_turns += 1
         answer, usage = self._wait_for_final(thread_id, turn_id, timeout_s)

@@ -54,10 +54,6 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 # Where the workspace sits relative to this package, i.e. ``codex_agent/workspace``.
 DEFAULT_WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
 
-# How many earlier decisions are replayed as words when a thread is rotated.
-# The rotation itself is the App Server's business; this is how much of the story
-# survives it.
-ROLLOVER_TURNS = 3
 CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
 
@@ -139,19 +135,35 @@ class BridgeState:
         self.episode_id = episode_id
         self.history = []
 
-    def rollover_context(self) -> str | None:
-        """The earlier decisions, as words, for a thread that is about to rotate.
-
-        Keep exactly the latest three completed decisions. The current turn also
-        carries execution feedback, but that is not a replacement for the policy's
-        own note and phase from the previous decision.
-        """
-        earlier = self.history[-ROLLOVER_TURNS:]
-        if not earlier:
-            return None
-        lines = ["EARLIER DECISIONS (their images are no longer attached)"]
-        lines.extend(f"  turn {entry['turn_index'] + 1} [{entry['phase']}] {entry['note']}" for entry in earlier)
-        return "\n".join(lines)
+    def replay(self) -> list[dict[str, Any]]:
+        """Rebuild the full policy history while retaining only its latest images."""
+        if not self.history:
+            return []
+        items: list[dict[str, Any]] = [{
+            "type": "text",
+            "text": (
+                "HISTORICAL EXECUTION RECORD. All prior observation text and "
+                "structured decisions follow in order. Older image encodings were "
+                "removed; their cache paths remain in the observation records."
+            ),
+        }]
+        for entry in self.history:
+            items.append({"type": "text", "text": entry["observation_text"]})
+            items.append({
+                "type": "text",
+                "text": "Historical image cache: " + ", ".join(entry["image_paths"]),
+            })
+            for name, url in entry["images"]:
+                items.append({"type": "text", "text": f"Historical camera image: {name}"})
+                items.append({"type": "image", "url": url})
+            items.append({
+                "type": "text",
+                "text": "Historical structured decision: " + json.dumps(
+                    entry["decision"], ensure_ascii=False, separators=(",", ":")
+                ),
+            })
+        items.append({"type": "text", "text": "END HISTORICAL EXECUTION RECORD"})
+        return items
 
     def close(self) -> None:
         self.server.close()
@@ -240,13 +252,15 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
         fresh_thread = state.server.thread_id is None or rotating
         timeout_s = state.args.timeout_first_turn_s if fresh_thread else state.args.timeout_s
 
+        turn_text = _render_turn(observation)
+        image_inputs = [(image.name, _data_url(image)) for image in observation.images]
         try:
             text, usage = state.server.decide(
-                text=_render_turn(observation),
-                images=[(image.name, _data_url(image)) for image in observation.images],
+                text=turn_text,
+                images=image_inputs,
                 output_schema=output_schema(),
                 timeout_s=timeout_s,
-                rollover_context=state.rollover_context() if rotating else None,
+                replay=state.replay() if rotating else None,
             )
             decision = _parse_reply(text)
         except AppServerError as exc:
@@ -257,14 +271,17 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
         log(
             ok=True,
             decision=decision,
-            note=decision["note"],
-            phase=decision["phase"],
             usage=usage,
             latency_ms=latency_ms,
         )
-        state.history.append(
-            {"turn_index": observation.turn_index, "note": decision["note"], "phase": decision["phase"]}
-        )
+        for entry in state.history:
+            entry["images"] = []
+        state.history.append({
+            "observation_text": turn_text,
+            "decision": decision,
+            "image_paths": image_paths,
+            "images": image_inputs,
+        })
         return {"ok": True, "decision": decision}
 
 

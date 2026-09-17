@@ -91,5 +91,8 @@ action:
 
 Quaternion order is exactly `[w, x, y, z]` as stated in `AGENTS.md`.
 
-`note` and `phase` are required and are read by humans: `note` is what you see and
-why, `phase` is a short label such as `approach`, `grasp`, `insert`, `retreat`.
+`note` and `phase` are required and are read by humans. Keep `note` to one short
+sentence: name only the decisive current evidence and why it determines this
+action; omit pixel coordinates, pose arrays, dimensions, repeated history and
+tool mechanics. `phase` is a short label such as `approach`, `grasp`, `insert`,
+`retreat`.
