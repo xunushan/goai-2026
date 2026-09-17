@@ -1067,6 +1067,7 @@ def test_budget_bookkeeping_is_internally_consistent() -> None:
         state = model._episode
         assert state is not None
         state.calls_used = model.max_codex_calls - 1
+        check(model._action_cap(state) == 1, "a one-step remainder stays within budget")
         state.sim_steps_used = model.step_budget - 1
 
 
