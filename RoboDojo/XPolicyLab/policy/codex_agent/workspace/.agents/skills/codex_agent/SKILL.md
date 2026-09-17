@@ -23,7 +23,7 @@ the previous decision is not evidence about the present.
 
 The current camera images are already attached to the turn. Inspect them directly;
 do not use shell commands to reopen, crop, resize, tile, draw grids on, or repeatedly
-measure the same images. Do not run ad-hoc colour thresholds, masks, pixel scans, or
+measure the same images. Do not run ad-hoc colour cut-offs, masks, pixel scans, or
 uncalibrated pixel-to-world calculations. Their apparent precision is misleading.
 
 Use `view_image` only for a specific older cached frame when the current views and
