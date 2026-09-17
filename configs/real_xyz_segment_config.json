@@ -95,7 +95,8 @@
     "0": {
       "slug": "fill_pen_holder",
       "cn": "装笔筒",
-      "note": "左臂持笔筒、右臂重复抓笔/运笔/放笔。标定：锚点前 10 帧距离 p50=0.0107、20 帧 0.0410、40 帧 0.1420；理想 lead（最后一次离开 0.035m 邻域）p50=19、p90=36 帧。取 D_in=0.020 使最终定位约 15 帧，M=30 封住 p90。",
+      "note": "右臂持笔筒、左臂重复抓笔/运笔/放笔。标定：锚点前 10 帧距离 p50=0.0107、20 帧 0.0410、40 帧 0.1420；理想 lead（最后一次离开 0.035m 邻域）p50=19、p90=36 帧。取 D_in=0.020 使最终定位约 15 帧，M=30 封住 p90。",
+      "_role_note": "角色与 doc §12.1 示例配置相反：真实 6 集逐集检出 左3+右1 个周期，且 resolve_fill_roles 在 6/6 集判出 holder=right（三处独立证据：周期数 3L/1R、保持跨度最大臂为右、用户 2026-09-16 反馈原文『右臂 holder 的放置范围太大』）。",
       "grasp": {
         "d_in": 0.02,
         "d_out": 0.028,
@@ -267,5 +268,19 @@
     "hold_end": "doc §4.2 open_start, 夹爪开始有效张开（= 放置/插入锚点 t_o）",
     "open_full": "doc §4.2 open_end, 打开结束并回到稳定状态; 哨兵 -1 = 周期未回开(无真实释放)"
   },
-  "_layer2": "任务级事件映射 (doc §12) 尚未实现，本轮只产出左右臂底层五状态 (move/grasp/place/hold/idle)。"
+  "_layer2": "任务级事件映射 (doc §12) 由 tools/xyz_task_event.py --dataset real 生成，落到 data/real_lerobot_v30_ee/frame_weight.csv (列: episode_index, frame_index, left_state, right_state, task_event)。",
+  "layer2": {
+    "k_gap": 60,
+    "_k_gap_note": "§12.2 条件 1『place 与 grasp 允许的配对间隔』。doc 无实测值，仿真侧取 25，真实侧必须放宽：6 集里真交接（递交侧 place ↔ 接取侧 grasp，且过条件 2『接取侧 close_end <= 递交侧 open_end』）的间隔实测为 ep501=40 / ep502=-30（重叠）/ ep503=43 / ep504=36 / ep505=48 / ep506=40 帧，而次近的假候选（递交右臂 place ↔ 接取左臂 grasp）间隔 >=122 帧。60 落在 (48, 122) 内，6 集恰好各配上 1 对。",
+    "_handover_note": "doc §12.2 条件 3 的双臂距离阈值 D_handover 仍未落数值，不参与筛选（与仿真侧一致）。",
+    "_families": {
+      "0": "fill (§12.1)",
+      "1": "object (doc 未定义，按 §2.2 的 <状态>_<物体> 补)",
+      "2": "block + place_cup (doc 未定义；扣杯 = 该集最后一次 place)",
+      "3": "bowl (§12.3)",
+      "4": "bottle (doc 未定义，按 §2.2 补)",
+      "5": "plug (§12.2)"
+    },
+    "_place_cup_rule": "官方任务串『Stack all three blocks into one vertical stack, then place the cup over the entire stack』(data/real_lerobot_v30_ee/meta/tasks.parquet)。取该集最后一次非交接的 place 标为 place_cup。实测 6 集该 place 与前一次 place 的间隔为 130~250 帧，其余相邻 place 都在 150 帧内成串出现，末尾那次是唯一孤立的。"
+  }
 }
