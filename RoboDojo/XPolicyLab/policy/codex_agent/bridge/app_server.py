@@ -44,6 +44,29 @@ DEFAULT_MAX_LIVE_IMAGE_TURNS = 3
 
 SKILL_PATH = ".agents/skills/codex_agent/SKILL.md"
 
+# The DeepSeek provider cannot come from the workspace's `.codex/config.toml`.
+# Codex loads that file, but refuses these two keys from a project-local source
+# and says so on startup:
+#
+#   Ignored unsupported project-local config keys in <workspace>/.codex/config.toml:
+#   model_provider, model_providers. If you want these settings to apply, manually
+#   set them in your user-level config.toml.
+#
+# Setting them in the user-level config would change the model provider for every
+# Codex session on the machine, the desktop app included. `-c` reaches only the
+# child process started below, which is why the override lives here.
+#
+# The key is named, never carried: `env_key` makes Codex read DEEPSEEK_API_KEY
+# from the environment, so no secret is written to a file in this tree.
+DEEPSEEK_MODEL_ARGS = (
+    "-c", 'model="deepseek-flash"',
+    "-c", 'model_provider="deepseek"',
+    "-c", 'model_providers.deepseek.name="deepseek"',
+    "-c", 'model_providers.deepseek.base_url="https://api.deepseek.com/"',
+    "-c", 'model_providers.deepseek.wire_api="responses"',
+    "-c", 'model_providers.deepseek.env_key="DEEPSEEK_API_KEY"',
+)
+
 
 class AppServerError(RuntimeError):
     """A turn did not produce an answer, with ``kind`` saying why.
@@ -110,7 +133,11 @@ class CodexAppServer:
         messages = self._messages = queue.Queue()
         self._backlog = []
         self.process = subprocess.Popen(
-            [self.codex_bin, "app-server", "--stdio", "--strict-config", *self._permission_args()],
+            [
+                self.codex_bin, "app-server", "--stdio", "--strict-config",
+                *self._permission_args(),
+                *self._model_args(),
+            ],
             cwd=self.workspace,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -156,6 +183,18 @@ class CodexAppServer:
             "--disable", "multi_agent",
             "--disable", "multi_agent_v2",
         ]
+
+    def _model_args(self) -> list[str]:
+        """Which model answers, and over which provider.
+
+        The catalog is what tells Codex that ``deepseek-flash`` accepts images.
+        The policy attaches three camera views per turn, and the only other
+        DeepSeek entry in that catalog is text-only, so the pairing is not
+        interchangeable. It is read at startup, which means a missing or
+        malformed file fails the server rather than a turn.
+        """
+        catalog = self.workspace / ".codex" / "models.json"
+        return [*DEEPSEEK_MODEL_ARGS, "-c", f"model_catalog_json={json.dumps(str(catalog))}"]
 
     def close(self) -> None:
         process, self.process = self.process, None
