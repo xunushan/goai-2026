@@ -37,20 +37,37 @@ Ask for one motion that advances the task, then look again.
   refused outright, the arm does not move at all, and the decision still counts
   against your budget -- so an over-large request costs you two decisions, not one.
 
-## 4. Read the feedback from your last decision
+## 4. Separate motion from grasp and release
+
+Do not close or open a gripper while moving that arm. During approach, alignment,
+insertion, or withdrawal, use `"keep"` for the gripper. A target you submitted is
+not proof that the arm arrived or that contact is safe.
+
+After positioning, inspect the next observation before changing the gripper. Use
+the active arm's wrist close-up for the jaws and nearby object, and the head view
+to check the wider scene, clearance, and support. Confirm that the observed arm
+state is consistent with the intended pose. Only then issue a separate gripper
+decision, with position and orientation set to `"keep"`.
+
+Before opening, verify from the fresh views that the object is fully supported by
+the destination or the other arm. After opening, observe once more before moving
+away. If the object still appears trapped by the fingers or unsupported, keep it
+supported and disengage deliberately; do not withdraw and declare success.
+
+## 5. Read the feedback from your last decision
 
 The turn text states the outcome of your previous motion: whether it was carried
 out, whether it was refused or clamped, and how far the arms actually got. Read it
 before repeating a request. If something was refused, the reason is stated; fix the
 request rather than sending it again.
 
-## 5. Watch the budget
+## 6. Watch the budget
 
 The turn text states how many decisions and simulator steps remain. Travel and
 reposition early while the budget is large; reserve the last decisions for precise
 alignment and for the ending the success condition requires.
 
-## 6. Reply with exactly one JSON object
+## 7. Reply with exactly one JSON object
 
 No prose before or after it, no Markdown fence, no explanation, and never a second
 action:
