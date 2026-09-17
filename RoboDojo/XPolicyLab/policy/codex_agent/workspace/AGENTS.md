@@ -25,10 +25,9 @@ Read it and follow it.
   part of the arm that meets the table.
 - "orientation" is the absolute end-effector quaternion `[w, x, y, z]` in the
   world frame.
-- The gripper is a single number on a scale where 1.00 is fully open. "close" drives
-  the jaws together until they meet whatever is between them, so after a close the
-  number you observe tells you how wide that object is. Open the jaws wider than the
-  object before closing them on it.
+- The gripper is a single measured number on a scale where 1.00 is fully open.
+  Treat it only as gripper state; it does not measure object width and does not
+  prove contact or a successful grasp.
 
 ## PER-DECISION LIMIT
 
@@ -44,10 +43,8 @@ compare it against the target you commanded rather than assuming the move
 succeeded. Arriving is something you observe on the next turn; it is never
 something you can conclude from having asked for it.
 
-A close command is not proof that the jaws are holding anything. After a close, the
-number you observe is how far the jaws got -- the width of whatever stopped them --
-and jaws that met nothing read as closed too. Treat it as a measurement, not as a
-confirmation that the object is held.
+A close command and the gripper number are not proof that the jaws are holding
+anything. Verify a grasp from fresh camera views and the object's motion.
 
 ## CAMERA VIEWS
 

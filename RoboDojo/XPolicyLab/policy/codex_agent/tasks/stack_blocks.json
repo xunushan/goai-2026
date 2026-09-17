@@ -1,16 +1,6 @@
 {
   "task_name": "stack_blocks",
   "instruction": "Stack the three blocks with different textures.",
-  "scene": "Three blocks rest on the table in front of the robot, spaced apart from one another. They are not identical: they differ in how large they are and in how they look, so each block is distinguishable from the other two.",
-  "success_rule": "All three blocks sit in a single upright tower -- each one resting squarely on top of the one below it -- and the episode ends with both arms back at the start pose and both grippers open.",
-  "hints": [
-    "Grasp a block from directly above, with the jaws closing on two opposite faces of it rather than on a corner or an edge.",
-    "Before releasing a block, bring it directly above the middle of the block it will rest on, then lower it straight down onto that block, and open the jaws only once it is seated.",
-    "The tower gets taller with every block you add, so each placement happens higher off the table than the one before it.",
-    "A block balances best when the block beneath it is at least as wide as the block you are putting down.",
-    "If a block topples, pick it up and build the tower again rather than leaving it lying on the table.",
-    "Anything you are still holding when the episode ends has not been placed."
-  ],
   "step_budget": 550,
   "max_decisions": 100
 }

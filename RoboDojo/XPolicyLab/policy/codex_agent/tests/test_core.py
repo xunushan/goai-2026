@@ -49,6 +49,14 @@ def model(result):
 
 def main() -> int:
     validate_response(decision())
+    gripper_while_moving = decision()
+    gripper_while_moving["left"]["gripper"] = "close"
+    try:
+        validate_response(gripper_while_moving)
+    except PolicyValidationError:
+        pass
+    else:
+        raise AssertionError("schema accepted motion and gripper change in one decision")
     try:
         validate_response({**decision(), "left": {**arm([0, 0, 0]), "orientation": [0, 0, 0]}})
     except PolicyValidationError:

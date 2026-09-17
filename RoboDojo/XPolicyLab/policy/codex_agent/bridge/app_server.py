@@ -32,6 +32,7 @@ import os
 import queue
 import signal
 import subprocess
+import tempfile
 import threading
 import time
 from pathlib import Path
@@ -104,6 +105,7 @@ class CodexAppServer:
         self._messages: queue.Queue[dict[str, Any] | BaseException] = queue.Queue()
         self._backlog: list[dict[str, Any]] = []
         self._next_id = 0
+        self._runtime_home: Any | None = None
 
     # ----------------------------------------------------------------- #
     # lifecycle
@@ -132,6 +134,13 @@ class CodexAppServer:
         # that reads that marker first believes it is already dead.
         messages = self._messages = queue.Queue()
         self._backlog = []
+        self._runtime_home = tempfile.TemporaryDirectory(prefix="codex-policy-")
+        runtime_home = Path(self._runtime_home.name)
+        (runtime_home / ".codex").mkdir()
+        (runtime_home / ".agents").mkdir()
+        child_env = os.environ.copy()
+        child_env["HOME"] = str(runtime_home)
+        child_env["CODEX_HOME"] = str(runtime_home / ".codex")
         self.process = subprocess.Popen(
             [
                 self.codex_bin, "app-server", "--stdio", "--strict-config",
@@ -139,6 +148,7 @@ class CodexAppServer:
                 *self._model_args(),
             ],
             cwd=self.workspace,
+            env=child_env,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -153,6 +163,24 @@ class CodexAppServer:
         threading.Thread(target=self._drain_stderr, args=(self.process.stderr,), daemon=True).start()
         self._request("initialize", {"clientInfo": {"name": "codex-agent", "version": "0.1.0"}})
         self._send({"jsonrpc": "2.0", "method": "initialized", "params": {}})
+        self._disable_unrelated_skills()
+
+    def _disable_unrelated_skills(self) -> None:
+        """Expose only the policy skill to the model-visible skill catalog."""
+        result = self._request("skills/list", {"cwds": [str(self.workspace)], "forceReload": True})
+        policy_skill_found = False
+        for entry in result.get("data", []):
+            for skill in entry.get("skills", []):
+                if skill.get("name") == "codex_agent" and skill.get("scope") == "repo":
+                    policy_skill_found = True
+                    continue
+                path = skill.get("path")
+                if isinstance(path, str):
+                    self._request("skills/config/write", {"path": path, "enabled": False})
+        if not policy_skill_found:
+            raise AppServerError(
+                "app_server_start_failed", "workspace skill codex_agent was not discovered"
+            )
 
     def _permission_args(self) -> list[str]:
         """The sandbox, spelled out as flags rather than left to config files.
@@ -176,8 +204,12 @@ class CodexAppServer:
             "-c", 'default_permissions="rollout_agent"',
             "-c", 'permissions.rollout_agent.extends=":workspace"',
             "-c", "permissions.rollout_agent.filesystem=" + filesystem,
-            "--enable", "shell_tool",
             "--enable", "view_image",
+            "--disable", "shell_tool",
+            "--disable", "plugins",
+            "--disable", "apps",
+            "--disable", "recommended_plugins",
+            "--disable", "skill_search",
             "--disable", "web_search",
             "--disable", "computer_use",
             "--disable", "multi_agent",
@@ -201,7 +233,10 @@ class CodexAppServer:
         self._stdin = None
         self.thread_id = None
         self._live_image_turns = 0
+        runtime_home, self._runtime_home = self._runtime_home, None
         if process is None or process.poll() is not None:
+            if runtime_home is not None:
+                runtime_home.cleanup()
             return
         # By process group: the child may be a wrapper that does not forward a
         # signal to the real server, and an orphan would hold the only Codex
@@ -214,6 +249,8 @@ class CodexAppServer:
                 os.killpg(process.pid, signal.SIGKILL)
             except OSError:
                 pass
+        if runtime_home is not None:
+            runtime_home.cleanup()
 
     # ----------------------------------------------------------------- #
     # threads and turns

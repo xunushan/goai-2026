@@ -105,21 +105,20 @@ cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, stats}`.
   "request_id": "ep-1-000042",        // identifies this turn in the log; retries reuse it
   "step_id": 42,                      // simulator step the observation was taken at
   "turn_index": 41,                   // 0-based decision counter
-  "task": {"instruction": "…", "scene": "…", "success_rule": "…", "hints": ["…"]},
+  "task": {"instruction": "…"},
   "budget": {"max_decisions": 100, "max_sim_steps": 550,
              "remaining_decisions": 59, "remaining_steps": 320},
   "observation": {
-    "left":  {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0},
-    "right": {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0}
+    "left":  {"position": [x, y, z], "orientation": [w, x, y, z], "gripper": 1.0},
+    "right": {"position": [x, y, z], "orientation": [w, x, y, z], "gripper": 1.0}
   },
   "feedback": ["…"],                  // prose about the previous decision, written on the GPU side
   "images": [{"name": "cam_head", "mime": "image/jpeg", "b64": "…"}]
 }
 ```
 
-`orientation` is radians, already resolved against the episode's start pose by the
-adapter — the bridge never sees a quaternion and does no frame maths, so the one
-implementation of "relative to home" stays on the side that owns the pose.
+`orientation` is the measured absolute quaternion in `wxyz` order. The bridge
+does no frame conversion.
 
 Two checks on the way in. Images are validated by **magic bytes**, not by the
 declared `mime`, so a truncated payload is rejected rather than reaching Codex as
@@ -132,16 +131,15 @@ contradict them.
 
 ```jsonc
 "decision": {
-  "left":  {"position": [x, y, z], "orientation": [yaw, pitch, roll], "gripper": 1.0},
-  "right": "keep",
+  "left":  {"position": [x, y, z], "orientation": [w, x, y, z], "gripper": "keep"},
+  "right": {"position": "keep", "orientation": "keep", "gripper": "open"},
   "note": "moving the left arm towards the socket",
   "phase": "reach"
 }
 ```
 
-`decision` is the object the model produced, already stripped of fences and prose,
-in exactly the shape the adapter's `protocol.parse_decision` understands:
-`"keep"`, a 3-element or 4-element list, or `{"quat": [w, x, y, z]}` per component.
+`decision` is the JSON object the model produced in exactly the shape the
+adapter's `protocol.parse_decision` understands.
 
 Failures come back as `{ok: false, error_kind, error, latency_ms, record_dir}` with
 `400` for a request we will not act on, `504` for a timeout, `502` for anything
@@ -178,8 +176,9 @@ so the bridge passes the same permissions with `-c` at launch:
 
 - read the workspace and `output/`;
 - write `output/<episode>/scratch/`, and nothing else;
-- `shell_tool` and `view_image` enabled; `web_search`, `computer_use`,
-  `multi_agent`, `multi_agent_v2` disabled.
+- only `view_image` enabled; shell, plugins, apps, recommendations, web search,
+  computer use and multi-agent tools disabled;
+- only the workspace `codex_agent` skill exposed to the model.
 
 Because permissions are fixed when the process starts, **a new episode means a new
 process** — the write scope names the episode directory. Episodes run serially, so

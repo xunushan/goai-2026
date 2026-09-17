@@ -23,8 +23,7 @@ from .observation import DEFAULT_CAMERA_NAMES, EpisodeContext, build_request, lo
 from .protocol import ParseError, parse_decision
 
 TASK_CARD_KEYS = {
-    "task_name", "instruction", "scene", "success_rule", "hints",
-    "step_budget", "max_decisions",
+    "task_name", "instruction", "step_budget", "max_decisions",
 }
 
 

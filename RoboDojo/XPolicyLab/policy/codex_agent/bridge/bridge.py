@@ -75,10 +75,7 @@ def _render_turn(observation: Observation) -> str:
     task_lines = [
         "TASK",
         f"Instruction: {task.get('instruction', '')}",
-        f"Scene: {task.get('scene', '')}",
-        f"Success when: {task.get('success_rule', '')}",
     ]
-    task_lines.extend(f"- {hint}" for hint in task.get("hints") or [])
     state_lines = ["OBSERVED ARM STATE (absolute quaternion wxyz)"]
     for side in ("left", "right"):
         arm = observation.arms[side]
@@ -215,6 +212,14 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
         )
 
         def log(**fields: Any) -> None:
+            observation_state = {
+                side: {
+                    "position": list(observation.arms[side].position),
+                    "orientation": list(observation.arms[side].orientation),
+                    "gripper": observation.arms[side].gripper,
+                }
+                for side in ("left", "right")
+            }
             record.append(
                 record_dir,
                 record.turn_record(
@@ -223,6 +228,7 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                     step_id=observation.step_id,
                     turn_index=observation.turn_index,
                     image_paths=image_paths,
+                    observation_state=observation_state,
                     **fields,
                 ),
             )

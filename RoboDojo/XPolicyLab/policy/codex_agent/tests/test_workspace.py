@@ -199,7 +199,8 @@ def test_only_standable_numbers() -> None:
     # on what is between them, so quoting a value over-claims a mechanical stop.
     squashed = " ".join(agents.lower().split())
     check("fully closed" not in squashed, "the closed gripper is not claimed to be a stop")
-    check("how wide" in squashed, "the closed reading is described by what it measures")
+    check("does not measure object width" in squashed,
+          "the gripper reading is not presented as an object-width sensor")
     closed = f"{config()['motion']['gripper_close']:.2f}"
     check(closed not in agents, f"the configured closed value {closed} is not quoted as a fact")
 

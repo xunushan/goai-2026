@@ -101,9 +101,6 @@ def build_request(
         "turn_index": int(turn_index),
         "task": {
             "instruction": str(context.task.get("instruction", "")),
-            "scene": str(context.task.get("scene", "")),
-            "success_rule": str(context.task.get("success_rule", "")),
-            "hints": [str(line) for line in (context.task.get("hints") or [])],
         },
         "budget": {
             "max_decisions": int(context.max_decisions),

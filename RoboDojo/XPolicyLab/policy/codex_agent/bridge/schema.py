@@ -35,7 +35,7 @@ MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 
 # What each arm's current measured EEF pose carries.
 _ARM_FIELDS = ("position", "orientation", "gripper")
-_TASK_FIELDS = ("instruction", "scene", "success_rule")
+_TASK_FIELDS = ("instruction",)
 _BUDGET_FIELDS = ("max_decisions", "max_sim_steps", "remaining_decisions", "remaining_steps")
 _REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "observation", "images")
 
@@ -110,10 +110,8 @@ class Observation:
         for key in _TASK_FIELDS:
             if key not in task:
                 raise PolicyValidationError(f"task must define {key!r}")
-        hints = task.get("hints") or []
-        if not isinstance(hints, list) or not all(isinstance(line, str) for line in hints):
-            raise PolicyValidationError("task.hints must be an array of strings")
-        task = {**task, "hints": list(hints)}
+        if set(task) != set(_TASK_FIELDS):
+            raise PolicyValidationError("task must contain exactly 'instruction'")
 
         budget = value["budget"]
         if not isinstance(budget, dict):
@@ -268,3 +266,9 @@ def _validate_arm_reply(value: Any, name: str) -> None:
         _vector(item, length, f"{name}.{field}")
     if value["gripper"] not in ("keep", "open", "close"):
         raise PolicyValidationError(f"{name}.gripper must be 'keep', 'open' or 'close'")
+    if value["gripper"] != "keep" and (
+        value["position"] != "keep" or value["orientation"] != "keep"
+    ):
+        raise PolicyValidationError(
+            f"{name} cannot move and change the gripper in the same decision"
+        )

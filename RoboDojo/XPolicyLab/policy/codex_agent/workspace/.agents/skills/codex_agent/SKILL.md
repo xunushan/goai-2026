@@ -48,6 +48,11 @@ to check the wider scene, clearance, and support. Confirm that the observed arm
 state is consistent with the intended pose. Only then issue a separate gripper
 decision, with position and orientation set to `"keep"`.
 
+Never close the gripper merely to probe alignment or estimate object width. The
+gripper number does not provide that information. Close only after the fresh head
+and wrist views show that the object is between the fingers at the intended grasp
+depth.
+
 Before opening, verify from the fresh views that the object is fully supported by
 the destination or the other arm. After opening, observe once more before moving
 away. If the object still appears trapped by the fingers or unsupported, keep it
@@ -55,10 +60,9 @@ supported and disengage deliberately; do not withdraw and declare success.
 
 ## 5. Read the feedback from your last decision
 
-The turn text states the outcome of your previous motion: whether it was carried
-out, whether it was refused or clamped, and how far the arms actually got. Read it
-before repeating a request. If something was refused, the reason is stated; fix the
-request rather than sending it again.
+The turn text states whether the previous decision ran or failed. Read it together
+with the fresh measured arm state before repeating a request. If a target was
+refused, fix the request rather than sending it again.
 
 ## 6. Watch the budget
 
