@@ -47,12 +47,14 @@ from typing import Any, Sequence
 from . import app_server as app_server_module
 from . import record
 from .app_server import AppServerError, CodexAppServer
+from .experience import ExperienceError, ExperienceLibrary
 from .schema import Observation, PolicyValidationError, output_schema, validate_response
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
 
 # Where the workspace sits relative to this package, i.e. ``codex_agent/workspace``.
 DEFAULT_WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
+DEFAULT_EXPERIENCE_LIBRARY = Path(__file__).resolve().parent.parent / "experience_library"
 
 CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
@@ -70,6 +72,7 @@ def _render_turn(observation: Observation) -> str:
     budget = observation.budget
     task_lines = [
         "TASK",
+        f"Name: {task.get('name', '')}",
         f"Instruction: {task.get('instruction', '')}",
     ]
     state_lines = ["OBSERVED ARM STATE (absolute quaternion wxyz)"]
@@ -110,6 +113,7 @@ class BridgeState:
         if not (self.workspace / "AGENTS.md").is_file():
             raise BridgeError("bad_request", f"{self.workspace} has no AGENTS.md, so it is not a Codex workspace")
         self.expected_cameras = CAMERA_NAMES
+        self.experience_library = ExperienceLibrary(Path(args.experience_library))
         self.server = CodexAppServer(
             workspace=self.workspace,
             codex_bin=args.codex_bin,
@@ -171,6 +175,12 @@ class BridgeState:
             })
         items.append({"type": "text", "text": "END HISTORICAL EXECUTION RECORD"})
         return items
+
+    def thread_prefix(self, task_name: str, *, fresh_thread: bool) -> list[dict[str, Any]]:
+        """Build context that must be restored only when opening a Codex thread."""
+        if not fresh_thread:
+            return []
+        return self.experience_library.items(task_name) + self.replay()
 
     def close(self) -> None:
         self.server.close()
@@ -262,6 +272,9 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
         turn_text = _render_turn(observation)
         image_inputs = [(image.name, _data_url(image)) for image in observation.images]
         try:
+            prefix = state.thread_prefix(
+                str(observation.task["name"]), fresh_thread=fresh_thread
+            )
             text, usage = state.server.decide(
                 text=turn_text,
                 images=image_inputs,
@@ -269,11 +282,12 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                 timeout_s=timeout_s,
                 # A normal image rotation and timeout recovery both replace only
                 # the Codex thread, never the simulator episode.
-                replay=state.replay() if fresh_thread and state.history else None,
+                replay=prefix or None,
             )
             decision = _parse_reply(text)
-        except AppServerError as exc:
-            log(ok=False, error_kind=exc.kind, error=str(exc), latency_ms=int((time.monotonic() - started) * 1000))
+        except (AppServerError, ExperienceError) as exc:
+            error_kind = exc.kind if isinstance(exc, AppServerError) else "experience_invalid"
+            log(ok=False, error_kind=error_kind, error=str(exc), latency_ms=int((time.monotonic() - started) * 1000))
             raise
 
         latency_ms = int((time.monotonic() - started) * 1000)
@@ -307,6 +321,7 @@ _STATUS = {
     "app_server_not_bound": 500,
     "app_server_protocol": 502,
     "app_server_rpc": 502,
+    "experience_invalid": 500,
 }
 
 
@@ -352,6 +367,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "reasoning_effort": state.server.effort,
                 "codex_bin": state.server.codex_bin,
                 "workspace": str(state.workspace),
+                "experience_library": str(state.experience_library.root),
                 "episode_id": state.episode_id,
                 "cameras": list(state.expected_cameras),
                 "max_live_image_turns": state.server.max_live_image_turns,
@@ -390,6 +406,9 @@ class BridgeHandler(BaseHTTPRequestHandler):
         except (PolicyValidationError, BridgeError) as exc:
             self._send(400, {"ok": False, "error_kind": getattr(exc, "kind", "bad_request"), "error": str(exc)})
             return
+        except ExperienceError as exc:
+            self._send(500, {"ok": False, "error_kind": "experience_invalid", "error": str(exc)})
+            return
         except AppServerError as exc:
             self._send(
                 _STATUS.get(exc.kind, 502),
@@ -419,6 +438,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument("--workspace", default=str(DEFAULT_WORKSPACE))
+    parser.add_argument(
+        "--experience-library",
+        default=str(DEFAULT_EXPERIENCE_LIBRARY),
+        help="host-readable task demonstration library",
+    )
     parser.add_argument("--codex-bin", default="codex")
     parser.add_argument("--model", default=None, help="Model id, e.g. gpt-6-astra")
     parser.add_argument(

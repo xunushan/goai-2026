@@ -66,7 +66,7 @@ def observation(turn: int) -> Observation:
         request_id=f"request-{turn}",
         step_id=turn,
         turn_index=turn,
-        task={"instruction": "test instruction"},
+        task={"name": "test_task", "instruction": "test instruction"},
         budget={
             "max_decisions": 10,
             "max_sim_steps": 100,

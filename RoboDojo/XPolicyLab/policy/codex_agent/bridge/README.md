@@ -46,7 +46,8 @@ on `PATH`.
 Defaults: binds `127.0.0.1:8765`, 75 s per decision (90 s for the one that opens a
 thread, which also has to read the workspace), and rotation every 8 image-bearing
 turns. Useful flags: `--model`, `--reasoning-effort`, `--port`, `--token`,
-`--workspace`, `--max-live-image-turns`, `--timeout-s`, `--timeout-first-turn-s`.
+`--workspace`, `--experience-library`, `--max-live-image-turns`, `--timeout-s`,
+`--timeout-first-turn-s`.
 
 `python3 -m bridge.bridge --help` is the authority on the flag list; there is no
 config file.
@@ -105,7 +106,7 @@ cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, stats}`.
   "request_id": "ep-1-000042",        // identifies this turn in the log; retries reuse it
   "step_id": 42,                      // simulator step the observation was taken at
   "turn_index": 41,                   // 0-based decision counter
-  "task": {"instruction": "…"},
+  "task": {"name": "stack_bowls", "instruction": "…"},
   "budget": {"max_decisions": 100, "max_sim_steps": 550,
              "remaining_decisions": 59, "remaining_steps": 320},
   "observation": {
@@ -209,13 +210,30 @@ the model decided and why, without spending another call.
 The model remembers its own thread, and images accumulate in it with no way to
 delete them. After `--max-live-image-turns` image-bearing turns (8 by default, the
 same window the reference controller uses) the thread is dropped and a new one is
-opened, with the earlier decisions replayed as **words**: turn number, phase and
-note, up to 8 of them. Dropping the thread and replaying text is the only
-mechanism available for forgetting images. `0` disables rotation.
+opened. The complete earlier observation text and structured decisions are replayed;
+only the most recent turn retains live image encodings. Dropping the thread and
+replaying old images as text is the mechanism for forgetting image payloads without
+discarding the episode history. `0` disables rotation.
 
 The thread itself never crosses the network. The adapter sends an episode id; the
 bridge decides whether that is the id the current thread was opened for. A caller
 that has to round-trip a thread id is a caller that can send back the wrong one.
+
+## Experience library
+
+`experience_library/` is host-owned and deliberately outside `workspace/`, so the
+agent cannot browse or repeatedly load demonstrations. `index.json` maps an exact
+task name to one successful `demo.json`; an unmapped task simply receives no demo.
+The bridge injects the selected demonstration before the current observation only
+when a Codex thread opens. Thread rotation injects it again before replaying the
+episode history, so rotation removes neither the prior history nor the demonstration.
+
+Each task directory keeps the full JSON and every source image. Context construction
+uses only `cam_high` for ordinary motion stages and all three cameras for `grasp` and
+`place`, where gripper timing needs wrist views. Images are passed to App Server as
+data URLs; filesystem paths never enter the model context. Use
+`tools/render_experience.py experience_library/<task>/demo.json` to inspect the exact
+generated text without calling Codex.
 
 ## Operational notes
 

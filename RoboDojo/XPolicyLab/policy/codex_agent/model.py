@@ -103,6 +103,7 @@ class Model(ModelTemplate):
         if self.step_budget < 1 or self.call_budget < 1:
             raise ValueError("task budgets must be positive")
         self.context = EpisodeContext(
+            task_name=str(task_name),
             task=self.task,
             step_budget=self.step_budget,
             max_decisions=self.call_budget,

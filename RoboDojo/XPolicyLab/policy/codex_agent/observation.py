@@ -57,6 +57,7 @@ def load_task_card(task_name: str) -> dict[str, Any]:
 class EpisodeContext:
     """Facts that stay constant for one episode."""
 
+    task_name: str
     task: dict[str, Any]
     step_budget: int
     max_decisions: int
@@ -100,6 +101,7 @@ def build_request(
         "step_id": int(steps_used),
         "turn_index": int(turn_index),
         "task": {
+            "name": context.task_name,
             "instruction": str(context.task.get("instruction", "")),
         },
         "budget": {
