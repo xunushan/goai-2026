@@ -66,7 +66,7 @@ def observation(turn: int) -> Observation:
         request_id=f"request-{turn}",
         step_id=turn,
         turn_index=turn,
-        task={"name": "test_task", "instruction": "test instruction"},
+        task={"name": "test_task", "instruction": "test instruction", "guidance": ["test guidance"]},
         budget={
             "max_decisions": 10,
             "max_sim_steps": 100,
@@ -85,7 +85,7 @@ def test_each_turn_contains_the_fresh_observation() -> None:
     assert "left: position [1.0000, 0.0000, 0.0000]" in first
     assert "left: position [2.0000, 0.0000, 0.0000]" in second
     assert "feedback-1" in first and "feedback-2" in second
-    assert "Scene:" not in first and "Success when:" not in first
+    assert "Task guidance:\n- test guidance" in first
 
 
 def test_default_reasoning_effort_is_medium() -> None:

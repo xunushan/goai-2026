@@ -103,6 +103,7 @@ def build_request(
         "task": {
             "name": context.task_name,
             "instruction": str(context.task.get("instruction", "")),
+            "guidance": [str(line) for line in context.task.get("guidance", [])],
         },
         "budget": {
             "max_decisions": int(context.max_decisions),

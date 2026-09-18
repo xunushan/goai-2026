@@ -75,6 +75,10 @@ def _render_turn(observation: Observation) -> str:
         f"Name: {task.get('name', '')}",
         f"Instruction: {task.get('instruction', '')}",
     ]
+    guidance = task.get("guidance") or []
+    if guidance:
+        task_lines.append("Task guidance:")
+        task_lines.extend(f"- {line}" for line in guidance)
     state_lines = ["OBSERVED ARM STATE (absolute quaternion wxyz)"]
     for side in ("left", "right"):
         arm = observation.arms[side]

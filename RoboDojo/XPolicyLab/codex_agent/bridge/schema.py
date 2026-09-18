@@ -35,7 +35,7 @@ MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 
 # What each arm's current measured EEF pose carries.
 _ARM_FIELDS = ("position", "orientation", "gripper")
-_TASK_FIELDS = ("name", "instruction")
+_TASK_FIELDS = ("name", "instruction", "guidance")
 _BUDGET_FIELDS = ("max_decisions", "max_sim_steps", "remaining_decisions", "remaining_steps")
 _REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "observation", "images")
 
@@ -111,8 +111,15 @@ class Observation:
             if key not in task:
                 raise PolicyValidationError(f"task must define {key!r}")
         if set(task) != set(_TASK_FIELDS):
-            raise PolicyValidationError("task must contain exactly 'name' and 'instruction'")
-        parsed_task = {key: _text(task[key], f"task.{key}") for key in _TASK_FIELDS}
+            raise PolicyValidationError("task must contain exactly 'name', 'instruction' and 'guidance'")
+        guidance = task["guidance"]
+        if not isinstance(guidance, list) or not all(isinstance(line, str) and line.strip() for line in guidance):
+            raise PolicyValidationError("task.guidance must be an array of non-empty strings")
+        parsed_task = {
+            "name": _text(task["name"], "task.name"),
+            "instruction": _text(task["instruction"], "task.instruction"),
+            "guidance": list(guidance),
+        }
 
         budget = value["budget"]
         if not isinstance(budget, dict):
