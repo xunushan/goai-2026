@@ -1,0 +1,134 @@
+# Basic experiment configuration
+policy_name: xvla_agent
+protocol: ws
+host: localhost
+bench_name: null
+task_name: null
+env_cfg_type: null
+seed: null
+eval_batch: false
+
+checkpoint_num: null
+obs_transform_pipeline: null
+
+# Model / action configuration
+action_type: ee
+prompt: null
+# 模型路径即 checkpoint 目录（包含 config.json / model.safetensors 与
+# preprocessor_config.json / tokenizer 等 processor 文件）；processor 随模型加载，
+# 不再需要单独的 processor_path。
+model_path: null
+lora_path: null
+# 策略模型类路由（默认 null = 基础 XVLA，行为与不配置时逐字相同）。
+# R0/R1 腕部残差模型必须显式设为：
+#   policy_model_class: xvla.models.wrist_action_residual.WristActionResidualXVLA
+# 加载前会与 checkpoint 自身声明（config.json 的 architectures /
+# wrist_residual_mode）做双向校验，两边不一致直接报错退出，避免静默用错类。
+policy_model_class: null
+domain_id: 0
+# Flow-matching denoising iterations. This is not the number of simulator
+# actions executed before the next inference.
+steps: 10
+# Flow-noise 的评测复现 seed：相同 (layout, policy, ckpt) 可复现轨迹。
+# 正式测评前删除本行（或置 null）即恢复原始随机噪声，无需改代码。
+policy_seed: 42
+# The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
+# requesting a fresh observation. Keep 30 for official-aligned evaluation.
+actions_per_chunk: 30
+# 在线 temporal ensemble（ACT 式，参照 act_lerobot）。coefficient=null 关闭
+# （保持整段 chunk 执行）。启用时按 actions_per_chunk 滑动窗口对齐多条预测做
+# 指数加权平均：每个仿真步不再重新推理，而是每隔 actions_per_chunk 步重规划
+# 一次、一次返回该段 K 个 ensembled action，推理成本为官方整段的 1/K。
+# 要求 actions_per_chunk < temporal_ensemble_horizon（相邻重规划窗口有重叠才有
+# 平滑意义）；actions_per_chunk == horizon（含 30 整段直出）时 ensemble 退化为
+# 直通，不产生额外计算。示例：actions_per_chunk: 5 + coeff: 0.01。
+# horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
+# 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
+temporal_ensemble_coeff: null
+# 批量推理（优化 B）：true 时 get_action_batch 收到多个 env 会合并为一次 B=N 的
+# generate_actions（值保持，见 model.py 注释）。仅多 env eval（eval_batch）生效，
+# 单 env 仍走顺序路径。默认 false 与旧行为完全一致。
+batch_inference: false
+gripper_mode: continuous
+gripper_threshold: 0.7
+# 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。
+# 支持 1~3 路（processor num_views=3）；不配置（或空）时保持原单路
+# cam_head 行为（encode_obs 走 legacy 候选回退）。
+camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
+# 夹爪迟滞（闭环执行改造方案 3.2 节 D4）。enabled=false 完全旁路（与现状逐帧一致）；
+# 启用时保持 gripper_mode: continuous，迟滞接管夹爪输出，不需要 gripper_threshold。
+hysteresis:
+  enabled: false
+  mode: direction_latch   # binary（离散 0/1 迟滞）| direction_latch（连续迟滞）
+  lo: 0.3
+  hi: 0.7
+# PACE 相位感知执行视野（arXiv:2606.00537v2，实现见同目录 pace.py）。enabled=false
+# 完全旁路（返回 actions_per_chunk 段，与现状逐帧一致）。启用后每次重规划先从预测
+# chunk 的手臂 xyz 速度剖面里找「低速谷值」相位边界，取最早一个 prominence >= δ_T
+# 的作为本次执行步数 h（无候选则回落 h_max），实现变长 chunk 返回。
+# 互斥：与 temporal_ensemble_coeff 启用态（temporal_ensemble_active）不可同时开，
+# 二者都要接管返回给客户端的动作数，同时开直接报错。批路径的逐 env 缓冲也没有与
+# 重叠 chunk 平均一起验证过，启用本项前先确认 temporal_ensemble_coeff 为 null。
+# 注意：eval_batch 多 env 批路径下**每个 env 按自己的 h 独立重规划**（deploy.py 给
+# 每个 env 维护动作缓冲，缓冲耗尽才重新推理），因此批内各 env 的执行步数可以不同。
+# 服务端 model.py 的 get_action_batch 里那段「批内取最小 h 对齐」是死代码：ws 客户端
+# 每次只送 1 个 env，len(action_list) > 1 永不成立；只有把 batch_inference 打开才会
+# 复活，届时会静默抹掉 PACE 选出的 h，需一并处理。
+pace:
+  enabled: false
+  h_max: null            # null = 跟随 actions_per_chunk（= 论文的 H_max，保证关闭/回落时行为不变）
+  h_min: 5               # 本仓库的成本保护（论文无下限）；一次 query 就是一次完整前向
+  d_min: 10              # 候选相位边界最小间隔（论文 Table 3 默认）
+  smooth: moving_average # 论文只做「平滑/不平滑」消融，未给算子形式；none 可关闭
+  smooth_window: 5
+  # δ_T 标定（tools/pace_calibrate.py，仅用训练 split 示范）：
+  #   论文默认 ρ=5 的绝对 prominence 百分位在本数据上**不可用** —— 池子被静止段的
+  #   float32 量化抖动占满（静止步位移是 2^-24 的整数倍，实测左臂 23.6% 的步位移为
+  #   0、39.5% < 1e-5），p5≈1.2e-8 落在噪声层，会让几乎所有谷值被接受、h 塌到 h_min。
+  #   下表取 ρ=85，其执行视野分布复现论文报告的操作点（mean_h 在 fill/plug/bowls 上
+  #   分别为 23.1/24.7/27.0，论文 50 步视野下为 24.3）。标定细节与验证见
+  #   outputs/pace_validation/ 与 tools/pace_calibrate.py 模块 docstring。
+  #   注意：示范 chunk 的噪声层与策略预测 chunk 的不同源，上线前应做 δ_T 扫描 A/B。
+  threshold_delta: 0.00321864
+  threshold_delta_by_task:
+    fill_pen_holder: 0.00299043
+    plug_in_charger: 0.0070877
+    stack_bowls: 0.0023436
+    # stack_blocks 无示范数据 -> 走上面的 threshold_delta 全局兜底
+# 指令映射：key 必须与 sim 端 task.gen_instruction 发送的指令逐字符一致（含句号），
+# 值才是实际喂给模型的 prompt；用 task name 作 key 不会命中 resolve_prompt。
+# 自训模型（X3/X0）语言条件用 sim_lerobot_v30_ee_6d 数据集完整指令，而评测时 env
+# gen_instruction 为 RoboDojo 短句，二者不一致，故在此做 env原文 → 训练指令 映射；
+# 官方 RoboDojo ckpt 与其 env 指令同域，重评官方时不应走此映射。
+task_prompt_map:
+  "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
+  "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
+  "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
+  "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
+# Log action ranges plus raw/thresholded gripper values; image pixels are never
+# printed.
+log_io: true
+device: cuda
+
+# X-VLA inference can take longer than the WebSocket library's default
+# keepalive window. Application requests already detect a dead connection, so
+# disable protocol-level pings to avoid disconnecting a healthy long inference.
+ws_ping_interval_s: null
+ws_ping_timeout_s: null
+
+port: 6000
+
+# Standalone Codex robot harness. Keep X-VLA inference in this process; the
+# Bridge owns sparse review routing and final action-chunk synthesis.
+bridge_url: http://localhost:8765
+codex_enabled: true
+bridge_timeout_s: 105
+jpeg_quality: 88
+codex_control:
+  delta_p_max_m: 0.005
+  delta_theta_max_rad: 0.035
+  max_target_translation_m: 0.05
+  max_target_rotation_rad: 0.35
+  settle_steps: 3
+  gripper_open: 1.0
+  gripper_close: 0.0

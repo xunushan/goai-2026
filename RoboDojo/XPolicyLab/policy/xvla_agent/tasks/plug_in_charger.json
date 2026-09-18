@@ -1,0 +1,7 @@
+{
+  "task_name": "plug_in_charger",
+  "instruction": "Plug the charger into the power strip.",
+  "guidance": [],
+  "step_budget": 400,
+  "max_decisions": 100
+}
