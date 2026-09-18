@@ -197,8 +197,11 @@ def _parse_continuation(value: Any) -> dict[str, Any] | None:
 def _parse_vla_review(value: Any) -> dict[str, Any] | None:
     if value is None:
         return None
-    if not isinstance(value, dict) or set(value) != {"chunk", "summary"}:
-        raise PolicyValidationError("vla_review must contain exactly chunk and summary")
+    if not isinstance(value, dict) or set(value) != {"chunk", "summary", "gripper_change_threshold"}:
+        raise PolicyValidationError("vla_review must contain chunk, summary and gripper_change_threshold")
+    threshold = _number(value["gripper_change_threshold"], "vla_review.gripper_change_threshold")
+    if not 0 <= threshold <= 1:
+        raise PolicyValidationError("vla_review.gripper_change_threshold must be within [0,1]")
     chunk = value["chunk"]
     if not isinstance(chunk, dict) or set(chunk) != {"horizon", "left", "right"}:
         raise PolicyValidationError("vla_review.chunk must contain horizon, left and right")
@@ -219,7 +222,7 @@ def _parse_vla_review(value: Any) -> dict[str, Any] | None:
         }
     if not isinstance(value["summary"], dict):
         raise PolicyValidationError("vla_review.summary must be an object")
-    return {"chunk": parsed_chunk, "summary": value["summary"]}
+    return {"chunk": parsed_chunk, "summary": value["summary"], "gripper_change_threshold": threshold}
 
 
 def _parse_arm(value: Any, arm: str) -> ArmObservation:

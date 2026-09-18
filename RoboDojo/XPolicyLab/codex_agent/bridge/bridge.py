@@ -269,7 +269,13 @@ def _vla_chunk(review: dict[str, Any], steps: int) -> list[dict[str, list[float]
 
 
 def _has_gripper_change(review: dict[str, Any]) -> bool:
-    return any(max(review["chunk"][side]["gripper"]) - min(review["chunk"][side]["gripper"]) > 1e-3 for side in ("left", "right"))
+    threshold = float(review["gripper_change_threshold"])
+    return any(
+        max(review["chunk"][side]["gripper"])
+        - min(review["chunk"][side]["gripper"])
+        > threshold
+        for side in ("left", "right")
+    )
 
 
 def _synthesise(observation: Observation, decision: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:

@@ -35,6 +35,7 @@ def test_review_packet_and_response() -> None:
     result = reviewer.review(observation, [action(0, 1), action(0.01, 0)])
     assert len(result) == 1
     assert captured["vla_review"]["chunk"]["horizon"] == 2
+    assert captured["vla_review"]["gripper_change_threshold"] == 0.1
     assert captured["budget"]["max_sim_steps"] == 550
     reviewer.review(observation, [action(0, 1)])
     assert captured["continuation"]["verify_previous"] is True

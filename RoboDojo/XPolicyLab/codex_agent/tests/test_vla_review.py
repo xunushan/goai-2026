@@ -30,13 +30,21 @@ def packet() -> dict:
                     "settle_steps": 0, "gripper_open": 1.0, "gripper_close": 0.0},
         "observation": {"left": arm, "right": arm}, "feedback": [],
         "images": [{"name": "cam_head", "mime": "image/jpeg", "b64": base64.b64encode(b"\xff\xd8\xffx").decode()}],
-        "vla_review": {"chunk": {"horizon": 2, "left": chunk_arm, "right": chunk_arm}, "summary": {}},
+        "vla_review": {
+            "chunk": {"horizon": 2, "left": chunk_arm, "right": chunk_arm},
+            "summary": {},
+            "gripper_change_threshold": 0.1,
+        },
     }
 
 
 def main() -> int:
     observation = Observation.parse(packet())
     assert _has_gripper_change(observation.vla_review)
+    quiet_packet = packet()
+    quiet_packet["vla_review"]["chunk"]["left"]["gripper"] = [1.0, 0.95]
+    quiet_packet["vla_review"]["chunk"]["right"]["gripper"] = [1.0, 0.95]
+    assert not _has_gripper_change(Observation.parse(quiet_packet).vla_review)
     vla = validate_response({"mode": "vla", "vla_steps": 1, "verify_next": True, "note": "ok", "phase": "grasp"}, vla_horizon=2)
     chunk, continuation = _synthesise(observation, vla)
     assert len(chunk) == 1 and continuation["verify_previous"] is True

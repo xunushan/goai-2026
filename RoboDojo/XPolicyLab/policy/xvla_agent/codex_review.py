@@ -65,6 +65,9 @@ class CodexReviewer:
         self.bridge = BridgeClient(str(os.environ.get("CODEX_BRIDGE_URL") or config.get("bridge_url") or "http://localhost:8765"), token=os.environ.get("CODEX_BRIDGE_TOKEN"))
         self.timeout_s = float(config.get("bridge_timeout_s", 105.0))
         self.jpeg_quality = int(config.get("jpeg_quality", 88))
+        self.gripper_change_threshold = float(config.get("gripper_change_threshold", 0.1))
+        if not 0 <= self.gripper_change_threshold <= 1:
+            raise ValueError("gripper_change_threshold must be within [0,1]")
         self.control = {
             "delta_p_max_m": 0.005, "delta_theta_max_rad": 0.035,
             "max_target_translation_m": 0.05, "max_target_rotation_rad": 0.35,
@@ -102,7 +105,11 @@ class CodexReviewer:
             },
             "feedback": [],
             "images": [build_image_payload(name, _image(observation, name), quality=self.jpeg_quality) for name in CAMERAS],
-            "vla_review": {"chunk": chunk, "summary": _summary(chunk)},
+            "vla_review": {
+                "chunk": chunk,
+                "summary": _summary(chunk),
+                "gripper_change_threshold": self.gripper_change_threshold,
+            },
         }
         if self.continuation is not None:
             request["continuation"] = self.continuation
