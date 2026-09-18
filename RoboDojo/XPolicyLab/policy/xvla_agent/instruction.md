@@ -14,4 +14,4 @@ bash scripts/robodojo.sh eval \
 
 This policy supports one rollout at a time because its Codex review history is a
 single stateful thread. Task descriptions and episode budgets come from
-`tasks/<task>.json`; the Bridge does not define them.
+`tasks.json`; the Bridge does not define them.

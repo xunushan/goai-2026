@@ -1,0 +1,20 @@
+{
+  "plug_in_charger": {
+    "instruction": "Plug the charger into the power strip.",
+    "guidance": [],
+    "step_budget": 400,
+    "max_decisions": 100
+  },
+  "stack_blocks": {
+    "instruction": "Stack the three blocks with different textures.",
+    "guidance": [
+      "Grasp a block from directly above with the jaws on opposite faces, not a corner or edge.",
+      "Before release, align above the supporting block, lower vertically, and open only after the block is seated.",
+      "Prefer placing a narrower block on a block at least as wide.",
+      "If a block topples, recover it instead of leaving it on the table.",
+      "Finish with both arms at the start pose and both grippers open."
+    ],
+    "step_budget": 550,
+    "max_decisions": 100
+  }
+}

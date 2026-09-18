@@ -15,7 +15,7 @@ except ImportError:  # model.py is also loaded directly by X_VLA's offline tests
     from bridge_client import BridgeClient, build_image_payload
 
 CAMERAS = ("cam_head", "cam_left_wrist", "cam_right_wrist")
-TASKS = Path(__file__).resolve().parent / "tasks"
+TASKS_FILE = Path(__file__).resolve().parent / "tasks.json"
 
 
 def _image(observation: dict[str, Any], name: str) -> np.ndarray:
@@ -58,10 +58,10 @@ def _summary(chunk: dict[str, Any]) -> dict[str, Any]:
 class CodexReviewer:
     def __init__(self, config: dict[str, Any]) -> None:
         self.task_name = str(config["task_name"])
-        card_path = TASKS / f"{self.task_name}.json"
-        if not card_path.is_file():
-            raise FileNotFoundError(f"xvla_agent needs task card {card_path}")
-        self.task = json.loads(card_path.read_text(encoding="utf-8"))
+        tasks = json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+        if self.task_name not in tasks:
+            raise KeyError(f"no task card for {self.task_name!r} in {TASKS_FILE}")
+        self.task = tasks[self.task_name]
         self.bridge = BridgeClient(str(os.environ.get("CODEX_BRIDGE_URL") or config.get("bridge_url") or "http://localhost:8765"), token=os.environ.get("CODEX_BRIDGE_TOKEN"))
         self.timeout_s = float(config.get("bridge_timeout_s", 105.0))
         self.jpeg_quality = int(config.get("jpeg_quality", 88))

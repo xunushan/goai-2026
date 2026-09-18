@@ -40,17 +40,17 @@ import numpy as np
 
 from XPolicyLab.codex_agent.bridge.motion import ArmState
 
-TASKS_DIR = Path(__file__).resolve().parent / "tasks"
+TASKS_FILE = Path(__file__).resolve().parent / "tasks.json"
 
 DEFAULT_CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
 
 def load_task_card(task_name: str) -> dict[str, Any]:
-    path = TASKS_DIR / f"{task_name}.json"
-    if not path.is_file():
-        raise FileNotFoundError(f"no task card for {task_name!r} at {path}")
-    with path.open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    with TASKS_FILE.open("r", encoding="utf-8") as handle:
+        tasks = json.load(handle)
+    if task_name not in tasks:
+        raise KeyError(f"no task card for {task_name!r} in {TASKS_FILE}")
+    return {"task_name": task_name, **tasks[task_name]}
 
 
 @dataclass(frozen=True)
