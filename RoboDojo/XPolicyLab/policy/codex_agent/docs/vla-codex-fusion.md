@@ -164,8 +164,7 @@ false
         "gripper_min": 0.5,
         "gripper_max": 1.0
       }
-    },
-    "recent_execution": null
+    }
   }
 }
 ```
@@ -203,64 +202,45 @@ gripper_change
   当前 VLA chunk 的某只夹爪曲线明显变化。
 
 verify_previous
-  上一次 mode=vla 决策返回 verify_next=true，并且该 VLA prefix 已实际执行。
+  上一次 mode=vla 决策返回 verify_next=true；按照仿真接口契约，Bridge 返回的整个 action chunk 已执行，当前 observation 是其执行后状态。
 ```
 
-### 3.4 最近执行轨迹
+### 3.4 不额外传执行轨迹
 
-稀疏调用期间的 VLA-only turn 不在 Codex thread 中。融合策略服务应在内存保存本 episode 的完整实际执行 EEF 轨迹；每次请求 Codex 时只选最近 N 步放入 `recent_execution`，默认建议 N=30，后续通过实验调整。
+仿真端不会逐步回传 action 或中间 state，只会在整个 action chunk 执行完后返回新的 observation/state。策略服务给出多少步，仿真端就完整执行多少步。
 
-结构与 chunk 一致，并明确它是实际执行记录：
+因此第一版不增加 `recent_execution`、`previous_execution` 或 execution ACK：
+
+- Bridge 已经生成最终 chunk，因此知道其确定长度。
+- 下一次请求到达即表示上一响应已执行完毕。
+- 当前 observation/state 就是上一 chunk 的执行后结果。
+- Codex thread 中保留上一轮参与过的 Codex 决策；没有必要伪造不存在的逐步实测轨迹。
+
+## 4. Bridge 路由与 action 生成
+
+VLA prefix 截取和 EEF 插值属于可复用 Bridge，不放进各个策略服务。Bridge 延续现有 `codex_agent` 的状态模型，只维护 Codex App Server thread/history，不新增一套 EpisodeState 或 `routing.json`。
+
+VLA-review 唯一需要跨请求传递的信息是“下一帧是否必须验证”。Bridge 在响应里生成最小 continuation，策略服务不解释内容，只在下一请求原样带回：
 
 ```json
 {
-  "recent_execution": {
-    "steps": 30,
-    "left": {"position": [], "orientation": [], "gripper": []},
-    "right": {"position": [], "orientation": [], "gripper": []}
+  "continuation": {
+    "previous_request_id": "ep-1-0004",
+    "verify_previous": true
   }
 }
 ```
 
-优先保存仿真器回传的实测 EEF；如果仿真器只返回执行 action，则必须明确这是 commanded trajectory，不能写成 measured。不要每次发送完整 episode 轨迹。
+`previous_request_id` 用于发现错序或重复请求；`verify_previous` 直接来自上一轮 Codex 的 `verify_next`。它不是执行 ACK，也不包含执行步数。
 
-### 3.5 上一次执行回执
-
-每次请求还可以带上一条 Bridge 返回 chunk 的实际执行结果：
-
-```json
-{
-  "previous_execution": {
-    "request_id": "ep-1-0003",
-    "status": "completed",
-    "executed_steps": 30
-  }
-}
-```
-
-`status` 为 `completed`、`truncated` 或 `failed`。第一轮为 null。Bridge 在生成 action chunk 时已经知道并返回 `planned_steps`；只有策略服务执行完毕后，才能通过下一轮 ACK 告诉 Bridge `executed_steps`。两者不能混为一个字段。
-
-## 4. Bridge 状态、路由与 action 生成
-
-路由、pending 状态、VLA prefix 截取和 EEF 插值都属于可复用 Bridge，不放进各个策略服务。Bridge 每个 episode 维护：
-
-```text
-pending_verify: bool
-last_response: 上一次返回 action chunk 的 request_id、source、planned_steps
-episode_execution_trajectory: 请求携带的实际执行 EEF 历史
-Codex thread/session
-```
-
-策略服务每轮只做四件事：生成 VLA proposal（如果有）、构造请求、执行 Bridge 返回的 action chunk、下一轮回传 execution ACK。
+策略服务每轮只做三件事：生成 VLA proposal（如果有）、构造请求并原样回传 continuation、执行 Bridge 返回的完整 action chunk。
 
 Bridge 路由：
 
 ```python
-reconcile(previous_execution)
-
 if no_vla_review:
     decision = call_codex_only()
-elif pending_verify:
+elif continuation.verify_previous:
     decision = call_codex(reason="verify_previous")
 elif coarse_gripper_change(vla_chunk):
     decision = call_codex(reason="gripper_change")
@@ -274,25 +254,25 @@ else:
 
 Bridge 取 `chunk[0:vla_steps]` 作为最终 action chunk 并丢弃 suffix。Codex 可以借此保留正确 approach、丢弃错误 grasp/release。
 
-Bridge 暂存 `verify_next`。下一请求收到匹配的 `previous_execution` 后：
+Bridge 把本次 `verify_next` 写入响应的 continuation。按照接口契约，下一请求到达时上一 chunk 已完整执行，因此：
 
 ```text
-实际执行至少一步且没有 failed
-→ pending_verify = decision.verify_next
+decision.verify_next = true
+→ 下一请求以 reason=verify_previous 调用 Codex，使用 fresh observation 验证结果
 
-没有执行或执行失败
-→ 不把计划中的夹爪事件当成已经发生；根据失败反馈决定是否调用 Codex
+decision.verify_next = false
+→ 下一请求重新依据新的 VLA proposal 路由
 ```
 
 ### 4.2 `mode=eef`
 
 Bridge 不执行旧 VLA proposal，使用与 Codex-only 相同的 LERP/SLERP 将绝对目标插值成 correction action chunk，并返回策略服务。旧 suffix 丢弃。
 
-EEF correction 的 `pending_verify` 固定为 false。下一轮先由 X-VLA 基于 fresh observation 产生新 chunk，Bridge 再根据新 chunk 路由。`executed_steps>0` 不能作为 pending 条件，因为 EEF correction 也会产生多个执行步。
+EEF correction 的 `pending_verify` 固定为 false。下一轮先由 X-VLA 基于 fresh observation 产生新 chunk，Bridge 再根据新 chunk 路由。
 
 ## 5. 数据落盘与两端边界
 
-融合策略服务运行在服务器，Bridge 运行在本机，两端没有共享文件系统。因此不能把服务器文件路径交给 Codex 读取。Bridge 生成并返回 action chunk，知道 `planned_steps`；仿真器是否完整执行则由下一次请求的 `previous_execution` 告知。
+融合策略服务运行在服务器，Bridge 运行在本机，两端没有共享文件系统。因此不能把服务器文件路径交给 Codex 读取。Bridge 生成并返回 action chunk，其长度就是仿真端随后执行的步数。
 
 ### 5.1 Bridge 的 `workspace/output/<episode>/`
 
@@ -326,49 +306,37 @@ Bridge 收到请求时已经拥有完整 VLA chunk，应在调用 Codex 前保�
 }
 ```
 
-决策行还可以记录 Bridge 实际返回的 `planned_steps`，因为 action chunk 已经在 Bridge 内生成。它仍不记录仿真实际执行步数。
+决策行可以记录 Bridge 返回的 `planned_steps`，它就是返回 action chunk 的长度。
 
 不添加：
 
 - `codex_request_id`：现有 `request_id` 已经是本次 Codex 请求 id。
 - `planned_vla_steps`：已经由 `decision.vla_steps` 表达。
-- `executed_steps`：Bridge 返回时动作尚未执行，不能记录未知事实。
+- `executed_steps`：接口约定整个返回 chunk 都会执行，不需要再复制一个同值字段。
 - H30 数组：已经单独保存到 `vla_chunk_path`。
 
-### 5.2 Execution ACK 与策略服务日志
+### 5.2 策略服务日志不属于 Bridge 协议
 
-策略服务自己记录实际执行事实，例如 `fusion_execution.jsonl`：
+Bridge 不规定策略服务的日志文件名、字段或保存方式。不同策略服务可以按自身框架记录日志；这不是接入 Bridge 的前置条件，也不进入 Bridge 请求协议。
 
-```json
-{
-  "request_id": "ep-1-0004",
-  "decision_mode": "vla",
-  "requested_vla_steps": 30,
-  "executed_steps": 30,
-  "pending_verify": true
-}
-```
-
-同一份事实在下一请求作为 `previous_execution` 回传。Bridge 收到后可以在 `rollout.jsonl` 追加一条轻量 execution 事件，按 `request_id` 关联原 decision，而不是改写旧行。
-
-没有触发 Codex 的 VLA-only chunk 也经过 Bridge 快速路由，因此 Bridge 可以记录 proposal 和计划返回值；实际执行仍以 ACK 为准。
+Bridge 只记录自己收到的请求、Codex 决策以及最终返回的 chunk 元数据。没有触发 Codex 的 VLA-only chunk 也经过 Bridge 快速路由，可以按同一方式记录。
 
 ## 6. Codex 数据流
 
 ```text
 仿真 observation
 → 新融合策略服务调用本进程 X-VLA，得到 H30
-→ 融合策略服务发送当前 observation、H30、summary、最近 N 步轨迹和上一执行 ACK
-→ Bridge 对齐 ACK，查询 pending_verify，并做粗粒度夹爪变化检测
+→ 融合策略服务发送当前 observation、H30 和 summary
+→ Bridge 读取请求中原样回传的 continuation，并做粗粒度夹爪变化检测
 → 未触发 Codex：Bridge 直接返回完整 VLA action chunk
 → 触发 Codex：Bridge 构造 App Server turn
-→ Codex 读取当前图片、state、VLA proposal、最近 N 步轨迹和已有 thread 历史
+→ Codex 读取当前图片、state、VLA proposal 和已有 thread 历史
 → Bridge 校验 mode=vla/eef，完成 prefix 截取或 EEF 插值
 → Bridge 返回最终 action chunk 和 planned_steps
-→ 融合策略服务只负责执行，记录真实回执，并在下一请求中作为 ACK 回传
+→ 融合策略服务把最终 action chunk 交给仿真端完整执行
 ```
 
-Codex 不需要全部历史 VLA proposal。它需要的是当前 proposal、当前视觉事实、过去少量实际执行轨迹，以及以前真正参与过的 Codex 决策历史。
+Codex 不需要全部历史 VLA proposal。它需要的是当前 proposal、当前视觉事实、当前实测 state，以及以前真正参与过的 Codex 决策历史。
 
 ## 7. Skill 路由设计
 
@@ -444,7 +412,7 @@ XPolicyLab/
 - 请求校验、图片缓存和审计日志。
 - Codex-only 目标插值。
 - VLA 路由、prefix 截取和 EEF correction 插值。
-- `pending_verify` 与 execution ACK 对齐。
+- 响应生成、请求校验和无语义透传的 continuation。
 
 各策略目录只保留薄 HTTP client 和各自模型推理。其它 VLA 只需遵守同一个 observation/VLA-review 协议即可接入。迁移可以后做，但新融合代码不应继续向 `policy/codex_agent` 内增加策略专属逻辑。
 
@@ -465,11 +433,10 @@ policy/X_VLA_Codex/
 它运行在与 X-VLA 相同的 Python/GPU 环境，包含原有 X-VLA 依赖和权重加载逻辑。只在副本中增加：
 
 ```text
-bridge_client.py       发送 observation/VLA proposal/ACK，接收最终 action chunk
-fusion_log.py          保存服务器侧实际执行回执
+bridge_client.py       发送 observation/VLA proposal，接收最终 action chunk
 ```
 
-副本的 `model.py` 保持原有 observation 预处理、X-VLA 推理和 action chunk 生成逻辑，只在得到 chunk 后调用 `bridge_client`，执行 Bridge 返回的 action chunk，并缓存下一请求要回传的 ACK。不要在副本中实现路由、Codex EEF 插值，也不要重写原 X-VLA 主推理链路。
+副本的 `model.py` 保持原有 observation 预处理、X-VLA 推理和 action chunk 生成逻辑，只在得到 chunk 后调用 `bridge_client`，并执行 Bridge 返回的 action chunk。不要在副本中实现路由、Codex EEF 插值，也不要重写原 X-VLA 主推理链路。
 
 ### 8.4 安装与数据流
 
@@ -480,7 +447,6 @@ fusion_log.py          保存服务器侧实际执行回执
   生成 H30
   每轮 HTTP 请求 localhost:<reverse-tunnel-port>
   执行 Bridge 返回的最终 action chunk
-  下一轮回传 execution ACK
 
 本机：codex_policy_bridge
   接收 observation + VLA review 数据
@@ -495,7 +461,7 @@ fusion_log.py          保存服务器侧实际执行回执
 - 请求必须携带 Codex 判断所需的图像、state、H30、summary 和最近 N 步轨迹。
 - 不能传服务器本地路径让本机 Codex 打开。
 - bridge 记录模型看到和返回的内容。
-- 融合策略服务记录实际执行内容。
+- 策略服务是否以及如何记录日志，由各自实现决定。
 
 这种方式保护现有 `X_VLA`，也避免把重模型依赖引入 `codex_agent`。
 
@@ -504,10 +470,10 @@ fusion_log.py          保存服务器侧实际执行回执
 1. 复制 `X_VLA` 为新的融合策略目录，原目录零修改。
 2. 将 Bridge/App Server/workspace 从策略目录抽成独立 `codex_policy_bridge`。
 3. 新策略 `model.py` 只在生成 H30 后调用 Bridge，并执行其返回的 action chunk。
-4. 请求增加 arm-major `chunk`、六项/臂 summary、最近 N 步实际轨迹和上一执行 ACK。
+4. 请求只增加 arm-major `chunk` 和六项/臂 summary。
 5. VLA-review 输出实现 `mode=vla | eef` 二选一结构。
-6. Bridge 维护一个 `pending_verify` 并生成最终 action chunk。
-7. Bridge 保存请求和计划；策略服务保存实际执行并在下一轮 ACK。
+6. Bridge 通过无状态 continuation 传递 `verify_previous` 并生成最终 action chunk。
+7. Bridge 保存请求、决策和返回 chunk 元数据，不规定策略服务日志。
 8. skill 改成通用入口加两个 references 的路由结构。
 
 第一版不实现图像 embedding 触发、程序侧视觉判断、复杂任务状态机或修改现有 X-VLA 服务。
