@@ -4,6 +4,12 @@
   "_calibration": "doc §11.1：统计 6 个 episode 共 20 个周期「锚点前 N 帧的窗口内最大距离」分位，取使最终定位阶段中位 10~15 帧的取值。实测 —— grasp 锚点前 15 帧中位 0.0473 m / 20 帧 0.0691 m；place 前 15 帧中位 0.0335 m / 20 帧 0.0468 m。故 grasp 取 d_in=0.045、place 取 d_in=0.035。",
   "chunk_size": 30,
   "_chunk_size_doc": "本配置默认 30，对应 deploy.yml 的 actions_per_chunk=30（策略一次预测并执行 30 帧）。CLI --chunk 可覆盖。",
+  "gripper_motion": {
+    "delta_min": 0.1,
+    "rate_min": 0.01,
+    "_doc": "口径 C（默认判定）：chunk 内该臂夹爪位移 max(g)-min(g) >= delta_min 即判命中，不依赖锚点检测。delta_min=0.10 依据：实测夹爪行程约 [0.03,1.00]（满行程≈0.97），0.10 ≈ 满行程的 10%；111 个 chunk 的 max(dGrip) 升序在 0.081→0.094→0.102→0.126 处有自然稀疏带。rate_min 只用于图上标注「夹爪在动的帧」，不参与判定。",
+    "_why": "2026-09-18 用户验收：口径 A（区间相交）把只含 approach/confirm 段、夹爪完全没动的 chunk 也判成命中（实测 7 处，ΔGrip 仅 0.000~0.071）。用户判据是「chunk 里要做动作 → 夹爪必然对齐并变化」，故以夹爪实际位移为准。"
+  },
   "segment": {
     "grasp": {
       "d_in": 0.045,
