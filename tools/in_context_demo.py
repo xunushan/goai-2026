@@ -153,7 +153,7 @@ ANNOTATIONS_REAL = {
     ("stack_and_cover_blocks", 294, 146): ("left jaws open, closing in on the blocks scattered over the table; the cover rests at the left; right arm parked", "aligned"),
     ("stack_and_cover_blocks", 294, 201): ("left jaws have just closed on the first block and are lifting it off the table", "grasped"),
     ("stack_and_cover_blocks", 294, 255): ("left jaws are opening to set the block down at the centre of the table — the bottom block of the stack", "placed"),
-    ("stack_and_cover_blocks", 294, 740): ("both arms are away from the centre: at the middle of the table stands the finished block stack (head-camera view from above, so it reads as one short colour-banded column), the cover still lies untouched at the upper left", "stacked"),
+    ("stack_and_cover_blocks", 294, 615): ("right jaws are setting a block down on the two already stacked at the centre of the table and are still closed on it; the right wrist camera looks straight at it (held block in front, the two below rising away behind), the head camera sees only the arm coming down from above with the colour-banded stack between the jaws", "stacked"),
     ("stack_and_cover_blocks", 294, 806): ("left jaws have closed on the cover lying at the upper left of the table and lifted it clear of the surface", "grasped"),
     ("stack_and_cover_blocks", 294, 918): ("the blocks are stacked; left arm is lowering the cup over the stack", "placed"),
     ("stack_and_cover_blocks", 294, 1000): ("both arms back at their home poses; the cup sits over the block stack at the centre of the table", "task_complete"),
@@ -215,12 +215,13 @@ TWEAKS = {
     ],
     # 002 transport / 003 hold: 单臂叠块, 都不是"一只手保持等另一只手" -> 删
     # 004 (f255 放底块) 保留
-    # 新增 stack: 第二、三块叠上去之后 (两臂都离开) 的块堆 —— 中间那些抓取/靠近与首块同型, 省略
+    # 新增 stack: 右臂把第三块放到已叠好的两块之上 (CSV 右臂 place 段 603-655 的正中) ——
+    #   中间那些抓取/靠近与首块同型, 省略; 用叠块动作本身而不是叠完的结果 (用户二轮反馈)
     # 新增 grasp_cup: 005 之前补一帧抓杯盖 (CSV 里最后一轮 grasp_block 就是抓杯盖)
     "stack_and_cover_blocks": [
         {"op": "drop", "stage": "transport", "event": "move_block"},
         {"op": "drop", "stage": "hold", "event": "hold_block"},
-        {"op": "add", "stage": "stack", "event": "place_block", "frame": 740, "span": [603, 656]},
+        {"op": "add", "stage": "stack", "event": "place_block", "frame": 615, "span": [603, 656]},
         {"op": "add", "stage": "grasp", "event": "grasp_cup", "frame": 806, "span": [789, 814]},
     ],
     # 003 hold    : 单臂无 hold -> 删
