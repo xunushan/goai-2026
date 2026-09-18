@@ -2,7 +2,7 @@ transformers<=4.51.3
 fastapi
 tensorboard
 peft==0.17.1
-av==14.4.0
+av==15.0.0
 uvicorn==0.34.3
 json_numpy==2.1.0
 safetensors==0.4.5
