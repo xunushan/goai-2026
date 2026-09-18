@@ -125,6 +125,8 @@ class BridgeState:
         # at a time, and two overlapping requests would interleave their events.
         self.lock = threading.Lock()
         self.episode_id: str | None = None
+        self.initial_context: list[dict[str, Any]] = []
+        self.initial_context_loaded = False
         self.history: list[dict[str, Any]] = []
 
     def begin_episode(self, episode_id: str) -> None:
@@ -137,20 +139,23 @@ class BridgeState:
         if episode_id == self.episode_id:
             return
         self.episode_id = episode_id
+        self.initial_context = []
+        self.initial_context_loaded = False
         self.history = []
 
     def replay(self) -> list[dict[str, Any]]:
-        """Rebuild the full policy history while retaining only its latest images."""
+        """Rebuild saved episode context while retaining only the latest live images."""
         if not self.history:
-            return []
-        items: list[dict[str, Any]] = [{
+            return list(self.initial_context)
+        items = list(self.initial_context)
+        items.append({
             "type": "text",
             "text": (
                 "HISTORICAL EXECUTION RECORD. All prior observation text and "
                 "structured decisions follow in order. Older image encodings were "
                 "removed; their cache paths remain in the observation records."
             ),
-        }]
+        })
         for entry in self.history:
             items.append({"type": "text", "text": entry["observation_text"]})
             exact_paths = [
@@ -180,7 +185,12 @@ class BridgeState:
         """Build context that must be restored only when opening a Codex thread."""
         if not fresh_thread:
             return []
-        return self.experience_library.items(task_name) + self.replay()
+        if not self.initial_context_loaded:
+            # Load and render once per episode. Later thread replacements replay
+            # these exact saved items as part of the bridge-maintained history.
+            self.initial_context = self.experience_library.items(task_name)
+            self.initial_context_loaded = True
+        return self.replay()
 
     def close(self) -> None:
         self.server.close()

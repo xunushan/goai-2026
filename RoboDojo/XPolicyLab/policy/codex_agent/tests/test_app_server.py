@@ -197,6 +197,8 @@ def test_rollover_replays_all_text_and_only_latest_images() -> None:
     state = object.__new__(BridgeState)
     state.workspace = WORKSPACE
     state.episode_id = "ep-test"
+    state.initial_context = []
+    state.initial_context_loaded = True
     state.history = [
         {
             "observation_text": f"observation-{index}",

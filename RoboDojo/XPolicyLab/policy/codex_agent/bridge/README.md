@@ -225,9 +225,10 @@ that has to round-trip a thread id is a caller that can send back the wrong one.
 agent cannot browse or repeatedly load demonstrations. `index.json` maps an exact
 task name to one successful `demo.json` and declares the camera views for each
 stage; an unmapped task simply receives no demo.
-The bridge injects the selected demonstration before the current observation only
-when a Codex thread opens. Thread rotation injects it again before replaying the
-episode history, so rotation removes neither the prior history nor the demonstration.
+The bridge loads the selected demonstration once as the episode's initial context.
+It is sent when the first Codex thread opens. Thread rotation replays that saved
+initial context together with the execution history, so it neither reloads nor
+rerenders the demo and loses no episode context.
 
 Each task directory keeps the full JSON and every source image. The shipped
 `stack_bowls` configuration uses only `cam_high` by default and overrides `grasp`

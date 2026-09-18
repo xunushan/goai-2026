@@ -75,9 +75,13 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     state.experience_library = ExperienceLibrary(LIBRARY)
     state.workspace = PACKAGE / "workspace"
     state.episode_id = "ep-test"
+    state.initial_context = []
+    state.initial_context_loaded = False
     state.history = []
     fresh = state.thread_prefix("stack_bowls", fresh_thread=True)
     assert fresh and fresh[0]["text"].startswith("HISTORICAL SUCCESSFUL DEMONSTRATION")
+    assert state.initial_context == fresh
+    assert state.initial_context_loaded
     assert state.thread_prefix("stack_bowls", fresh_thread=False) == []
 
     state.history = [{
@@ -88,6 +92,7 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     }]
     rotated = state.thread_prefix("stack_bowls", fresh_thread=True)
     text = "\n".join(item.get("text", "") for item in rotated)
+    assert rotated[:len(state.initial_context)] == state.initial_context
     assert "HISTORICAL SUCCESSFUL DEMONSTRATION" in text
     assert "prior observation" in text
 
