@@ -99,6 +99,8 @@ class BridgeResult:
     error_kind: str = ""
     error: str = ""
     decision: dict[str, Any] | None = None
+    action_chunk: list[dict[str, Any]] | None = None
+    continuation: dict[str, Any] | None = None
 
 
 class BridgeClient:
@@ -179,4 +181,12 @@ class BridgeClient:
                 error_kind=str(body.get("error_kind") or "bridge_bad_response"),
                 error=str(body.get("error") or "unknown bridge failure"),
             )
-        return BridgeResult(ok=True, decision=body.get("decision"))
+        chunk = body.get("action_chunk")
+        if not isinstance(chunk, list) or not chunk:
+            return BridgeResult(ok=False, error_kind="bridge_bad_response", error="bridge returned no action_chunk")
+        return BridgeResult(
+            ok=True,
+            decision=body.get("decision"),
+            action_chunk=chunk,
+            continuation=body.get("continuation"),
+        )

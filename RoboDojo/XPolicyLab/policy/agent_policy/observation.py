@@ -38,7 +38,7 @@ from typing import Any, Sequence
 
 import numpy as np
 
-from .motion import ArmState
+from XPolicyLab.codex_agent.bridge.motion import ArmState
 
 TASKS_DIR = Path(__file__).resolve().parent / "tasks"
 
@@ -83,6 +83,9 @@ def build_request(
     right: ArmState,
     feedback: Sequence[str],
     images: Sequence[dict[str, str]],
+    control: dict[str, float | int],
+    continuation: dict[str, Any] | None = None,
+    vla_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """One decision's observation packet, ready for ``POST /v1/decide``.
 
@@ -95,7 +98,7 @@ def build_request(
 
     Images are attached in the order supplied by the adapter.
     """
-    return {
+    request = {
         "episode_id": str(episode_id),
         "request_id": str(request_id),
         "step_id": int(steps_used),
@@ -111,6 +114,7 @@ def build_request(
             "remaining_decisions": max(0, int(context.max_decisions) - int(calls_used)),
             "remaining_steps": max(0, int(context.step_budget) - int(steps_used)),
         },
+        "control": dict(control),
         "observation": {
             "left": arm_observation(left),
             "right": arm_observation(right),
@@ -125,3 +129,8 @@ def build_request(
             for image in images
         ],
     }
+    if continuation is not None:
+        request["continuation"] = continuation
+    if vla_review is not None:
+        request["vla_review"] = vla_review
+    return request

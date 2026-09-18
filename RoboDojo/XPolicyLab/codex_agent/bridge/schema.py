@@ -37,7 +37,11 @@ MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 _ARM_FIELDS = ("position", "orientation", "gripper")
 _TASK_FIELDS = ("name", "instruction", "guidance")
 _BUDGET_FIELDS = ("max_decisions", "max_sim_steps", "remaining_decisions", "remaining_steps")
-_REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "observation", "images")
+_CONTROL_FIELDS = (
+    "delta_p_max_m", "delta_theta_max_rad", "max_target_translation_m",
+    "max_target_rotation_rad", "settle_steps", "gripper_open", "gripper_close",
+)
+_REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "control", "observation", "images")
 
 
 class PolicyValidationError(ValueError):
@@ -90,9 +94,12 @@ class Observation:
     turn_index: int
     task: dict[str, Any]
     budget: dict[str, int]
+    control: dict[str, float | int]
     arms: dict[str, ArmObservation]
     feedback: tuple[str, ...]
     images: tuple[ImageInput, ...]
+    vla_review: dict[str, Any] | None
+    continuation: dict[str, Any] | None
 
     @classmethod
     def parse(cls, value: Any) -> "Observation":
@@ -131,6 +138,17 @@ class Observation:
         if parsed_budget["max_decisions"] < 1 or parsed_budget["max_sim_steps"] < 1:
             raise PolicyValidationError("budget limits must be at least 1")
 
+        control = value["control"]
+        if not isinstance(control, dict) or set(control) != set(_CONTROL_FIELDS):
+            raise PolicyValidationError(f"control must contain exactly {sorted(_CONTROL_FIELDS)}")
+        parsed_control: dict[str, float | int] = {
+            key: _number(control[key], f"control.{key}") for key in _CONTROL_FIELDS
+        }
+        parsed_control["settle_steps"] = _count(control["settle_steps"], "control.settle_steps")
+        for key in ("delta_p_max_m", "delta_theta_max_rad", "max_target_translation_m", "max_target_rotation_rad"):
+            if float(parsed_control[key]) <= 0:
+                raise PolicyValidationError(f"control.{key} must be positive")
+
         observation = value["observation"]
         if not isinstance(observation, dict) or set(observation) != set(ARMS):
             raise PolicyValidationError("observation must contain exactly left and right")
@@ -156,10 +174,52 @@ class Observation:
             turn_index=_count(value["turn_index"], "turn_index"),
             task=parsed_task,
             budget=parsed_budget,
+            control=parsed_control,
             arms={arm: _parse_arm(observation[arm], arm) for arm in ARMS},
             feedback=tuple(feedback),
             images=parsed_images,
+            vla_review=_parse_vla_review(value.get("vla_review")),
+            continuation=_parse_continuation(value.get("continuation")),
         )
+
+
+def _parse_continuation(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"previous_request_id", "verify_previous"}:
+        raise PolicyValidationError("continuation must contain previous_request_id and verify_previous")
+    if type(value["verify_previous"]) is not bool:
+        raise PolicyValidationError("continuation.verify_previous must be boolean")
+    return {"previous_request_id": _text(value["previous_request_id"], "continuation.previous_request_id"),
+            "verify_previous": value["verify_previous"]}
+
+
+def _parse_vla_review(value: Any) -> dict[str, Any] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict) or set(value) != {"chunk", "summary"}:
+        raise PolicyValidationError("vla_review must contain exactly chunk and summary")
+    chunk = value["chunk"]
+    if not isinstance(chunk, dict) or set(chunk) != {"horizon", "left", "right"}:
+        raise PolicyValidationError("vla_review.chunk must contain horizon, left and right")
+    horizon = _count(chunk["horizon"], "vla_review.chunk.horizon")
+    if horizon < 1:
+        raise PolicyValidationError("vla_review.chunk.horizon must be positive")
+    parsed_chunk: dict[str, Any] = {"horizon": horizon}
+    for side in ARMS:
+        arm = chunk[side]
+        if not isinstance(arm, dict) or set(arm) != {"position", "orientation", "gripper"}:
+            raise PolicyValidationError(f"vla_review.chunk.{side} has invalid fields")
+        if not all(isinstance(arm[key], list) and len(arm[key]) == horizon for key in arm):
+            raise PolicyValidationError(f"vla_review.chunk.{side} arrays must match horizon")
+        parsed_chunk[side] = {
+            "position": [_vector(row, 3, f"vla_review.chunk.{side}.position") for row in arm["position"]],
+            "orientation": [_vector(row, 4, f"vla_review.chunk.{side}.orientation") for row in arm["orientation"]],
+            "gripper": [_number(item, f"vla_review.chunk.{side}.gripper") for item in arm["gripper"]],
+        }
+    if not isinstance(value["summary"], dict):
+        raise PolicyValidationError("vla_review.summary must be an object")
+    return {"chunk": parsed_chunk, "summary": value["summary"]}
 
 
 def _parse_arm(value: Any, arm: str) -> ArmObservation:
@@ -219,7 +279,7 @@ def _arm_schema() -> dict[str, Any]:
     }
 
 
-def output_schema() -> dict[str, Any]:
+def output_schema(vla_review: bool = False) -> dict[str, Any]:
     """JSON Schema handed to the App Server's ``turn/start``.
 
     Inlined rather than using ``$defs``/``$ref`` so the schema stays within the
@@ -229,7 +289,7 @@ def output_schema() -> dict[str, Any]:
 
     The adapter validates the same exact shape again before execution.
     """
-    return {
+    eef = {
         "type": "object",
         "additionalProperties": False,
         "required": ["left", "right", "note", "phase"],
@@ -242,9 +302,29 @@ def output_schema() -> dict[str, Any]:
             "phase": {"type": "string", "minLength": 1, "maxLength": 10},
         },
     }
+    if not vla_review:
+        return eef
+    eef["required"] = ["mode", "left", "right", "note", "phase"]
+    eef["properties"]["mode"] = {"type": "string", "enum": ["eef"]}
+    return {
+        "oneOf": [
+            {
+                "type": "object", "additionalProperties": False,
+                "required": ["mode", "vla_steps", "verify_next", "note", "phase"],
+                "properties": {
+                    "mode": {"type": "string", "enum": ["vla"]},
+                    "vla_steps": {"type": "integer", "minimum": 1},
+                    "verify_next": {"type": "boolean"},
+                    "note": {"type": "string", "minLength": 1},
+                    "phase": {"type": "string", "minLength": 1, "maxLength": 10},
+                },
+            },
+            eef,
+        ]
+    }
 
 
-def validate_response(value: Any) -> dict[str, Any]:
+def validate_response(value: Any, *, vla_horizon: int | None = None) -> dict[str, Any]:
     """Check the model's object before it is believed, and hand it back unchanged.
 
     Only the structure is checked. Whether a target is reachable, whether it is
@@ -254,18 +334,36 @@ def validate_response(value: Any) -> dict[str, Any]:
     """
     if not isinstance(value, dict):
         raise PolicyValidationError("the reply must be a JSON object")
+    if vla_horizon is not None and value.get("mode") == "vla":
+        wanted = {"mode", "vla_steps", "verify_next", "note", "phase"}
+        if set(value) != wanted:
+            raise PolicyValidationError(f"the VLA reply must contain exactly {sorted(wanted)}")
+        if type(value["vla_steps"]) is not int or not 1 <= value["vla_steps"] <= vla_horizon:
+            raise PolicyValidationError("vla_steps must be within the proposed horizon")
+        if type(value["verify_next"]) is not bool:
+            raise PolicyValidationError("verify_next must be boolean")
+        _validate_note_phase(value)
+        return value
     wanted = {"left", "right", "note", "phase"}
+    if vla_horizon is not None:
+        wanted.add("mode")
+        if value.get("mode") != "eef":
+            raise PolicyValidationError("a VLA-review EEF reply must use mode='eef'")
     if set(value) != wanted:
         raise PolicyValidationError(f"the reply must contain exactly {sorted(wanted)}")
+    _validate_note_phase(value)
+    for arm in ARMS:
+        _validate_arm_reply(value[arm], f"the reply's {arm} arm")
+    return value
+
+
+def _validate_note_phase(value: dict[str, Any]) -> None:
     if not isinstance(value["note"], str) or not value["note"].strip():
         raise PolicyValidationError("the reply's note must be a non-empty string")
     if not isinstance(value["phase"], str) or not value["phase"].strip():
         raise PolicyValidationError("the reply's phase must be a non-empty string")
     if len(value["phase"]) > 10:
         raise PolicyValidationError("the reply's phase must be at most 10 characters")
-    for arm in ARMS:
-        _validate_arm_reply(value[arm], f"the reply's {arm} arm")
-    return value
 
 
 def _validate_arm_reply(value: Any, name: str) -> None:

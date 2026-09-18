@@ -18,9 +18,8 @@ if str(_REPO_ROOT) not in sys.path:
 from XPolicyLab.model_template import ModelTemplate
 
 from .bridge_client import BridgeClient, build_image_payload
-from .motion import ArmState, MotionConfig, hold_chunk, interpolate_chunk, target_error
+from XPolicyLab.codex_agent.bridge.motion import ArmState, MotionConfig, hold_chunk
 from .observation import DEFAULT_CAMERA_NAMES, EpisodeContext, build_request, load_task_card
-from .protocol import ParseError, parse_decision
 
 TASK_CARD_KEYS = {
     "task_name", "instruction", "guidance", "step_budget", "max_decisions",
@@ -33,6 +32,7 @@ class EpisodeState:
     calls_used: int = 0
     steps_used: int = 0
     feedback: list[str] = field(default_factory=list)
+    continuation: dict[str, Any] | None = None
 
 
 def _section(config: dict[str, Any], name: str) -> dict[str, Any]:
@@ -63,6 +63,25 @@ def _arm(observation: dict[str, Any], side: str) -> ArmState:
     if pose.shape != (7,) or not gripper.size:
         raise ValueError(f"invalid {side} arm state")
     return ArmState.from_pose7(pose, gripper[-1])
+
+
+def _action_chunk(value: Any) -> list[dict[str, np.ndarray]]:
+    required = {"left_ee_pose", "left_ee_joint_state", "right_ee_pose", "right_ee_joint_state"}
+    if not isinstance(value, list) or not value:
+        raise ValueError("bridge action_chunk must be non-empty")
+    result = []
+    for index, action in enumerate(value):
+        if not isinstance(action, dict) or set(action) != required:
+            raise ValueError(f"bridge action_chunk[{index}] has invalid fields")
+        converted = {key: np.asarray(item, dtype=np.float32).reshape(-1) for key, item in action.items()}
+        if converted["left_ee_pose"].shape != (7,) or converted["right_ee_pose"].shape != (7,):
+            raise ValueError(f"bridge action_chunk[{index}] has invalid EEF pose")
+        if converted["left_ee_joint_state"].shape != (1,) or converted["right_ee_joint_state"].shape != (1,):
+            raise ValueError(f"bridge action_chunk[{index}] has invalid gripper state")
+        if not all(np.isfinite(item).all() for item in converted.values()):
+            raise ValueError(f"bridge action_chunk[{index}] contains non-finite values")
+        result.append(converted)
+    return result
 
 
 class Model(ModelTemplate):
@@ -172,6 +191,16 @@ class Model(ModelTemplate):
                 right=right,
                 feedback=state.feedback,
                 images=images,
+                continuation=state.continuation,
+                control={
+                    "delta_p_max_m": self.motion.delta_p_max_m,
+                    "delta_theta_max_rad": self.motion.delta_theta_max_rad,
+                    "max_target_translation_m": self.motion.max_target_translation_m,
+                    "max_target_rotation_rad": self.motion.max_target_rotation_rad,
+                    "settle_steps": self.motion.settle_steps,
+                    "gripper_open": self.motion.gripper_open,
+                    "gripper_close": self.motion.gripper_close,
+                },
             ),
             timeout_s=self.request_timeout_s,
         )
@@ -182,32 +211,8 @@ class Model(ModelTemplate):
             state.steps_used += 1
             return hold_chunk(left, right)
 
-        try:
-            decision = parse_decision(
-                result.decision,
-                gripper_open=self.motion.gripper_open,
-                gripper_close=self.motion.gripper_close,
-            )
-        except ParseError as exc:
-            state.feedback = [f"The previous reply was invalid ({exc}); the robot held position."]
-            state.steps_used += 1
-            return hold_chunk(left, right)
-
-        for side, current, command in (
-            ("left", left, decision.left),
-            ("right", right, decision.right),
-        ):
-            translation, rotation = target_error(current, command)
-            if (translation > self.motion.max_target_translation_m
-                    or rotation > self.motion.max_target_rotation_rad):
-                state.feedback = [
-                    f"The {side} target exceeded the per-decision limit "
-                    f"({translation:.3f} m, {rotation:.3f} rad); the robot held position."
-                ]
-                state.steps_used += 1
-                return hold_chunk(left, right)
-
-        chunk = interpolate_chunk(left, decision.left, right, decision.right, self.motion)
+        chunk = _action_chunk(result.action_chunk)
+        state.continuation = result.continuation
         state.steps_used += len(chunk)
         state.feedback = [
             f"Executed the requested target for {len(chunk)} simulator steps. "

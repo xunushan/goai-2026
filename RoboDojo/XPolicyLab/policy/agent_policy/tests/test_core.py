@@ -14,7 +14,7 @@ sys.path.insert(0, str(PACKAGE.parents[2]))
 from XPolicyLab.codex_agent.bridge.schema import PolicyValidationError, validate_response
 from XPolicyLab.policy.agent_policy.bridge_client import BridgeResult
 from XPolicyLab.policy.agent_policy.model import Model
-from XPolicyLab.policy.agent_policy.protocol import ParseError, parse_decision
+from XPolicyLab.codex_agent.bridge.protocol import ParseError, parse_decision
 
 CAMERAS = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
@@ -25,6 +25,13 @@ def arm(position):
 
 def decision(position=0.01):
     return {"left": arm([position, 0, 0]), "right": arm([0, 0, 0]), "note": "test", "phase": "move"}
+
+
+def action(position=0.01):
+    return {
+        "left_ee_pose": [position, 0, 0, 1, 0, 0, 0], "left_ee_joint_state": [1],
+        "right_ee_pose": [0, 0, 0, 1, 0, 0, 0], "right_ee_joint_state": [1],
+    }
 
 
 def observation(with_images=True):
@@ -73,7 +80,7 @@ def main() -> int:
     else:
         raise AssertionError("parser silently accepted a compatibility shape")
 
-    instance = model(BridgeResult(ok=True, decision=decision()))
+    instance = model(BridgeResult(ok=True, decision=decision(), action_chunk=[action(0.005), action()]))
     chunk = instance.get_action()
     assert len(chunk) == 2
     assert np.allclose(chunk[-1]["left_ee_pose"][:3], [0.01, 0, 0])
@@ -81,8 +88,7 @@ def main() -> int:
 
     for result in (
         BridgeResult(ok=False, error_kind="timeout"),
-        BridgeResult(ok=True, decision={"bad": True}),
-        BridgeResult(ok=True, decision=decision(1.0)),
+        BridgeResult(ok=True, decision={"bad": True}, action_chunk=[{"bad": []}]),
     ):
         instance = model(result)
         chunk = instance.get_action()
@@ -90,7 +96,7 @@ def main() -> int:
         assert np.allclose(chunk[0]["left_ee_pose"][:3], [0, 0, 0])
         assert instance.episode.steps_used == 1
 
-    instance = model(BridgeResult(ok=True, decision=decision()))
+    instance = model(BridgeResult(ok=True, decision=decision(), action_chunk=[action()]))
     instance.update_obs(observation(with_images=False))
     assert len(instance.get_action()) == 1
     print("core policy tests passed")

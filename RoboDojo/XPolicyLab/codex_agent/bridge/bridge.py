@@ -48,6 +48,8 @@ from . import app_server as app_server_module
 from . import record
 from .app_server import AppServerError, CodexAppServer
 from .experience import ExperienceError, ExperienceLibrary
+from .motion import ArmState, MotionConfig, interpolate_chunk, target_error
+from .protocol import parse_decision
 from .schema import Observation, PolicyValidationError, output_schema, validate_response
 
 MAX_BODY_BYTES = 32 * 1024 * 1024
@@ -90,7 +92,7 @@ def _render_turn(observation: Observation) -> str:
     views = ", ".join(
         f"{index}. {image.name}" for index, image in enumerate(observation.images, 1)
     )
-    return "\n\n".join([
+    sections = [
         f"TURN {observation.turn_index + 1}\n"
         f"ATTACHED VIEWS: {views}\n"
         f"remaining decisions after this call: {budget['remaining_decisions']}\n"
@@ -98,8 +100,18 @@ def _render_turn(observation: Observation) -> str:
         "\n".join(task_lines),
         "\n".join(state_lines),
         "OUTCOME OF PREVIOUS DECISION\n  " + "\n  ".join(feedback),
-        "Choose the single next motion. Reply with the JSON object only.",
-    ])
+    ]
+    if observation.vla_review is not None:
+        reason = "verify_previous" if (observation.continuation or {}).get("verify_previous") else "gripper_change"
+        sections.extend([
+            f"VLA REVIEW\nReason: {reason}",
+            "Summary: " + json.dumps(observation.vla_review["summary"], separators=(",", ":")),
+            "Proposed chunk: " + json.dumps(observation.vla_review["chunk"], separators=(",", ":")),
+            "Review the proposal using the vla-review skill reference and return one decision.",
+        ])
+    else:
+        sections.append("Choose the single next motion. Reply with the JSON object only.")
+    return "\n\n".join(sections)
 
 
 class BridgeError(Exception):
@@ -213,7 +225,7 @@ def _check_images(observation: Observation, expected: tuple[str, ...]) -> None:
         )
 
 
-def _parse_reply(text: str) -> dict[str, Any]:
+def _parse_reply(text: str, *, vla_horizon: int | None = None) -> dict[str, Any]:
     """The model's answer, as an object, or a Codex-side failure.
 
     A reply that does not parse is not the caller's fault -- the request was fine
@@ -225,9 +237,56 @@ def _parse_reply(text: str) -> dict[str, Any]:
     except json.JSONDecodeError as exc:
         raise AppServerError("policy_invalid_response", f"the reply is not JSON: {exc}") from exc
     try:
-        return validate_response(value)
+        return validate_response(value, vla_horizon=vla_horizon)
     except PolicyValidationError as exc:
         raise AppServerError("policy_invalid_response", str(exc)) from exc
+
+
+def _arm_state(observation: Observation, side: str) -> ArmState:
+    arm = observation.arms[side]
+    return ArmState.from_pose7([*arm.position, *arm.orientation], arm.gripper)
+
+
+def _motion_config(observation: Observation) -> MotionConfig:
+    return MotionConfig(**observation.control)
+
+
+def _json_chunk(chunk: list[dict[str, Any]]) -> list[dict[str, list[float]]]:
+    return [{key: value.tolist() for key, value in action.items()} for action in chunk]
+
+
+def _vla_chunk(review: dict[str, Any], steps: int) -> list[dict[str, list[float]]]:
+    chunk = review["chunk"]
+    result = []
+    for index in range(steps):
+        result.append({
+            "left_ee_pose": [*chunk["left"]["position"][index], *chunk["left"]["orientation"][index]],
+            "left_ee_joint_state": [chunk["left"]["gripper"][index]],
+            "right_ee_pose": [*chunk["right"]["position"][index], *chunk["right"]["orientation"][index]],
+            "right_ee_joint_state": [chunk["right"]["gripper"][index]],
+        })
+    return result
+
+
+def _has_gripper_change(review: dict[str, Any]) -> bool:
+    return any(max(review["chunk"][side]["gripper"]) - min(review["chunk"][side]["gripper"]) > 1e-3 for side in ("left", "right"))
+
+
+def _synthesise(observation: Observation, decision: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    remaining = observation.budget["remaining_steps"]
+    if observation.vla_review is not None and decision.get("mode") == "vla":
+        chunk = _vla_chunk(observation.vla_review, min(decision["vla_steps"], remaining))
+        continuation = {"previous_request_id": observation.request_id, "verify_previous": decision["verify_next"]}
+        return chunk, continuation
+    parsed = parse_decision(decision, gripper_open=float(observation.control["gripper_open"]), gripper_close=float(observation.control["gripper_close"]))
+    left, right = _arm_state(observation, "left"), _arm_state(observation, "right")
+    config = _motion_config(observation)
+    for side, current, command in (("left", left, parsed.left), ("right", right, parsed.right)):
+        translation, rotation = target_error(current, command)
+        if translation > config.max_target_translation_m or rotation > config.max_target_rotation_rad:
+            raise PolicyValidationError(f"{side} target exceeds the per-decision motion limit")
+    chunk = _json_chunk(interpolate_chunk(left, parsed.left, right, parsed.right, config))[:remaining]
+    return chunk, {"previous_request_id": observation.request_id, "verify_previous": False}
 
 
 def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
@@ -276,6 +335,13 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                 ),
             )
 
+        if observation.vla_review is not None and not (observation.continuation or {}).get("verify_previous") and not _has_gripper_change(observation.vla_review):
+            chunk = _vla_chunk(observation.vla_review, min(observation.vla_review["chunk"]["horizon"], observation.budget["remaining_steps"]))
+            decision = None
+            continuation = {"previous_request_id": observation.request_id, "verify_previous": False}
+            log(ok=True, decision=decision, latency_ms=int((time.monotonic() - started) * 1000))
+            return {"ok": True, "source": "vla", "planned_steps": len(chunk), "action_chunk": chunk, "decision": None, "continuation": continuation}
+
         state.server.bind(observation.episode_id)
         rotating = state.server.rotation_due
         # A decision that opens a thread also has to read the workspace and the
@@ -292,13 +358,14 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
             text, usage = state.server.decide(
                 text=turn_text,
                 images=image_inputs,
-                output_schema=output_schema(),
+                output_schema=output_schema(observation.vla_review is not None),
                 timeout_s=timeout_s,
                 # A normal image rotation and timeout recovery both replace only
                 # the Codex thread, never the simulator episode.
                 replay=prefix or None,
             )
-            decision = _parse_reply(text)
+            decision = _parse_reply(text, vla_horizon=None if observation.vla_review is None else observation.vla_review["chunk"]["horizon"])
+            chunk, continuation = _synthesise(observation, decision)
         except (AppServerError, ExperienceError) as exc:
             error_kind = exc.kind if isinstance(exc, AppServerError) else "experience_invalid"
             log(ok=False, error_kind=error_kind, error=str(exc), latency_ms=int((time.monotonic() - started) * 1000))
@@ -319,7 +386,8 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
             "image_paths": image_paths,
             "images": image_inputs,
         })
-        return {"ok": True, "decision": decision}
+        source = "vla" if decision.get("mode") == "vla" else "eef"
+        return {"ok": True, "source": source, "planned_steps": len(chunk), "action_chunk": chunk, "decision": decision, "continuation": continuation}
 
 
 # HTTP status per failure kind. Anything Codex-side that is not a timeout is a bad

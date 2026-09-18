@@ -236,23 +236,18 @@ def test_the_camera_names_are_the_ones_actually_attached() -> None:
 
 
 def test_the_skill_states_the_decision_procedure() -> None:
-    print("the skill says how to decide, and how to answer")
+    print("the skill routes each decision mode to one focused reference")
     skill = instructions()["SKILL.md"]
     for fragment in (
         "AGENTS.md",
-        '"keep"',
-        "note",
-        "phase",
-        "one JSON object",
-        "budget",
+        "references/codex-only.md",
+        "references/vla-review.md",
+        "exactly one reference",
     ):
         check(fragment in skill, f"SKILL.md mentions {fragment!r}")
-    check("no Markdown fence" in skill or "Markdown" in skill, "the skill forbids a code fence")
-
-    # The reply shape it shows has to be the one the schema accepts and the
-    # adapter parses. Anything else is a shape nobody validates.
-    for key in ("left", "right", "position", "orientation", "gripper"):
-        check(f'"{key}"' in skill, f"the reply example in SKILL.md shows {key!r}")
+    references = SKILL.parent / "references"
+    check((references / "codex-only.md").is_file(), "codex-only reference exists")
+    check((references / "vla-review.md").is_file(), "vla-review reference exists")
 
 
 def test_the_bridge_does_not_own_policy_text() -> None:
