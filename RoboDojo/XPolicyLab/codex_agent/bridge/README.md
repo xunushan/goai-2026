@@ -28,7 +28,7 @@ bridge, and a tunnel.
 ## 1. Start the bridge
 
 ```bash
-cd RoboDojo/XPolicyLab/policy/codex_agent
+cd RoboDojo/XPolicyLab/codex_agent
 /Applications/ChatGPT.app/Contents/Resources/codex --version   # see the version note below
 python3 -m bridge.bridge --quiet
 ```

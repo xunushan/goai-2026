@@ -9,12 +9,12 @@ from pathlib import Path
 import numpy as np
 
 PACKAGE = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(PACKAGE.parent))
+sys.path.insert(0, str(PACKAGE.parents[2]))
 
-from codex_agent.bridge.schema import PolicyValidationError, validate_response
-from codex_agent.bridge_client import BridgeResult
-from codex_agent.model import Model
-from codex_agent.protocol import ParseError, parse_decision
+from XPolicyLab.codex_agent.bridge.schema import PolicyValidationError, validate_response
+from XPolicyLab.policy.agent_policy.bridge_client import BridgeResult
+from XPolicyLab.policy.agent_policy.model import Model
+from XPolicyLab.policy.agent_policy.protocol import ParseError, parse_decision
 
 CAMERAS = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 

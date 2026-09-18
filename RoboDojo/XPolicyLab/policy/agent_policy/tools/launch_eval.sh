@@ -64,10 +64,10 @@ fi
 echo
 
 cd /data/RoboDojo || exit 1
-echo "[launcher] cmd: robodojo.sh eval --policy-dir XPolicyLab/policy/codex_agent --task $TASK --ckpt none --policy-env XVLA --eval-num 1"
+echo "[launcher] cmd: robodojo.sh eval --policy-dir XPolicyLab/policy/agent_policy --task $TASK --ckpt none --policy-env XVLA --eval-num 1"
 echo "[launcher] ===== eval output below ====="
 bash scripts/robodojo.sh eval \
-  --policy-dir XPolicyLab/policy/codex_agent \
+  --policy-dir XPolicyLab/policy/agent_policy \
   --task "$TASK" \
   --ckpt none \
   --policy-env XVLA \

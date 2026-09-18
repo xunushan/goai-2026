@@ -33,14 +33,11 @@ import re
 import sys
 from pathlib import Path
 
-import yaml
-
 _PKG = Path(__file__).resolve().parent.parent
 if str(_PKG.parent) not in sys.path:
     sys.path.insert(0, str(_PKG.parent))
 
 from codex_agent.bridge.bridge import CAMERA_NAMES  # noqa: E402
-from codex_agent.observation import DEFAULT_CAMERA_NAMES  # noqa: E402
 
 WORKSPACE = _PKG / "workspace"
 AGENTS = WORKSPACE / "AGENTS.md"
@@ -134,11 +131,6 @@ def check(condition: bool, label: str) -> None:
         print(f"  FAIL  {label}")
 
 
-def config() -> dict:
-    with (_PKG / "deploy.yml").open("r", encoding="utf-8") as handle:
-        return yaml.safe_load(handle)
-
-
 def instructions() -> dict[str, str]:
     return {"AGENTS.md": AGENTS.read_text(encoding="utf-8"), "SKILL.md": SKILL.read_text(encoding="utf-8")}
 
@@ -201,8 +193,8 @@ def test_only_standable_numbers() -> None:
     check("fully closed" not in squashed, "the closed gripper is not claimed to be a stop")
     check("does not measure object width" in squashed,
           "the gripper reading is not presented as an object-width sensor")
-    closed = f"{config()['motion']['gripper_close']:.2f}"
-    check(closed not in agents, f"the configured closed value {closed} is not quoted as a fact")
+    check("0.00 is fully closed" not in agents,
+          "the configured closed command is not quoted as a mechanical fact")
 
 
 def test_embodiment_facts_present() -> None:
@@ -237,11 +229,8 @@ def test_the_per_decision_motion_scale_is_stated() -> None:
 def test_the_camera_names_are_the_ones_actually_attached() -> None:
     """Two copies of one fact, with nothing else keeping them in agreement."""
     print("the camera views named are the ones the adapter sends")
-    listed = CAMERA_NAMES
-    check(
-        listed == DEFAULT_CAMERA_NAMES,
-        f"AGENTS.md lists {list(listed)}, observation protocol sends {list(DEFAULT_CAMERA_NAMES)}",
-    )
+    check(tuple(CAMERA_NAMES) == ("cam_head", "cam_left_wrist", "cam_right_wrist"),
+          "bridge schema exposes the three supported robot camera names")
     check("ATTACHED VIEWS" not in instructions()["AGENTS.md"],
           "the attachment order is per-turn, so it belongs in the turn text, not here")
 

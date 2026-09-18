@@ -69,7 +69,7 @@ class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         config = dict(model_cfg)
         if config.get("action_type", "ee") != "ee":
-            raise ValueError("codex_agent supports only action_type='ee'")
+            raise ValueError("agent_policy supports only action_type='ee'")
 
         bridge = _section(config, "bridge")
         motion = _section(config, "motion")
@@ -127,7 +127,7 @@ class Model(ModelTemplate):
         except Exception as exc:
             if self.last_arms is None:
                 raise
-            print(f"[codex_agent] decision failed; holding position: {exc}", flush=True)
+            print(f"[agent_policy] decision failed; holding position: {exc}", flush=True)
             if self.episode is not None:
                 # hold_chunk contains one executable action frame. It commands
                 # the measured pose/gripper unchanged, but the simulator still

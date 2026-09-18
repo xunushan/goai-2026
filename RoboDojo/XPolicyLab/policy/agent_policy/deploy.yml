@@ -1,4 +1,4 @@
-policy_name: codex_agent
+policy_name: agent_policy
 protocol: ws
 host: localhost
 bench_name: null

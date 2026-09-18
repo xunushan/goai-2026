@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Start only the codex_agent policy server on a GPU machine.
+# Start only the agent_policy policy server on a GPU machine.
 #
 # Usage:
 #   bash serve_remote.sh [task] [gpu] [port] [host] [conda_env]

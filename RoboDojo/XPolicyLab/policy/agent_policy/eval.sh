@@ -1,5 +1,5 @@
 #!/bin/bash
-# codex_agent eval driver: policy server + simulator client on one machine.
+# agent_policy eval driver: policy server + simulator client on one machine.
 #
 # NOTE: `robodojo.sh eval` does not run this script -- it calls
 # scripts/internal/run_policy_eval.sh with the same 10 positional arguments.
@@ -8,7 +8,7 @@
 # Keep the argument count at 10, and do NOT spell out the dataset-size keyword
 # that some policies take first (grep it out of this file and you will see why
 # it is missing): robodojo.sh greps this script for it to decide whether to
-# prepend an extra argument, and codex_agent takes no dataset argument, so the
+# prepend an extra argument, and agent_policy takes no dataset argument, so the
 # 7-trailing-argument form of run_policy_eval.sh is the one that must be chosen.
 set -euo pipefail
 bench_name=$1
@@ -36,7 +36,7 @@ policy_server_ip="localhost"
 # eval client records it in its result metadata, so pass it through unchanged.
 additional_info="ckpt_name=${ckpt_name},action_type=${action_type}"
 
-echo "[MAIN] ckpt_name=${ckpt_name} is ignored by codex_agent (no checkpoint)"
+echo "[MAIN] ckpt_name=${ckpt_name} is ignored by agent_policy (no checkpoint)"
 
 cleanup() {
     if [[ -n "${SERVER_PID:-}" ]]; then

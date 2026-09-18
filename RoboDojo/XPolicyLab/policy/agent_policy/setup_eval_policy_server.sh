@@ -1,5 +1,5 @@
 #!/bin/bash
-# codex_agent policy server.
+# agent_policy policy server.
 #
 # Same argument contract as every other XPolicyLab policy (robodojo.sh's
 # run_policy_eval.sh calls this directly), but almost nothing is used: there is

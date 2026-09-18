@@ -1,7 +1,7 @@
 # Machine-specific and runtime-only. Both are deliberately untracked.
 #
 # .codex/config.toml hard-codes the workspace's absolute path on whichever
-# machine runs the policy service, so it cannot be shared; the bridge does not
+# machine runs the harness, so it cannot be shared; the bridge does not
 # read it anyway (it passes the same permissions as -c flags, which is the copy
 # that actually applies -- see bridge/app_server.py).
 workspace/.codex/
