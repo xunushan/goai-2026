@@ -10,12 +10,8 @@ from pathlib import Path
 from typing import Any
 
 
-GRIPPER_STAGES = frozenset({"grasp", "place"})
-CAMERA_KEYS = (
-    "observation.images.cam_high",
-    "observation.images.cam_left_wrist",
-    "observation.images.cam_right_wrist",
-)
+CAMERA_NAMES = ("cam_high", "cam_left_wrist", "cam_right_wrist")
+CAMERA_KEYS = tuple(f"observation.images.{name}" for name in CAMERA_NAMES)
 
 
 class ExperienceError(ValueError):
@@ -32,25 +28,26 @@ class ExperienceLibrary:
             index = json.loads(index_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as error:
             raise ExperienceError(f"cannot load experience index {index_path}: {error}") from error
-        if not isinstance(index, dict) or not all(
-            isinstance(name, str) and name and isinstance(path, str) and path
-            for name, path in index.items()
-        ):
-            raise ExperienceError("experience index must map non-empty task names to demo paths")
-        self.index: dict[str, str] = index
+        if not isinstance(index, dict):
+            raise ExperienceError("experience index must be an object")
+        self.index = {
+            task_name: _validate_task_config(task_name, config)
+            for task_name, config in index.items()
+        }
         self._cache: dict[str, tuple[dict[str, Any], ...]] = {}
 
     def items(self, task_name: str) -> list[dict[str, Any]]:
         """Return App Server input items, or no items for an unmapped task."""
-        relative = self.index.get(task_name)
-        if relative is None:
+        config = self.index.get(task_name)
+        if config is None:
             return []
         cached = self._cache.get(task_name)
         if cached is None:
+            relative = config["demo"]
             demo_path = (self.root / relative).resolve()
             if self.root not in demo_path.parents:
                 raise ExperienceError(f"experience path escapes the library: {relative}")
-            cached = tuple(_compile_demo(demo_path, task_name))
+            cached = tuple(_compile_demo(demo_path, task_name, config["views"]))
             self._cache[task_name] = cached
         return [dict(item) for item in cached]
 
@@ -96,7 +93,11 @@ def render_demo_text(demo: dict[str, Any], task_name: str) -> list[str]:
     return blocks
 
 
-def _compile_demo(demo_path: Path, task_name: str) -> list[dict[str, Any]]:
+def _compile_demo(
+    demo_path: Path,
+    task_name: str,
+    views: dict[str, tuple[str, ...]],
+) -> list[dict[str, Any]]:
     try:
         demo = json.loads(demo_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -107,7 +108,8 @@ def _compile_demo(demo_path: Path, task_name: str) -> list[dict[str, Any]]:
     for index, (frame, text_block) in enumerate(zip(frames, text_blocks[1:-1]), 1):
         items.append({"type": "text", "text": text_block})
         images = frame["images"]
-        selected_keys = CAMERA_KEYS if frame["stage"] in GRIPPER_STAGES else CAMERA_KEYS[:1]
+        selected_names = views.get(frame["stage"], views["default"])
+        selected_keys = tuple(f"observation.images.{name}" for name in selected_names)
         selected = [(camera, images[camera]) for camera in selected_keys]
         for camera, relative in selected:
             image_path = (demo_path.parent / relative).resolve()
@@ -125,6 +127,34 @@ def _compile_demo(demo_path: Path, task_name: str) -> list[dict[str, Any]]:
             items.append({"type": "image", "url": f"data:{mime};base64,{encoded}"})
     items.append({"type": "text", "text": text_blocks[-1]})
     return items
+
+
+def _validate_task_config(task_name: Any, config: Any) -> dict[str, Any]:
+    if not isinstance(task_name, str) or not task_name:
+        raise ExperienceError("experience task names must be non-empty text")
+    if not isinstance(config, dict) or set(config) != {"demo", "views"}:
+        raise ExperienceError(f"experience config for {task_name!r} must contain demo and views")
+    demo = config["demo"]
+    if not isinstance(demo, str) or not demo:
+        raise ExperienceError(f"experience demo for {task_name!r} must be a non-empty path")
+    raw_views = config["views"]
+    if not isinstance(raw_views, dict) or "default" not in raw_views:
+        raise ExperienceError(f"experience views for {task_name!r} require a default entry")
+    views: dict[str, tuple[str, ...]] = {}
+    for stage, cameras in raw_views.items():
+        if not isinstance(stage, str) or not stage:
+            raise ExperienceError(f"experience view stages for {task_name!r} must be non-empty text")
+        if (
+            not isinstance(cameras, list)
+            or not cameras
+            or len(cameras) != len(set(cameras))
+            or any(camera not in CAMERA_NAMES for camera in cameras)
+        ):
+            raise ExperienceError(
+                f"experience views for {task_name!r}/{stage} must be unique known cameras"
+            )
+        views[stage] = tuple(cameras)
+    return {"demo": demo, "views": views}
 
 
 def _validated_frames(demo: Any, task_name: str) -> list[dict[str, Any]]:

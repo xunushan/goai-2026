@@ -26,6 +26,8 @@ def test_exact_task_selection_and_compact_camera_policy() -> None:
     library = ExperienceLibrary(LIBRARY)
     assert library.items("unknown_task") == []
     items = library.items("stack_bowls")
+    assert "stack_bowls" in library._cache
+    assert library.items("stack_bowls") == items
     text = "\n".join(item["text"] for item in items if item["type"] == "text")
     images = [item for item in items if item["type"] == "image"]
     assert "HISTORICAL SUCCESSFUL DEMONSTRATION" in text
@@ -47,6 +49,11 @@ def test_exact_task_selection_and_compact_camera_policy() -> None:
         "Historical image 4: cam_right_wrist",
         "Historical image 5: cam_high",
     ]
+    assert library.index["stack_bowls"]["views"] == {
+        "default": ("cam_high",),
+        "grasp": ("cam_high", "cam_left_wrist", "cam_right_wrist"),
+        "place": ("cam_high", "cam_left_wrist", "cam_right_wrist"),
+    }
 
     demo = json.loads((LIBRARY / "stack_bowls" / "demo.json").read_text(encoding="utf-8"))
     assert len(demo["keyframes"]) == 5

@@ -223,15 +223,19 @@ that has to round-trip a thread id is a caller that can send back the wrong one.
 
 `experience_library/` is host-owned and deliberately outside `workspace/`, so the
 agent cannot browse or repeatedly load demonstrations. `index.json` maps an exact
-task name to one successful `demo.json`; an unmapped task simply receives no demo.
+task name to one successful `demo.json` and declares the camera views for each
+stage; an unmapped task simply receives no demo.
 The bridge injects the selected demonstration before the current observation only
 when a Codex thread opens. Thread rotation injects it again before replaying the
 episode history, so rotation removes neither the prior history nor the demonstration.
 
-Each task directory keeps the full JSON and every source image. Context construction
-uses only `cam_high` for ordinary motion stages and all three cameras for `grasp` and
-`place`, where gripper timing needs wrist views. Images are passed to App Server as
-data URLs; filesystem paths never enter the model context. Use
+Each task directory keeps the full JSON and every source image. The shipped
+`stack_bowls` configuration uses only `cam_high` by default and overrides `grasp`
+and `place` to use all three cameras. This relation lives in `index.json`, not in
+Python. Images are passed to App Server as data URLs; filesystem paths never enter
+the model context. Rendered App Server items are cached after their first load;
+thread rotation reuses that in-memory result instead of reading and rendering the
+demo again. Use
 `tools/render_experience.py experience_library/<task>/demo.json` to inspect the exact
 generated text without calling Codex.
 
