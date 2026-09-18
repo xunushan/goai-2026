@@ -131,12 +131,11 @@ ANNOTATIONS_SIM = {
 ANNOTATIONS_REAL = {
     # --- fill_pen_holder, episode 0 (右臂持筒, 左臂插笔 —— 与 sim 的左右相反) ---
     # 后 2 支笔的循环与第一组同型, 按事件类型去重时已丢弃
-    ("fill_pen_holder", 0, 215): ("right jaws open, closing in on the teal pen holder lying on the table; the pens are scattered to its right; left arm parked at home", "aligned"),
+    ("fill_pen_holder", 0, 165): ("right jaws still open, just arrived at the teal pen holder from the right, not yet closing; the pens lie scattered to the holder's left; left arm parked at home", "aligned"),
     ("fill_pen_holder", 0, 254): ("right jaws have just closed on the pen holder and are lifting it off the table", "grasped"),
-    ("fill_pen_holder", 0, 260): ("right arm holds the pen holder clear of the table, kept upright", "held"),
-    ("fill_pen_holder", 0, 288): ("right arm carries the holder upright toward its working position at the centre of the table", "transported"),
+    ("fill_pen_holder", 0, 300): ("right arm has lifted the holder clear of the table and holds it tilted in mid air; the pens still lie on the table to the left; left arm parked at home", "held"),
+    ("fill_pen_holder", 0, 330): ("right arm has carried the holder to its working position over the right half of the table and holds it clear of the surface, waiting for the first pen; left arm still parked", "transported"),
     ("fill_pen_holder", 0, 481): ("right arm still holding the holder; left jaws have just closed on the first pen lying on the table", "grasped"),
-    ("fill_pen_holder", 0, 483): ("left arm holds the pen clear of the table", "held"),
     ("fill_pen_holder", 0, 525): ("left arm carries the pen toward the holder held by the right arm", "transported"),
     ("fill_pen_holder", 0, 546): ("left arm lowers the pen into the holder", "inserted"),
     ("fill_pen_holder", 0, 1069): ("all pens seated; right arm lowering the loaded holder back onto the table", "placed"),
@@ -146,35 +145,30 @@ ANNOTATIONS_REAL = {
     # 该任务 frame_weight.csv 只标了这一集; 后 5 轮与第一轮同型, 去重时已丢弃
     ("put_objects_into_basket", 105, 177): ("left jaws open, closing in on the white mug at the left of the table; the wicker basket sits at the centre, the remaining objects are still spread around it; right arm parked", "aligned"),
     ("put_objects_into_basket", 105, 209): ("left jaws have just closed on the mug and are lifting it off the table", "grasped"),
-    ("put_objects_into_basket", 105, 211): ("left arm holds the mug clear of the table", "held"),
-    ("put_objects_into_basket", 105, 261): ("left arm carries the mug over the rim of the basket", "transported"),
+    ("put_objects_into_basket", 105, 238): ("left arm carries the mug up and clear of the table, still well short of the basket rim", "transported"),
     ("put_objects_into_basket", 105, 272): ("left jaws are opening to drop the mug into the basket", "placed"),
     ("put_objects_into_basket", 105, 1548): ("both arms back at their home poses; the table is clear and every object has ended up inside the basket", "task_complete"),
 
     # --- stack_and_cover_blocks, episode 294 (左臂单臂叠块, 最后盖杯) ---
-    ("stack_and_cover_blocks", 294, 146): ("left jaws open, closing in on the blocks scattered over the table; the cup rests at the left; right arm parked", "aligned"),
+    ("stack_and_cover_blocks", 294, 146): ("left jaws open, closing in on the blocks scattered over the table; the cover rests at the left; right arm parked", "aligned"),
     ("stack_and_cover_blocks", 294, 201): ("left jaws have just closed on the first block and are lifting it off the table", "grasped"),
-    ("stack_and_cover_blocks", 294, 217): ("left arm carries the block toward the centre of the table", "transported"),
-    ("stack_and_cover_blocks", 294, 236): ("left arm holds the block clear of the table at the centre", "held"),
-    ("stack_and_cover_blocks", 294, 255): ("left jaws are opening to set the block down — the first block of the stack", "placed"),
+    ("stack_and_cover_blocks", 294, 255): ("left jaws are opening to set the block down at the centre of the table — the bottom block of the stack", "placed"),
+    ("stack_and_cover_blocks", 294, 740): ("both arms are away from the centre: at the middle of the table stands the finished block stack (head-camera view from above, so it reads as one short colour-banded column), the cover still lies untouched at the upper left", "stacked"),
+    ("stack_and_cover_blocks", 294, 806): ("left jaws have closed on the cover lying at the upper left of the table and lifted it clear of the surface", "grasped"),
     ("stack_and_cover_blocks", 294, 918): ("the blocks are stacked; left arm is lowering the cup over the stack", "placed"),
     ("stack_and_cover_blocks", 294, 1000): ("both arms back at their home poses; the cup sits over the block stack at the centre of the table", "task_complete"),
 
     # --- stack_bowls, episode 302 (左臂单臂叠碗) ---
-    # approach 帧是从 grasp 段内合成的 (见 segments_real): CSV 的片段从夹持前一刻才开始
-    ("stack_bowls", 302, 69): ("left jaws open, swinging in on the first bowl; all three bowls are still upright on the table; right arm parked", "aligned"),
+    ("stack_bowls", 302, 98): ("left jaws open and already at the rim of the first (pink) bowl, not yet closed; the other two bowls stand upright to its right; right arm parked", "aligned"),
     ("stack_bowls", 302, 132): ("left jaws have just closed on the bowl rim and are lifting it off the table", "grasped"),
     ("stack_bowls", 302, 156): ("left arm carries the bowl, held clear of the table", "transported"),
-    ("stack_bowls", 302, 182): ("left arm holds the bowl upright in mid air", "held"),
     ("stack_bowls", 302, 204): ("left jaws are opening to set the bowl down", "placed"),
     ("stack_bowls", 302, 629): ("both arms back at their home poses; the bowls rest as one nested stack at the centre of the table", "task_complete"),
 
     # --- stand_up_bottles, episode 400 (左臂单臂把躺倒的瓶子逐支扶正) ---
-    # approach 帧是从 grasp 段内合成的 (见 segments_real): 段前的 move 59-86 是双臂回位
-    ("stand_up_bottles", 400, 158): ("left jaws open, reaching for the leftmost bottle lying on the table; the other two still lie flat; right arm parked", "aligned"),
+    ("stand_up_bottles", 400, 185): ("left jaws open, just arrived at the body of the leftmost bottle lying flat on the table, not yet closing; the other two bottles still lie flat; right arm parked", "aligned"),
     ("stand_up_bottles", 400, 228): ("left jaws have just closed on the bottle and are lifting it off the table", "grasped"),
-    ("stand_up_bottles", 400, 233): ("left arm holds the bottle clear of the table", "held"),
-    ("stand_up_bottles", 400, 249): ("left arm carries the bottle upright", "transported"),
+    ("stand_up_bottles", 400, 249): ("left arm swings the bottle up from lying flat towards upright, clear of the table", "lifted"),
     ("stand_up_bottles", 400, 348): ("left jaws are opening to release the bottle, which is left standing upright on the table", "placed"),
     ("stand_up_bottles", 400, 1115): ("both arms back at their home poses; all three bottles stand upright on the table", "task_complete"),
 
@@ -183,13 +177,112 @@ ANNOTATIONS_REAL = {
     # 0.468, 确实夹住了台面左侧的白色充电器(腕部相机可见)
     ("insert_charger", 503, 131): ("left jaws open, closing in on the white charger lying at the left of the table; the power strip with its coiled cable lies at the centre; right arm parked", "aligned"),
     ("insert_charger", 503, 163): ("left jaws have just closed on the charger and are lifting it off the table", "grasped"),
-    ("insert_charger", 503, 167): ("left arm holds the charger clear of the table", "held"),
     ("insert_charger", 503, 183): ("left arm carries the charger toward the centre of the table", "transported"),
     ("insert_charger", 503, 316): ("the two grippers meet above the power strip: the right jaws are closing on the charger while the left jaws open to release it", "received"),
-    ("insert_charger", 503, 521): ("right arm brings the charger down onto the power strip and its jaws are opening", "placed"),
+    ("insert_charger", 503, 485): ("right jaws hold the white charger pressed against the socket of the power strip, pushing it home; the strip's own cable trails off to the right, the black charging cable still lies on the table", "inserted"),
+    ("insert_charger", 503, 1050): ("right jaws have just closed on the black charging cable lying on the table beside the power strip, charger already seated in the strip", "grasped"),
     ("insert_charger", 503, 1230): ("right arm pushes the plug fully home into the socket of the power strip", "inserted"),
     ("insert_charger", 503, 1336): ("both arms back at their home poses; the charger is plugged into the power strip with its cable connected", "task_complete"),
 }
+
+# ---------------------------------------------------------------- 人工校正
+
+# 用户在 2026-09-18 逐帧复核 demo.json 后给的修正。CSV (frame_weight.csv) 只用来粗定
+# 事件区间, 代表帧一律以画面为准 —— 所以下面每个 pin/add 的 frame 都是看过该帧图像后指定的,
+# 允许落在 CSV 对应段之外 (event_span 仍记录 CSV 段, 见 index.json 的 notes)。
+#
+# op:
+#   pin     —— 把 (stage, event) 这条的代表帧挪到 frame; new_stage 可顺带改阶段名
+#   drop    —— 删掉这条 (该事件在这段动作里不成立 / 与邻近条目重复)
+#   relabel —— 只改阶段名
+#   add     —— 新增一条 (span 写 CSV 里对应的段; 没有对应段时省略)
+TWEAKS = {
+    # 000 approach: 原 f215 爪已贴在笔筒上 -> 提前到还在接近、爪未合拢 (f165)
+    # 002 hold    : 原 f260 筒还没离台, 与 grasp 同型 -> 挪到筒已被举起、悬在空中 (f300)
+    # 003 transport: 原 f288 还在半路 -> 挪到筒已被搬到插笔工作位 (f330)
+    # 005 hold_pen: 左臂抓笔的那一刻本身就是抓, 没有第二只手在等 -> 删
+    "fill_pen_holder": [
+        {"op": "pin", "stage": "approach", "event": "move", "frame": 165},
+        {"op": "pin", "stage": "hold", "event": "hold_holder", "frame": 300},
+        {"op": "pin", "stage": "transport", "event": "move_holder", "frame": 330},
+        {"op": "drop", "stage": "hold", "event": "hold_pen"},
+    ],
+    # 002 hold     : 单臂抓放, hold 与 grasp 无区别 -> 删
+    # 003 transport: 原 f261 已到篮口 -> 提前到还在半空搬运 (f238)
+    "put_objects_into_basket": [
+        {"op": "drop", "stage": "hold", "event": "hold_object"},
+        {"op": "pin", "stage": "transport", "event": "move_object", "frame": 238},
+    ],
+    # 002 transport / 003 hold: 单臂叠块, 都不是"一只手保持等另一只手" -> 删
+    # 004 (f255 放底块) 保留
+    # 新增 stack: 第二、三块叠上去之后 (两臂都离开) 的块堆 —— 中间那些抓取/靠近与首块同型, 省略
+    # 新增 grasp_cup: 005 之前补一帧抓杯盖 (CSV 里最后一轮 grasp_block 就是抓杯盖)
+    "stack_and_cover_blocks": [
+        {"op": "drop", "stage": "transport", "event": "move_block"},
+        {"op": "drop", "stage": "hold", "event": "hold_block"},
+        {"op": "add", "stage": "stack", "event": "place_block", "frame": 740, "span": [603, 656]},
+        {"op": "add", "stage": "grasp", "event": "grasp_cup", "frame": 806, "span": [789, 814]},
+    ],
+    # 003 hold    : 单臂无 hold -> 删
+    # 000 approach: 原 f69 (段内合成) 还在半路 -> 挪到爪已贴上碗沿、尚未合拢 (f98)
+    "stack_bowls": [
+        {"op": "drop", "stage": "hold", "event": "hold_bowl"},
+        {"op": "pin", "stage": "approach", "event": "move", "frame": 98},
+    ],
+    # 002 hold    : 单臂无 hold -> 删
+    # 000 approach: 原 f158 (段内合成) 还在半路 -> 挪到爪已贴到瓶身、尚未合拢 (f185)
+    # 003         : 这是把躺倒的瓶子托起来立正, 不是横向搬运 -> 阶段名改 lift
+    "stand_up_bottles": [
+        {"op": "drop", "stage": "hold", "event": "hold_bottle"},
+        {"op": "pin", "stage": "approach", "event": "move", "frame": 185},
+        {"op": "relabel", "stage": "transport", "event": "move_bottle", "new_stage": "lift"},
+    ],
+    # 002 hold: 单臂把充电器提起来后原地停 7 帧, 没有第二只手在等 -> 按同一条判据删
+    #           (用户这次只点了 005/006, 这一条是按判据推的, 见交付说明)
+    # 005     : 原 f521 充电器已落位 -> 挪到还在往插座里推的那一刻 (f485), 阶段名从 place 改 insert
+    # 新增 grasp_cable: 006 (把充电线插进充电器) 之前先要有拿充电线那一帧
+    "insert_charger": [
+        {"op": "drop", "stage": "hold", "event": "hold_plug"},
+        {"op": "pin", "stage": "place", "event": "place_plug", "frame": 485, "new_stage": "insert"},
+        {"op": "add", "stage": "grasp", "event": "grasp_cable", "frame": 1050, "span": [1004, 1058]},
+    ],
+}
+
+
+def apply_tweaks(segs, ops):
+    """按 (stage, event) 唯一键套用人工校正表, 返回重排后的段落列表。"""
+    if not ops:
+        return segs
+    by_key = {(s["stage"], s["event"]): s for s in segs}
+    for op in ops:
+        key = (op["stage"], op["event"])
+        kind = op["op"]
+        if kind == "add":
+            s = {"event": op["event"], "stage": op["stage"], "row": None,
+                 "start": op["span"][0] if op.get("span") else op["frame"],
+                 "end": op["span"][1] if op.get("span") else op["frame"],
+                 "rep": op["frame"], "rows": [], "pinned": True}
+            if op.get("synthetic"):
+                s["synthetic"] = True
+            segs = segs + [s]
+            by_key[(s["stage"], s["event"])] = s
+            continue
+        s = by_key.get(key)
+        if s is None:
+            raise KeyError(f"校正表引用了不存在的条目 {key}")
+        if kind == "drop":
+            segs = [x for x in segs if x is not s]
+            del by_key[key]
+        elif kind in ("pin", "relabel"):
+            if kind == "pin":
+                s["rep"] = op["frame"]
+                s["pinned"] = True
+            if op.get("new_stage"):
+                s["stage"] = op["new_stage"]
+                by_key[(s["stage"], s["event"])] = s
+                del by_key[key]
+    return sorted(segs, key=lambda s: s["rep"])
+
 
 # ---------------------------------------------------------------- 分段
 
@@ -412,6 +505,7 @@ PROFILES = {
         "out": ROOT / "outputs" / "in_context_learning_real",
         "segments": segments_real,
         "annotations": ANNOTATIONS_REAL,
+        "tweaks": TWEAKS,
         # slug 与 outputs/episode_insight/interactive_real/videos 的文件名前缀一致;
         # 任务描述原样取自 meta/tasks.parquet
         "tasks": {
@@ -439,6 +533,9 @@ PROFILES = {
             " 即使确实夹住了也只记 partial。判读 real 的 grasp/hold 帧请以 observation 文本为准。",
             "approach: CSV 里没有对应 move 段 (或该 move 段不是抓取手在做) 时,"
             " approach 帧从首个 grasp 段内按手臂速度峰值合成, 该帧带 synthetic: true。",
+            "event_span 是 frame_weight.csv 里该事件的段区间, 只作定位参考;"
+            " 代表帧 frame_index 以画面为准, 经人工校正 (tools/in_context_demo.py 的 TWEAKS)"
+            " 后可能落在 event_span 之外 —— 例如把 approach 提前到段外的接近过程。",
         ],
     },
 }
@@ -521,6 +618,7 @@ def build(prof, task: str, episode: int):
     row_by_frame = {int(r["frame_index"]): r for r in rows}
     arr = load_episode_arrays(prof, episode)
     segs = prof["segments"](rows, arr)
+    segs = apply_tweaks(segs, prof.get("tweaks", {}).get(task))
     vidx = video_index(prof, episode)
     out_dir = prof["out"] / task
     # 去重后序号会变, 旧图残留会与 demo.json 对不上 —— 先清空该任务图像目录
