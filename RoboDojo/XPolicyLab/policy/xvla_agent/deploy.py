@@ -17,15 +17,10 @@ def eval_one_episode(TASK_ENV, model_client):
             model_client.call(func_name="update_obs", obs=obs)
 
 def eval_one_episode_batch(TASK_ENV, model_client):
-    """批评估：每个 env 按自己的执行视野 h 独立重规划。
+    """批评估：每个 env 独立消费自己的动作缓冲并在耗尽后重规划。
 
-    PACE 逐 env 选执行视野 h（见 pace.py / model.py 的 _finalize_chunk），各 env 的
-    chunk 长度因此不同，不能再按「批内统一 chunk 长度」推进：take_action_batch 虽然
-    要求各 env 同步走一步，但每个 env 走到自己的 h 就该重规划。这里给每个 env 维护一个
-    动作缓冲，缓冲耗尽的 env 才重新推理，其余 env 继续消费自己的剩余动作。
-
-    PACE 关闭时各 env 的 chunk 恒为 actions_per_chunk，所有缓冲同时耗尽，行为与
-    「按批统一长度推进」的旧实现逐调用一致。
+    take_action_batch 要求仍在运行的 env 同步执行一步，因此这里按 env 保存 Bridge
+    返回的 chunk；某个缓冲先耗尽时只为该 env 请求新动作，不截断其他 env 的剩余动作。
 
     注意 get_obs_batch 承担 render / capture / 视频写盘，必须每步对全部 running env
     调用（跳过中间步的刷新会破坏精度，见 X_VLA mid_step_obs 三档的教训）。

@@ -28,6 +28,7 @@ def test_review_packet_and_response() -> None:
     reviewer.bridge.decide = decide
     image = np.zeros((8, 8, 3), dtype=np.uint8)
     observation = {
+        "episode_idx": 12,
         "state": {"left_ee_pose": [0, 0, 0, 1, 0, 0, 0], "left_ee_joint_state": [1],
                   "right_ee_pose": [0, 0, 0, 1, 0, 0, 0], "right_ee_joint_state": [1]},
         "vision": {name: image for name in ("cam_head", "cam_left_wrist", "cam_right_wrist")},
@@ -37,6 +38,7 @@ def test_review_packet_and_response() -> None:
     assert captured["vla_review"]["chunk"]["horizon"] == 2
     assert captured["vla_review"]["gripper_change_threshold"] == 0.1
     assert captured["budget"]["max_sim_steps"] == 550
+    assert captured["episode_id"] == "12"
     reviewer.review(observation, [action(0, 1)])
     assert captured["continuation"]["verify_previous"] is True
 
@@ -58,6 +60,7 @@ def test_real_instruction_resolves_task() -> None:
     reviewer.review(observation, [action(0, 1)])
     assert captured["task"]["name"] == "stand_up_bottles"
     assert captured["budget"]["max_sim_steps"] == 1190
+    assert captured["episode_id"].startswith("ep001_")
 
 
 if __name__ == "__main__":

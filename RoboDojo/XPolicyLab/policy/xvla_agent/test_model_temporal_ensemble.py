@@ -40,6 +40,10 @@ _make_module(
     resolve_checkpoint_root=lambda model_cfg, **kw: None,
 )
 _make_module(
+    "XPolicyLab.utils.episode_index",
+    EpisodeIndexResolver=type("EpisodeIndexResolver", (), {}),
+)
+_make_module(
     "XPolicyLab.utils.process_data",
     decode_image_bit=lambda value: value,
     get_robot_action_dim_info=lambda env_cfg: None,
@@ -79,6 +83,7 @@ _make_module(
     HysteresisConfig=_HCfg,
     apply_gripper_hysteresis=lambda *a, **k: None,
 )
+_make_module("codex_review", CodexReviewer=object)
 
 # temporal_ensemble is a real numpy-only sibling module.
 sys.path.insert(0, str(_CUR_DIR))

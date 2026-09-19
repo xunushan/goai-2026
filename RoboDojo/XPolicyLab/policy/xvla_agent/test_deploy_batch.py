@@ -1,13 +1,13 @@
-"""eval_one_episode_batch（deploy.py）的逐 env 视野回归测试。
+"""eval_one_episode_batch（deploy.py）的逐 env 动作缓冲回归测试。
 
 无 Isaac / 无 torch，纯桩件。运行：python3 test_deploy_batch.py
 
-PACE 让每个 env 的执行视野 h 不同，批评估不能再按「批内统一 chunk 长度」推进，
-改为每 env 维护动作缓冲。这里验证：
+不同 env 可能收到不同长度的 chunk，批评估不能按「批内统一 chunk 长度」推进，
+因此每个 env 维护自己的动作缓冲。这里验证：
 
-1. PACE 关闭（各 env chunk 恒等长）时，新实现与旧的按批统一长度实现在**动作序列**
+1. 各 env chunk 等长时，新实现与旧的按批统一长度实现在**动作序列**
    与**推理调用序列**上完全一致 —— 保证不动已入库的基线口径；
-2. PACE 开启（各 env h 不同）时，每个 env 恰好在自己的 h 步后重规划；
+2. 各 env chunk 不等长时，每个 env 恰好在自己的缓冲耗尽后重规划；
 3. 各 env 在不同步结束时不串扰、不残留缓冲；
 4. 每步都取全量 obs（render/capture/视频写盘依赖它）。
 """
@@ -101,7 +101,7 @@ class FakeModelClient:
 
 
 def _old_eval_one_episode_batch(TASK_ENV, model_client):
-    """改动前的实现（按批内统一 chunk 长度推进），作为 PACE-off 等价性的参照。"""
+    """改动前的按批内统一 chunk 长度推进实现，作为等长 chunk 的参照。"""
     model_client.call(func_name="reset")
 
     while not TASK_ENV.is_episode_end():
@@ -130,8 +130,8 @@ def _old_eval_one_episode_batch(TASK_ENV, model_client):
 # 测试
 # ---------------------------------------------------------------------------
 
-def test_pace_off_matches_old_implementation():
-    """PACE 关闭：各 env chunk 恒为 actions_per_chunk，新旧实现动作序列一致。"""
+def test_equal_chunks_match_old_implementation():
+    """各 env chunk 等长时，新旧实现动作序列一致。"""
     lengths = [50, 70, 40]
     old_env, old_mc = FakeEnv(lengths), FakeModelClient(lambda e, q: 30)
     new_env, new_mc = FakeEnv(lengths), FakeModelClient(lambda e, q: 30)
@@ -147,8 +147,8 @@ def test_pace_off_matches_old_implementation():
     assert {e: sum(e in envs for envs in new_mc.inference_envs()) for e in range(3)} == {0: 2, 1: 3, 2: 2}
 
 
-def test_pace_on_replans_each_env_at_its_own_horizon():
-    """PACE 开启：h=9 的 env 每 9 步重规划，h=30 的每 30 步重规划。"""
+def test_variable_chunks_replan_at_each_horizon():
+    """长度为 9 和 30 的 chunk 分别耗尽后重规划。"""
     h = {0: 9, 1: 30}
     env = FakeEnv([60, 60])
     mc = FakeModelClient(lambda e, q: h[e])

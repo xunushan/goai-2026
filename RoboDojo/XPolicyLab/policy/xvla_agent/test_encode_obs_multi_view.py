@@ -55,6 +55,10 @@ else:
         resolve_checkpoint_root=lambda *a, **k: None,
     )
     _stub_module(
+        "XPolicyLab.utils.episode_index",
+        EpisodeIndexResolver=type("EpisodeIndexResolver", (), {}),
+    )
+    _stub_module(
         "XPolicyLab.utils.process_data",
         decode_image_bit=lambda buf: np.zeros((8, 8, 3), dtype=np.uint8),
         get_robot_action_dim_info=lambda *a, **k: None,
@@ -64,6 +68,7 @@ else:
     _stub_module("xvla.models")
     _stub_module("xvla.models.modeling_xvla", XVLA=object)
     _stub_module("xvla.models.processing_xvla", XVLAProcessor=object)
+    _stub_module("codex_review", CodexReviewer=object)
 
     sys.path.insert(0, _DIR)
     import model  # noqa: E402

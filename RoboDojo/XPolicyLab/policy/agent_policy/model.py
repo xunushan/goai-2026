@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import sys
 from dataclasses import dataclass, field
@@ -19,6 +20,7 @@ from XPolicyLab.model_template import ModelTemplate
 
 from .bridge_client import BridgeClient, build_image_payload
 from XPolicyLab.codex_agent.bridge.motion import ArmState, hold_chunk
+from XPolicyLab.utils.episode_index import EpisodeIndexResolver
 from XPolicyLab.utils.task_name_resolver import TaskNameResolver, load_real_task_name_map
 from .observation import DEFAULT_CAMERA_NAMES, EpisodeContext, build_request, load_task_card
 
@@ -30,6 +32,7 @@ TASK_CARD_KEYS = {
 @dataclass
 class EpisodeState:
     episode_id: str
+    requests_seen: int = 0
     calls_used: int = 0
     steps_used: int = 0
     feedback: list[str] = field(default_factory=list)
@@ -85,6 +88,25 @@ def _action_chunk(value: Any) -> list[dict[str, np.ndarray]]:
     return result
 
 
+def _finite_list(value: Any) -> list[float | None]:
+    array = np.asarray(value, dtype=np.float32).reshape(-1)
+    return [float(item) if np.isfinite(item) else None for item in array]
+
+
+def _actions_16d(actions: list[dict[str, np.ndarray]]) -> list[list[float]]:
+    return [
+        np.concatenate(
+            [
+                action["left_ee_pose"],
+                action["left_ee_joint_state"],
+                action["right_ee_pose"],
+                action["right_ee_joint_state"],
+            ]
+        ).astype(np.float32).tolist()
+        for action in actions
+    ]
+
+
 class Model(ModelTemplate):
     def __init__(self, model_cfg: dict[str, Any]):
         config = dict(model_cfg)
@@ -114,7 +136,8 @@ class Model(ModelTemplate):
 
         self.observation: dict[str, Any] | None = None
         self.episode: EpisodeState | None = None
-        self.episode_number = 0
+        self.episode_index = EpisodeIndexResolver()
+        self.log_io = bool(config.get("log_io", True))
         self.last_arms: tuple[ArmState, ArmState] | None = None
 
     def _bind_task(self, task_name: str) -> None:
@@ -152,14 +175,79 @@ class Model(ModelTemplate):
                 # the measured pose/gripper unchanged, but the simulator still
                 # advances by one step when it consumes that frame.
                 self.episode.steps_used += 1
-            return hold_chunk(*self.last_arms)
+            chunk = hold_chunk(*self.last_arms)
+            self._log_actions(chunk, source="error_hold", error=str(exc))
+            return chunk
 
     def reset(self):
-        self.episode_number += 1
         self.episode = None
         self.observation = None
         self.last_arms = None
         self.task_resolver.reset()
+        self.episode_index.reset()
+
+    def _log_observation(
+        self, state: EpisodeState, task_name: str, request_index: int
+    ) -> None:
+        if not self.log_io or self.observation is None:
+            return
+        observed_state = self.observation.get("state", {})
+        state_summary = {
+            key: _finite_list(observed_state[key])
+            for key in (
+                "left_ee_pose",
+                "left_ee_joint_state",
+                "right_ee_pose",
+                "right_ee_joint_state",
+            )
+            if key in observed_state
+        }
+        images = {}
+        for name in DEFAULT_CAMERA_NAMES:
+            try:
+                image = _image(self.observation, name)
+            except (KeyError, TypeError, ValueError):
+                continue
+            images[name] = {
+                "shape": list(image.shape),
+                "dtype": str(image.dtype),
+                "min": float(np.min(image)),
+                "max": float(np.max(image)),
+                "mean": float(np.mean(image)),
+            }
+        summary = {
+            "event": "client_observation",
+            "request": request_index,
+            "env_idx": int(self.observation.get("env_idx") or 0),
+            "episode_idx": state.episode_id,
+            "task_name": task_name,
+            "instruction": str(self.observation.get("instruction", ""))[:200],
+            "state": state_summary,
+            "images": images,
+        }
+        print("[agent_policy][io] " + json.dumps(summary, ensure_ascii=False), flush=True)
+
+    def _log_actions(
+        self,
+        chunk: list[dict[str, np.ndarray]],
+        *,
+        source: str,
+        error: str | None = None,
+    ) -> None:
+        if not self.log_io:
+            return
+        summary = {
+            "event": "server_actions",
+            "request": max(0, self.episode.requests_seen - 1) if self.episode else 0,
+            "env_idx": int((self.observation or {}).get("env_idx") or 0),
+            "episode_idx": self.episode.episode_id if self.episode else None,
+            "task_name": self.context.task_name if self.context else None,
+            "source": source,
+            "execute_steps": len(chunk),
+            "error": error,
+            "actions_16d": _actions_16d(chunk),
+        }
+        print("[agent_policy][io] " + json.dumps(summary, ensure_ascii=False), flush=True)
 
     def _decide(self) -> list[dict[str, np.ndarray]]:
         if self.observation is None:
@@ -169,15 +257,22 @@ class Model(ModelTemplate):
             self._bind_task(task_name)
         assert self.context is not None
         if self.episode is None:
-            self.episode = EpisodeState(f"ep{self.episode_number:04d}")
+            self.episode = EpisodeState(
+                self.episode_index.resolve(self.observation.get("episode_idx"))
+            )
         state = self.episode
+        request_index = state.requests_seen
+        state.requests_seen += 1
 
         left = _arm(self.observation, "left")
         right = _arm(self.observation, "right")
         self.last_arms = (left, right)
+        self._log_observation(state, task_name, request_index)
         if state.calls_used >= self.call_budget or state.steps_used >= self.step_budget:
             state.steps_used += 1
-            return hold_chunk(left, right)
+            chunk = hold_chunk(left, right)
+            self._log_actions(chunk, source="budget_hold")
+            return chunk
 
         images = [
             build_image_payload(name, _image(self.observation, name), quality=self.jpeg_quality)
@@ -205,7 +300,13 @@ class Model(ModelTemplate):
             # The one-frame hold is motionless, not free: executing it advances
             # the simulator and therefore consumes one simulator-step budget.
             state.steps_used += 1
-            return hold_chunk(left, right)
+            chunk = hold_chunk(left, right)
+            self._log_actions(
+                chunk,
+                source="bridge_hold",
+                error=f"{result.error_kind}: {result.error}",
+            )
+            return chunk
 
         chunk = _action_chunk(result.action_chunk)
         state.continuation = result.continuation
@@ -214,4 +315,6 @@ class Model(ModelTemplate):
             f"Executed the requested target for {len(chunk)} simulator steps. "
             "Use the fresh measured pose and images to judge the result."
         ]
+        mode = (result.decision or {}).get("mode")
+        self._log_actions(chunk, source=str(mode or "eef"))
         return chunk

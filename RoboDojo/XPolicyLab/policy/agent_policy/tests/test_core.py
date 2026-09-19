@@ -15,6 +15,7 @@ from XPolicyLab.codex_agent.bridge.schema import PolicyValidationError, validate
 from XPolicyLab.policy.agent_policy.bridge_client import BridgeResult
 from XPolicyLab.policy.agent_policy.model import Model
 from XPolicyLab.codex_agent.bridge.protocol import ParseError, parse_decision
+from XPolicyLab.utils.episode_index import EpisodeIndexResolver
 
 CAMERAS = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 
@@ -55,6 +56,13 @@ def model(result):
 
 
 def main() -> int:
+    episode_index = EpisodeIndexResolver()
+    assert episode_index.resolve(17) == "17"
+    episode_index.reset()
+    generated = episode_index.resolve(None)
+    assert generated.startswith("ep001_")
+    assert episode_index.resolve(None) == generated
+
     validate_response(decision())
     validate_response({**decision(), "note": "x" * 31})
     try:
@@ -111,6 +119,18 @@ def main() -> int:
     assert instance.context is not None
     assert instance.context.task_name == "stack_bowls"
     assert instance.step_budget == 1220
+
+    captured = {}
+    instance = Model({"task_name": "stack_blocks", "bridge_url": "http://unused"})
+    instance.bridge.decide = lambda packet, timeout_s: (
+        captured.update(packet)
+        or BridgeResult(ok=True, decision=decision(), action_chunk=[action()])
+    )
+    sim_observation = observation()
+    sim_observation["episode_idx"] = 23
+    instance.update_obs(sim_observation)
+    instance.get_action()
+    assert captured["episode_id"] == "23"
     print("core policy tests passed")
     return 0
 

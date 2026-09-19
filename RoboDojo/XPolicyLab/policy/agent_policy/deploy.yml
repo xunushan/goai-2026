@@ -21,6 +21,9 @@ bridge:
 images:
   jpeg_quality: 88
 
+# JSON lines on stdout for observation state and returned 16-D action chunks.
+log_io: true
+
 # Decisions can exceed the websocket keepalive interval; request timeouts above
 # provide the relevant failure boundary.
 ws_ping_interval_s: null

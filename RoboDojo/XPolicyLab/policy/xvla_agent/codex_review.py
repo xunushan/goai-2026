@@ -16,6 +16,7 @@ if str(_ROBODOJO_DIR) not in sys.path:
     sys.path.insert(0, str(_ROBODOJO_DIR))
 
 from XPolicyLab.utils.task_name_resolver import TaskNameResolver, load_real_task_name_map
+from XPolicyLab.utils.episode_index import EpisodeIndexResolver
 
 try:
     from .bridge_client import BridgeClient, build_image_payload
@@ -78,16 +79,16 @@ class CodexReviewer:
         self.gripper_change_threshold = float(config.get("gripper_change_threshold", 0.1))
         if not 0 <= self.gripper_change_threshold <= 1:
             raise ValueError("gripper_change_threshold must be within [0,1]")
-        self.episode_number = 0
+        self.episode_index = EpisodeIndexResolver()
         self.calls = 0
         self.steps = 0
         self.continuation: dict[str, Any] | None = None
 
     def reset(self) -> None:
-        self.episode_number += 1
         self.calls = self.steps = 0
         self.continuation = None
         self.task_resolver.reset()
+        self.episode_index.reset()
 
     def _resolve_task(self, observation: dict[str, Any]) -> None:
         task_name = self.task_resolver.resolve(observation)
@@ -100,7 +101,7 @@ class CodexReviewer:
         self._resolve_task(observation)
         assert self.task_name is not None and self.task is not None
         self.calls += 1
-        episode_id = f"ep{self.episode_number:04d}"
+        episode_id = self.episode_index.resolve(observation.get("episode_idx"))
         chunk = _arm_major(actions)
         state = observation["state"]
         request = {
