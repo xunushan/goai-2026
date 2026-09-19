@@ -29,7 +29,7 @@ from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
 
 from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
-from pace import PaceConfig, PaceSelector
+from save_images import EpisodeImageWriter, SaveImagesConfig
 from temporal_ensemble import ServerTemporalEnsembler
 
 # R0/R1 腕部残差模型（config.json 的 architectures / wrist_residual_mode 由此判别）。
@@ -559,23 +559,15 @@ class Model(ModelTemplate):
         # 抽取（与顺序路径逐位一致），批内各行互不影响（transformer 按行
         # attention），仅批 GEMM 浮点舍入差异。deploy.yml 设 batch_inference=true 开启。
         self.batch_inference = bool(self.model_cfg.get("batch_inference", False))
-        # PACE 相位感知执行视野（deploy.yml 的 pace 段，实现见 pace.py）：enabled=false
-        # 时完全旁路，_finalize_chunk 仍按 actions_per_chunk 截取，与现状逐帧一致。
-        # h_max 缺省跟随 actions_per_chunk，即「论文 H_max = 固定 horizon 基线」。
-        self._pace_cfg = PaceConfig.from_model_cfg(
-            self.model_cfg, self.actions_per_chunk
+        # 仿真图片落盘（deploy.yml 的 `save_images` 段，实现见 save_images.py）：
+        # enabled=false 时完全不碰磁盘（_prep_env 的调用首行即返回）。落盘目录名里的
+        # 服务启动时间戳在这里定格，同机多次评测各自成目录。
+        self._save_images_cfg = SaveImagesConfig.from_model_cfg(self.model_cfg)
+        self._image_writer = EpisodeImageWriter(
+            self._save_images_cfg,
+            task_name=self.task_name,
+            camera_names=self.camera_names,
         )
-        if self._pace_cfg.enabled and self.temporal_ensemble_active:
-            raise ValueError(
-                "pace.enabled and temporal_ensemble_coeff cannot both be active: "
-                "PACE chooses the number of actions returned per replanning step, "
-                "which conflicts with the temporal ensemble's fixed "
-                "actions_per_chunk window. Disable one of them."
-            )
-        # 逐任务 δ_T 的 key：task_name 由 setup_eval_policy_server.sh 经 --overrides
-        # 注入 model_cfg（形如 stack_bowls / fill_pen_holder）。
-        self._pace_task_name = self.model_cfg.get("task_name")
-        self._pace = PaceSelector(self._pace_cfg)
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
@@ -588,9 +580,7 @@ class Model(ModelTemplate):
             f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
-            f"pace={'on' if self._pace_cfg.enabled else 'off'} "
-            f"pace_h=[{self._pace_cfg.h_min},{self._pace_cfg.h_max}] "
-            f"pace_delta_t={self._pace_cfg.threshold_for(self._pace_task_name)} "
+            f"save_images={self._image_writer.describe()} "
             f"policy_seed={self.policy_seed} "
             f"batch_inference={self.batch_inference}",
             flush=True,
@@ -864,11 +854,6 @@ class Model(ModelTemplate):
             action_list = self._get_action_batch_batched(env_list)
         else:
             action_list = self._get_action_batch_sequential(env_list)
-        if self._pace_cfg.enabled and len(action_list) > 1:
-            # PACE 下各 env 的 h 可能不同，而客户端按 len(actions[0]) 切段
-            # （deploy.py 批路径），故取批内最小长度对齐（同论文多臂取最早边界）。
-            shortest = min(len(actions) for actions in action_list)
-            action_list = [actions[:shortest] for actions in action_list]
         return action_list
 
     def _get_action_batch_sequential(self, env_idx_list):
@@ -909,17 +894,21 @@ class Model(ModelTemplate):
         ]
 
     def _prep_env(self, resolved_env_idx):
-        """取某 env 缓存的编码 obs + 其策略生成器（含 KeyError 检查与 obs 日志）。"""
+        """取某 env 缓存的编码 obs + 其策略生成器（含 KeyError 检查、obs 日志与图片落盘）。"""
         if resolved_env_idx not in self._latest_by_env:
             raise KeyError(
                 f"No buffered observation for env_idx={resolved_env_idx}; "
                 f"available={sorted(self._latest_by_env)}"
             )
         encoded_obs = self._latest_by_env[resolved_env_idx]
-        self._log_observation(
-            self._raw_by_env[resolved_env_idx],
-            encoded_obs,
-            resolved_env_idx,
+        raw_obs = self._raw_by_env[resolved_env_idx]
+        self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
+        # 图片落盘与推理同源：存的就是紧接着喂进模型的那份图像
+        # （deploy.yml save_images.enabled=false 时零开销直接返回）。
+        self._image_writer.save_observation(
+            episode_idx=raw_obs.get("episode_idx"),
+            env_idx=resolved_env_idx,
+            images=encoded_obs["images"],
         )
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
@@ -939,7 +928,6 @@ class Model(ModelTemplate):
                 f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
             )
         temporal_ensemble_diagnostics = None
-        pace_decision = None
         if self.temporal_ensemble_active:
             assert self.temporal_ensemble_coeff is not None
             assert self.temporal_ensemble_horizon is not None
@@ -971,15 +959,7 @@ class Model(ModelTemplate):
                 "pre_ensemble_action": pre_ensemble_action.tolist(),
             }
         else:
-            if self._pace_cfg.enabled:
-                # PACE：从预测 chunk 的速度剖面选执行视野 h（pace.py）。无标定 δ_T
-                # 或找不到候选时回落 h_max == actions_per_chunk，退化为现状行为。
-                pace_decision = self._pace.select(
-                    raw_chunk, task_name=self._pace_task_name
-                )
-                executed_chunk = raw_chunk[: pace_decision.h]
-            else:
-                executed_chunk = raw_chunk[: self.actions_per_chunk]
+            executed_chunk = raw_chunk[: self.actions_per_chunk]
         actions = action_chunk_to_ee_dict_list(
             executed_chunk,
             gripper_mode=self.gripper_mode,
@@ -1016,7 +996,6 @@ class Model(ModelTemplate):
                     else None
                 ),
                 "temporal_ensemble": temporal_ensemble_diagnostics,
-                "pace": pace_decision.as_dict() if pace_decision else None,
                 "policy_seed": self.policy_seed,
                 "policy_noise_draw": (
                     self._policy_noise_draws[resolved_env_idx]
@@ -1118,5 +1097,5 @@ class Model(ModelTemplate):
         # episode 开始：清空 temporal ensemble 状态，每个 episode 从新的预测
         # 序列起点开始对齐
         self._temporal_ensemblers = {}
-        # episode 开始：重置 PACE 的「缺阈值任务只告警一次」记录（决策本身无跨请求状态）
-        self._pace.reset()
+        # episode 开始：图片落盘的帧号回到 000000（已写文件不动）
+        self._image_writer.reset()

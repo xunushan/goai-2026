@@ -116,3 +116,32 @@ gripper_threshold: 0.7
 日志不会打印图像像素。
 日志会包含任务文本和机器人 EE/夹爪状态；如不需要诊断，请设置
 `log_io: false`。
+
+### 仿真图片落盘（`save_images`）
+
+`log_io` 的日志只打印图像的 shape/dtype/min/max/mean，看不到画面本身。需要看
+「模型到底看到了什么」时打开 `save_images`（默认关）：
+
+```yaml
+save_images:
+  enabled: true
+  root: /data/outputs/sim_images   # 默认值即此处
+  jpeg_quality: 90
+```
+
+落盘位置与命名：
+
+```
+/data/outputs/sim_images/<服务启动时间戳>_<task_name>/env<env_idx>_<episode_idx>/<相机名>/<帧号>.jpg
+```
+
+- 存的是**模型输入**图像（与推理同源，`camera_names` 顺序、已解码的 HWC uint8
+  RGB），不是协议里的压缩字节；
+- 每 episode 一个文件夹、每路相机一个子文件夹（相机名取 `camera_names`；未配置
+  时按位置为 `view_0`/`view_1`…），帧号从 `000000` 起、按推理次数递增；
+- 最外层带服务启动时间戳，同一台机器上同 task 反复评测不会互相覆盖。
+
+写在每次推理之前（`model.py` 的 `_prep_env`），因此 `eval_batch` 批评测下存到的是
+**每次重规划时的画面**，不含 chunk 中间步（批路径本就把中间步 obs 留在客户端）。
+单张 480×640 JPEG q=90 约 30~50KB，长评测注意 `/data` 磁盘占用；不需要画面时保持
+`enabled: false`，此时完全不碰磁盘。
