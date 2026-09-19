@@ -3,8 +3,8 @@
 对 [PACE: Phase-Aware Chunk Execution for Robot Policies with Action Chunking](https://arxiv.org/abs/2606.00537)
 （arXiv:2606.00537v2）在 `data/sim_lerobot_v30_ee/sim_lerobot_v30_ee.csv` 上做的标定与验证记录。
 
-- 算法实现：`RoboDojo/XPolicyLab/policy/X_VLA_OPT/pace.py`（策略服务运行时用的同一份）
-- 单测：`RoboDojo/XPolicyLab/policy/X_VLA_OPT/test_pace.py`（27 项，纯 numpy）
+- 算法实现：`RoboDojo/XPolicyLab/policy/X_VLA/pace.py`（策略服务运行时用的同一份）
+- 单测：`RoboDojo/XPolicyLab/policy/X_VLA/test_pace.py`（27 项，纯 numpy）
 - 标定/验证 CLI：`tools/pace_calibrate.py`
 - 地面真值：`tools/keyframe_events.py` 的 per-arm 关键事件帧 `t0`（grasp / place / insert …）
 - 产物（未进仓库，`outputs/` 已 gitignore）：`outputs/pace_validation/`

@@ -3,7 +3,7 @@
 ## 1. 安装环境
 
 ```bash
-cd RoboDojo/XPolicyLab/policy/X_VLA_OPT
+cd RoboDojo/XPolicyLab/policy/X_VLA
 bash install.sh
 conda activate XVLA
 ```

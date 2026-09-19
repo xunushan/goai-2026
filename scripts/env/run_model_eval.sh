@@ -26,7 +26,7 @@ GROUPS_CSV="$6"
 
 CONDA=/home/ubuntu/miniconda3/etc/profile.d/conda.sh
 ROBO=/data/RoboDojo
-DEPLOY="${ROBO}/XPolicyLab/policy/X_VLA_OPT/deploy.yml"
+DEPLOY="${ROBO}/XPolicyLab/policy/X_VLA/deploy.yml"
 LOG_DIR=/data/outputs
 STAGE="/tmp/eval_stage/${MODEL}"
 PORT=6000
@@ -59,7 +59,7 @@ done
 cp "${DEPLOY}" "${DEPLOY}.bak_${MODEL}_$(date +%Y%m%d_%H%M%S)"
 MODEL="${MODEL}" VIEWS="${VIEWS}" MODEL_CLASS="${MODEL_CLASS}" python3 - <<'PY' || exit 3
 import os, re
-p = "/data/RoboDojo/XPolicyLab/policy/X_VLA_OPT/deploy.yml"
+p = "/data/RoboDojo/XPolicyLab/policy/X_VLA/deploy.yml"
 s = open(p).read()
 model, views, mc = os.environ["MODEL"], os.environ["VIEWS"], os.environ["MODEL_CLASS"]
 
@@ -89,7 +89,7 @@ boot_server () {
   sleep 2
   screen -dmS "${SESS}" bash -c "source ${CONDA} && conda activate RoboDojo && cd ${ROBO} && \
 echo '[${MODEL} eval] ckpt=${CKPT} views=${VIEWS} model_class=${MODEL_CLASS} server_started $(date +%Y%m%d_%H%M%S)' > '${SLOG}' 2>&1 && \
-exec bash scripts/robodojo.sh server --policy-dir XPolicyLab/policy/X_VLA_OPT --task ${TASK} \
+exec bash scripts/robodojo.sh server --policy-dir XPolicyLab/policy/X_VLA --task ${TASK} \
   --ckpt ${CKPT_BASE}/${CKPT} --policy-env XVLA --env-cfg arx_x5 --action-type ee \
   --seed 0 --policy-gpu 0 --policy-port ${PORT} --bind-host 127.0.0.1 >> '${SLOG}' 2>&1"
   for i in $(seq 1 75); do
@@ -138,7 +138,7 @@ run_group () {
     source "${CONDA}" && conda activate RoboDojo
     cd "${ROBO}" || exit 1
     bash scripts/robodojo.sh smoke \
-      --policy-dir XPolicyLab/policy/X_VLA_OPT \
+      --policy-dir XPolicyLab/policy/X_VLA \
       --ckpt "${CKPT}" \
       --policy-host 127.0.0.1 \
       --policy-port "${PORT}" \

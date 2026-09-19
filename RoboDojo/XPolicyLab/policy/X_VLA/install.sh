@@ -33,4 +33,4 @@ cd "${XPOLICYLAB_ROOT}"
 pip install -e .
 pip install "numpy==1.26.3" "opencv-python-headless<5"
 
-echo "[X_VLA_OPT] Done. conda activate ${CONDA_ENV}"
+echo "[X_VLA] Done. conda activate ${CONDA_ENV}"

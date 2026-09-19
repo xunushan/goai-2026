@@ -32,7 +32,7 @@ _CHECKPOINTS_DIR = _POLICY_DIR / "checkpoints"
 
 
 def _finite_round(value: Any, digits: int = 4) -> float | None:
-    """Round a scalar for logging; NaN/±Inf → None (mirrors X_VLA_OPT finite_list)."""
+    """Round a scalar for logging; NaN/±Inf → None (mirrors X_VLA finite_list)."""
     try:
         number = float(value)
     except (TypeError, ValueError):
@@ -147,7 +147,7 @@ class Model(ModelTemplate):
         )
         self.observation_window: dict[str, Any] | None = None
         self._latest_env_idx_list: list[int] = [0]
-        # 逐请求日志（参照 X_VLA_OPT）：[pi05][io] client_observation / server_actions。
+        # 逐请求日志（参照 X_VLA）：[pi05][io] client_observation / server_actions。
         # deploy.yml 配 log_io: false 可关。
         self.log_io = bool(model_cfg.get("log_io", True))
         self._request_index = 0
@@ -200,7 +200,7 @@ class Model(ModelTemplate):
             encode_obs(obs, self.action_type, self.robot_action_dim_info) for obs in obs_list
         ]
         self.observation_window = stack_obs(encoded_obs_list)
-        # 缓存每 env 的原始/编码观测（日志用，参照 X_VLA_OPT _raw_by_env/_latest_by_env）。
+        # 缓存每 env 的原始/编码观测（日志用，参照 X_VLA _raw_by_env/_latest_by_env）。
         self._raw_obs_by_env = dict(zip(self._latest_env_idx_list, obs_list, strict=True))
         self._encoded_obs_by_env = dict(zip(self._latest_env_idx_list, encoded_obs_list, strict=True))
 
@@ -240,7 +240,7 @@ class Model(ModelTemplate):
         return action_list
 
     def _log_request(self, request_index: int, env_idx: int, raw_actions: Any, action: Any) -> None:
-        """参照 X_VLA_OPT [x_vla][io] 打 [pi05][io] 两事件：client_observation + server_actions。"""
+        """参照 X_VLA [x_vla][io] 打 [pi05][io] 两事件：client_observation + server_actions。"""
         encoded = self._encoded_obs_by_env.get(env_idx)
         raw = self._raw_obs_by_env.get(env_idx)
 

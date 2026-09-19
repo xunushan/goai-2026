@@ -28,7 +28,7 @@ def eval_one_episode_batch(TASK_ENV, model_client):
     「按批统一长度推进」的旧实现逐调用一致。
 
     注意 get_obs_batch 承担 render / capture / 视频写盘，必须每步对全部 running env
-    调用（跳过中间步的刷新会破坏精度，见 X_VLA_OPT mid_step_obs 三档的教训）。
+    调用（跳过中间步的刷新会破坏精度，见 X_VLA mid_step_obs 三档的教训）。
     """
     model_client.call(func_name="reset")
     buffers: dict[int, list] = {} # env_idx -> 该 env 尚未执行完的动作

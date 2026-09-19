@@ -35,9 +35,9 @@ import pandas as pd
 
 # 仓库根目录上 path，使 `tools.` 命名空间包可导入（keyframe_events 内部依赖
 # `from tools.keyframe_detect import ...`，与 tools/frame_weight_trapezoid.py 同法）；
-# 再把 X_VLA_OPT 策略目录上 path，直接复用策略服务 import 的那一份 pace.py。
+# 再把 X_VLA 策略目录上 path，直接复用策略服务 import 的那一份 pace.py。
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "RoboDojo" / "XPolicyLab" / "policy" / "X_VLA_OPT"))
+sys.path.insert(0, str(ROOT / "RoboDojo" / "XPolicyLab" / "policy" / "X_VLA"))
 sys.path.insert(0, str(ROOT))
 
 from tools import keyframe_events as ke  # noqa: E402  (共享事件引擎)

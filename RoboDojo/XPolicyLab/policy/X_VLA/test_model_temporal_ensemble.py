@@ -1,4 +1,4 @@
-"""Integration checks for X_VLA_OPT model.py temporal ensemble (sliding-window).
+"""Integration checks for X_VLA model.py temporal ensemble (sliding-window).
 
 Stubs heavy/unavailable deps (torch/cv2/PIL/XPolicyLab/xvla/gripper_hysteresis),
 loads the real model.py, and drives get_action_batch with a fake infer().

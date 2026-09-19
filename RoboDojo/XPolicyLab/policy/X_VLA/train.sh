@@ -23,8 +23,8 @@ model_path="${XVLA_MODEL_PATH:?set XVLA_MODEL_PATH to your X-VLA-Pt pretrained w
 mkdir -p "${ckpt_dir}"
 export CUDA_VISIBLE_DEVICES="${gpu_id}"
 
-echo "[X_VLA_OPT] meta_path=${meta_path}"
-echo "[X_VLA_OPT] checkpoint_dir=${ckpt_dir}"
+echo "[X_VLA] meta_path=${meta_path}"
+echo "[X_VLA] checkpoint_dir=${ckpt_dir}"
 
 accelerate launch \
     --mixed_precision bf16 \

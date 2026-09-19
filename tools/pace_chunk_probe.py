@@ -53,7 +53,7 @@ C_ACC = "#1baf7a"        # 被接受的谷值
 C_REJ = "#b8b6ae"        # 未达 δ_T 的候选
 C_HPICK = "#9467bd"      # 选中的 h 边界
 
-DEFAULT_DEPLOY_YML = ROOT / "RoboDojo" / "XPolicyLab" / "policy" / "X_VLA_OPT" / "deploy.yml"
+DEFAULT_DEPLOY_YML = ROOT / "RoboDojo" / "XPolicyLab" / "policy" / "X_VLA" / "deploy.yml"
 DEFAULT_RESULT = ROOT / "outputs" / "simu_analysis" / "stack_bowls" / "_result.json"
 TASK_NAME = "stack_bowls"
 

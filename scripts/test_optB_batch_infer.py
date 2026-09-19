@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""本地单测：优化 B（X_VLA_OPT server 批量推理），无需 GPU/Isaac。
+"""本地单测：优化 B（X_VLA server 批量推理），无需 GPU/Isaac。
 
 用法：cd goai_2026 && /opt/anaconda3/envs/lerobot/bin/python scripts/test_optB_batch_infer.py
 
@@ -25,11 +25,11 @@ import numpy as np
 import torch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-X_VLA_OPT_DIR = os.path.join(ROOT, "RoboDojo/XPolicyLab/policy/X_VLA_OPT")
+X_VLA_DIR = os.path.join(ROOT, "RoboDojo/XPolicyLab/policy/X_VLA")
 
 
 def _load(mod_name, rel_path):
-    path = os.path.join(X_VLA_OPT_DIR, rel_path)
+    path = os.path.join(X_VLA_DIR, rel_path)
     spec = importlib.util.spec_from_file_location(mod_name, path)
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
