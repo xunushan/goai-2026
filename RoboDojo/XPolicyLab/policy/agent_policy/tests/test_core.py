@@ -14,6 +14,7 @@ sys.path.insert(0, str(PACKAGE.parents[2]))
 from XPolicyLab.codex_agent.bridge.schema import PolicyValidationError, validate_response
 from XPolicyLab.policy.agent_policy.bridge_client import BridgeResult
 from XPolicyLab.policy.agent_policy.model import Model
+from XPolicyLab.policy.agent_policy.observation import load_task_card
 from XPolicyLab.codex_agent.bridge.protocol import ParseError, parse_decision
 from XPolicyLab.utils.episode_index import EpisodeIndexResolver
 
@@ -122,7 +123,7 @@ def main() -> int:
     assert len(instance.get_action()) == 1
     assert instance.context is not None
     assert instance.context.task_name == "stack_bowls"
-    assert instance.step_budget == 1220
+    assert instance.step_budget == load_task_card("stack_bowls")["step_budget"]
 
     captured = {}
     instance = Model({

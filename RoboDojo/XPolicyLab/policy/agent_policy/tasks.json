@@ -1,4 +1,5 @@
 {
+  "_comment": "stack_bowls step_budget 暂改 800 用于仿真测试（受 stack_bowls step_lim=800 截断），正式需改回 1220；plug_in_charger 属非真机任务，卡片已移除。",
   "fill_pen_holder": {
     "instruction": "Pick up the pen holder and place all the pens into it.",
     "guidance": [],
@@ -20,7 +21,7 @@
   "stack_bowls": {
     "instruction": "Stack the bowls on the table.",
     "guidance": [],
-    "step_budget": 1220,
+    "step_budget": 800,
     "max_decisions": 100
   },
   "stand_up_bottles": {
@@ -33,12 +34,6 @@
     "instruction": "Insert the charger plug into the power strip, then connect the charging cable to the plug.",
     "guidance": [],
     "step_budget": 2240,
-    "max_decisions": 100
-  },
-  "plug_in_charger": {
-    "instruction": "Plug the charger into the power strip.",
-    "guidance": [],
-    "step_budget": 400,
     "max_decisions": 100
   },
   "stack_blocks": {
