@@ -8,11 +8,10 @@ is reached by the RoboDojo policy server through an SSH reverse tunnel::
        +-- codex app-server --stdio (one process, cwd = workspace/)
 
 The division of labour is the point of this whole layout. The GPU-side adapter
-owns the simulator-side work: it reads the observation, interpolates the model's
-target into an action chunk and accounts for the step budget. It
-sends a structured observation -- arm state, task, budget, feedback, images -- and
-this service turns that into one turn of text, hands the images through unchanged,
-and writes down what happened. No policy text lives here; the embodiment contract
+reads the observation and accounts for the step budget. It sends a structured
+observation -- arm state, task, budget, feedback, images -- and this service turns
+that into one turn of text, interpolates the selected EEF target into the final
+action chunk, and writes down what happened. No policy text lives here; the embodiment contract
 is in ``workspace/AGENTS.md`` and the decision procedure in
 ``workspace/.agents/skills/codex_agent/SKILL.md``, both read by Codex itself.
 
@@ -129,6 +128,15 @@ class BridgeState:
         if not (self.workspace / "AGENTS.md").is_file():
             raise BridgeError("bad_request", f"{self.workspace} has no AGENTS.md, so it is not a Codex workspace")
         self.expected_cameras = CAMERA_NAMES
+        self.motion = MotionConfig(
+            delta_p_max_m=args.delta_p_max_m,
+            delta_theta_max_rad=args.delta_theta_max_rad,
+            max_target_translation_m=args.max_target_translation_m,
+            max_target_rotation_rad=args.max_target_rotation_rad,
+            settle_steps=args.settle_steps,
+            gripper_open=args.gripper_open,
+            gripper_close=args.gripper_close,
+        )
         self.experience_library = ExperienceLibrary(Path(args.experience_library))
         self.server = CodexAppServer(
             workspace=self.workspace,
@@ -247,10 +255,6 @@ def _arm_state(observation: Observation, side: str) -> ArmState:
     return ArmState.from_pose7([*arm.position, *arm.orientation], arm.gripper)
 
 
-def _motion_config(observation: Observation) -> MotionConfig:
-    return MotionConfig(**observation.control)
-
-
 def _json_chunk(chunk: list[dict[str, Any]]) -> list[dict[str, list[float]]]:
     return [{key: value.tolist() for key, value in action.items()} for action in chunk]
 
@@ -278,15 +282,22 @@ def _has_gripper_change(review: dict[str, Any]) -> bool:
     )
 
 
-def _synthesise(observation: Observation, decision: dict[str, Any]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _synthesise(
+    observation: Observation,
+    decision: dict[str, Any],
+    config: MotionConfig,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     remaining = observation.budget["remaining_steps"]
     if observation.vla_review is not None and decision.get("mode") == "vla":
         chunk = _vla_chunk(observation.vla_review, min(decision["vla_steps"], remaining))
         continuation = {"previous_request_id": observation.request_id, "verify_previous": decision["verify_next"]}
         return chunk, continuation
-    parsed = parse_decision(decision, gripper_open=float(observation.control["gripper_open"]), gripper_close=float(observation.control["gripper_close"]))
+    parsed = parse_decision(
+        decision,
+        gripper_open=config.gripper_open,
+        gripper_close=config.gripper_close,
+    )
     left, right = _arm_state(observation, "left"), _arm_state(observation, "right")
-    config = _motion_config(observation)
     for side, current, command in (("left", left, parsed.left), ("right", right, parsed.right)):
         translation, rotation = target_error(current, command)
         if translation > config.max_target_translation_m or rotation > config.max_target_rotation_rad:
@@ -371,7 +382,7 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                 replay=prefix or None,
             )
             decision = _parse_reply(text, vla_horizon=None if observation.vla_review is None else observation.vla_review["chunk"]["horizon"])
-            chunk, continuation = _synthesise(observation, decision)
+            chunk, continuation = _synthesise(observation, decision, state.motion)
         except (AppServerError, ExperienceError) as exc:
             error_kind = exc.kind if isinstance(exc, AppServerError) else "experience_invalid"
             log(ok=False, error_kind=error_kind, error=str(exc), latency_ms=int((time.monotonic() - started) * 1000))
@@ -461,6 +472,15 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "max_live_image_turns": state.server.max_live_image_turns,
                 "timeout_s": state.args.timeout_s,
                 "timeout_first_turn_s": state.args.timeout_first_turn_s,
+                "motion": {
+                    "delta_p_max_m": state.motion.delta_p_max_m,
+                    "delta_theta_max_rad": state.motion.delta_theta_max_rad,
+                    "max_target_translation_m": state.motion.max_target_translation_m,
+                    "max_target_rotation_rad": state.motion.max_target_rotation_rad,
+                    "settle_steps": state.motion.settle_steps,
+                    "gripper_open": state.motion.gripper_open,
+                    "gripper_close": state.motion.gripper_close,
+                },
             },
         )
 
@@ -553,6 +573,14 @@ def build_parser() -> argparse.ArgumentParser:
         help="image-bearing turns a thread keeps before it is rotated; 0 disables rotation",
     )
     parser.add_argument("--token", default=os.environ.get("CODEX_BRIDGE_TOKEN"))
+    defaults = MotionConfig()
+    parser.add_argument("--delta-p-max-m", type=float, default=defaults.delta_p_max_m)
+    parser.add_argument("--delta-theta-max-rad", type=float, default=defaults.delta_theta_max_rad)
+    parser.add_argument("--max-target-translation-m", type=float, default=defaults.max_target_translation_m)
+    parser.add_argument("--max-target-rotation-rad", type=float, default=defaults.max_target_rotation_rad)
+    parser.add_argument("--settle-steps", type=int, default=defaults.settle_steps)
+    parser.add_argument("--gripper-open", type=float, default=defaults.gripper_open)
+    parser.add_argument("--gripper-close", type=float, default=defaults.gripper_close)
     parser.add_argument("--quiet", action="store_true")
     return parser
 

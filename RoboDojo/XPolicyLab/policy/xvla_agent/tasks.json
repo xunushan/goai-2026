@@ -1,4 +1,40 @@
 {
+  "fill_pen_holder": {
+    "instruction": "Pick up the pen holder and place all the pens into it.",
+    "guidance": [],
+    "step_budget": 1600,
+    "max_decisions": 100
+  },
+  "put_objects_into_basket": {
+    "instruction": "Place all the objects on the table into the basket.",
+    "guidance": [],
+    "step_budget": 1540,
+    "max_decisions": 100
+  },
+  "stack_and_cover_blocks": {
+    "instruction": "Stack the blocks on the table, then cover them with the cup.",
+    "guidance": [],
+    "step_budget": 1670,
+    "max_decisions": 100
+  },
+  "stack_bowls": {
+    "instruction": "Stack the bowls on the table.",
+    "guidance": [],
+    "step_budget": 1220,
+    "max_decisions": 100
+  },
+  "stand_up_bottles": {
+    "instruction": "Stand the bottle upright.",
+    "guidance": [],
+    "step_budget": 1190,
+    "max_decisions": 100
+  },
+  "insert_charger": {
+    "instruction": "Insert the charger plug into the power strip, then connect the charging cable to the plug.",
+    "guidance": [],
+    "step_budget": 2240,
+    "max_decisions": 100
+  },
   "plug_in_charger": {
     "instruction": "Plug the charger into the power strip.",
     "guidance": [],

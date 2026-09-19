@@ -2,7 +2,8 @@
 
 `agent_policy` is the thin RoboDojo policy adapter for the Codex robot harness.
 It owns task configuration, episode/call/step budgets, observation extraction,
-the Bridge HTTP client and deterministic EEF interpolation.
+the Bridge HTTP client. Deterministic EEF interpolation belongs to the standalone
+Bridge so every policy adapter uses the same robot execution contract.
 
 It does not start Codex, load skills, manage App Server threads or access the
 experience library. Those responsibilities belong to the sibling

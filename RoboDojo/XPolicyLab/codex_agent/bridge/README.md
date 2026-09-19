@@ -14,11 +14,11 @@ Mac                                        GPU machine
 └────────────────────────────────────┘     └──────────────────────────────────┘
 ```
 
-The division of labour is the point of the layout. **The GPU side owns strategy**:
-it reads the simulator, enforces the guardrail, turns an accepted target into an
-action chunk, and accounts for the step budget. **This service owns transport**:
-it turns a structured observation into one turn of text, hands the images through
-unchanged, and writes down what happened. It holds no policy text — the embodiment
+The division of labour is the point of the layout. **The policy adapter owns the
+robot observation and budgets**. **This service owns the Codex decision and
+execution synthesis**: it turns a structured observation into one turn of text,
+interpolates an accepted EEF target into the final action chunk, hands the images
+through unchanged, and writes down what happened. It holds no policy text — the embodiment
 contract is `workspace/AGENTS.md` and the decision procedure is
 `workspace/.agents/skills/codex_agent/SKILL.md`, both read by Codex itself.
 
@@ -47,7 +47,11 @@ Defaults: binds `127.0.0.1:8765`, 75 s per decision (90 s for the one that opens
 thread, which also has to read the workspace), and rotation every 8 image-bearing
 turns. Useful flags: `--model`, `--reasoning-effort`, `--port`, `--token`,
 `--workspace`, `--experience-library`, `--max-live-image-turns`, `--timeout-s`,
-`--timeout-first-turn-s`.
+`--timeout-first-turn-s`. Motion synthesis is configured here as well, through
+`--delta-p-max-m`, `--delta-theta-max-rad`, `--max-target-translation-m`,
+`--max-target-rotation-rad`, `--settle-steps`, `--gripper-open` and
+`--gripper-close`; policy requests cannot override these values. `GET /healthz`
+reports the active motion configuration.
 
 `python3 -m bridge.bridge --help` is the authority on the flag list; there is no
 config file.
@@ -96,7 +100,7 @@ Precedence: `CODEX_BRIDGE_URL` → flat `bridge_url` in `deploy.yml` →
 ## HTTP contract
 
 `GET /healthz` → `{ok, model, reasoning_effort, codex_bin, workspace, episode_id,
-cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, stats}`.
+cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, motion}`.
 
 `POST /v1/decide` — one observation in, one decision out:
 

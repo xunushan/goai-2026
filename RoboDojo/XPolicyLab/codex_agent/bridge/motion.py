@@ -80,6 +80,16 @@ class MotionConfig:
     gripper_close: float = 0.0
 
     def __post_init__(self) -> None:
+        numeric = (
+            self.delta_p_max_m,
+            self.delta_theta_max_rad,
+            self.max_target_translation_m,
+            self.max_target_rotation_rad,
+            self.gripper_open,
+            self.gripper_close,
+        )
+        if not all(math.isfinite(value) for value in numeric):
+            raise ValueError("motion configuration must contain finite values")
         if self.delta_p_max_m <= 0 or self.delta_theta_max_rad <= 0:
             raise ValueError("interpolation increments must be positive")
         if self.max_target_translation_m <= 0 or self.max_target_rotation_rad <= 0:

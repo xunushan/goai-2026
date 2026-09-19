@@ -18,7 +18,8 @@ if str(_REPO_ROOT) not in sys.path:
 from XPolicyLab.model_template import ModelTemplate
 
 from .bridge_client import BridgeClient, build_image_payload
-from XPolicyLab.codex_agent.bridge.motion import ArmState, MotionConfig, hold_chunk
+from XPolicyLab.codex_agent.bridge.motion import ArmState, hold_chunk
+from XPolicyLab.utils.task_name_resolver import TaskNameResolver, load_real_task_name_map
 from .observation import DEFAULT_CAMERA_NAMES, EpisodeContext, build_request, load_task_card
 
 TASK_CARD_KEYS = {
@@ -91,17 +92,7 @@ class Model(ModelTemplate):
             raise ValueError("agent_policy supports only action_type='ee'")
 
         bridge = _section(config, "bridge")
-        motion = _section(config, "motion")
         images = _section(config, "images")
-        self.motion = MotionConfig(
-            delta_p_max_m=float(motion.get("delta_p_max_m", 0.005)),
-            delta_theta_max_rad=float(motion.get("delta_theta_max_rad", 0.035)),
-            max_target_translation_m=float(motion.get("max_target_translation_m", 0.05)),
-            max_target_rotation_rad=float(motion.get("max_target_rotation_rad", 0.35)),
-            settle_steps=int(motion.get("settle_steps", 3)),
-            gripper_open=float(motion.get("gripper_open", 1.0)),
-            gripper_close=float(motion.get("gripper_close", 0.0)),
-        )
         self.jpeg_quality = int(images.get("jpeg_quality", 88))
         self.request_timeout_s = float(bridge.get("request_timeout_s", 105.0))
         self.bridge = BridgeClient(
@@ -110,10 +101,24 @@ class Model(ModelTemplate):
             token=os.environ.get("CODEX_BRIDGE_TOKEN") or bridge.get("token"),
         )
 
-        task_name = config.get("task_name")
-        if not task_name:
-            raise ValueError("task_name is required")
-        self.task = load_task_card(str(task_name))
+        self.task_resolver = TaskNameResolver(
+            config.get("task_name"),
+            load_real_task_name_map(config.get("task_instruction_json")),
+        )
+        self.task: dict[str, Any] | None = None
+        self.step_budget = 0
+        self.call_budget = 0
+        self.context: EpisodeContext | None = None
+        if config.get("task_name"):
+            self._bind_task(str(config["task_name"]))
+
+        self.observation: dict[str, Any] | None = None
+        self.episode: EpisodeState | None = None
+        self.episode_number = 0
+        self.last_arms: tuple[ArmState, ArmState] | None = None
+
+    def _bind_task(self, task_name: str) -> None:
+        self.task = load_task_card(task_name)
         unknown = set(self.task) - TASK_CARD_KEYS
         if unknown:
             raise ValueError(f"unexpected task-card fields: {sorted(unknown)}")
@@ -122,16 +127,11 @@ class Model(ModelTemplate):
         if self.step_budget < 1 or self.call_budget < 1:
             raise ValueError("task budgets must be positive")
         self.context = EpisodeContext(
-            task_name=str(task_name),
+            task_name=task_name,
             task=self.task,
             step_budget=self.step_budget,
             max_decisions=self.call_budget,
         )
-
-        self.observation: dict[str, Any] | None = None
-        self.episode: EpisodeState | None = None
-        self.episode_number = 0
-        self.last_arms: tuple[ArmState, ArmState] | None = None
 
     def update_obs(self, obs):
         self.observation = obs
@@ -159,10 +159,15 @@ class Model(ModelTemplate):
         self.episode = None
         self.observation = None
         self.last_arms = None
+        self.task_resolver.reset()
 
     def _decide(self) -> list[dict[str, np.ndarray]]:
         if self.observation is None:
             raise RuntimeError("update_obs must be called before get_action")
+        task_name = self.task_resolver.resolve(self.observation)
+        if self.context is None or self.context.task_name != task_name:
+            self._bind_task(task_name)
+        assert self.context is not None
         if self.episode is None:
             self.episode = EpisodeState(f"ep{self.episode_number:04d}")
         state = self.episode
@@ -192,15 +197,6 @@ class Model(ModelTemplate):
                 feedback=state.feedback,
                 images=images,
                 continuation=state.continuation,
-                control={
-                    "delta_p_max_m": self.motion.delta_p_max_m,
-                    "delta_theta_max_rad": self.motion.delta_theta_max_rad,
-                    "max_target_translation_m": self.motion.max_target_translation_m,
-                    "max_target_rotation_rad": self.motion.max_target_rotation_rad,
-                    "settle_steps": self.motion.settle_steps,
-                    "gripper_open": self.motion.gripper_open,
-                    "gripper_close": self.motion.gripper_close,
-                },
             ),
             timeout_s=self.request_timeout_s,
         )

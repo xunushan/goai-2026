@@ -18,7 +18,7 @@ def action(x: float, grip: float) -> dict:
 
 
 def test_review_packet_and_response() -> None:
-    reviewer = CodexReviewer({"task_name": "stack_blocks", "codex_control": {"settle_steps": 0}})
+    reviewer = CodexReviewer({"task_name": "stack_blocks"})
     captured = {}
 
     def decide(packet, timeout_s):
@@ -41,6 +41,26 @@ def test_review_packet_and_response() -> None:
     assert captured["continuation"]["verify_previous"] is True
 
 
+def test_real_instruction_resolves_task() -> None:
+    reviewer = CodexReviewer({"task_name": None})
+    captured = {}
+    reviewer.bridge.decide = lambda packet, timeout_s: (
+        captured.update(packet)
+        or BridgeResult(ok=True, action_chunk=[action(0.01, 1)])
+    )
+    image = np.zeros((8, 8, 3), dtype=np.uint8)
+    observation = {
+        "instruction": "Stand the bottle upright.",
+        "state": {"left_ee_pose": [0, 0, 0, 1, 0, 0, 0], "left_ee_joint_state": [1],
+                  "right_ee_pose": [0, 0, 0, 1, 0, 0, 0], "right_ee_joint_state": [1]},
+        "vision": {name: image for name in ("cam_head", "cam_left_wrist", "cam_right_wrist")},
+    }
+    reviewer.review(observation, [action(0, 1)])
+    assert captured["task"]["name"] == "stand_up_bottles"
+    assert captured["budget"]["max_sim_steps"] == 1190
+
+
 if __name__ == "__main__":
     test_review_packet_and_response()
+    test_real_instruction_resolves_task()
     print("xvla-agent Codex review tests passed")

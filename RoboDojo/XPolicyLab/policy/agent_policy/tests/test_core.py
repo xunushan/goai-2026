@@ -48,7 +48,7 @@ def observation(with_images=True):
 
 
 def model(result):
-    instance = Model({"task_name": "stack_blocks", "bridge_url": "http://unused", "motion": {"settle_steps": 0}})
+    instance = Model({"task_name": "stack_blocks", "bridge_url": "http://unused"})
     instance.bridge.decide = lambda packet, timeout_s: result
     instance.update_obs(observation())
     return instance
@@ -99,6 +99,18 @@ def main() -> int:
     instance = model(BridgeResult(ok=True, decision=decision(), action_chunk=[action()]))
     instance.update_obs(observation(with_images=False))
     assert len(instance.get_action()) == 1
+
+    instance = Model({"task_name": None, "bridge_url": "http://unused"})
+    instance.bridge.decide = lambda packet, timeout_s: BridgeResult(
+        ok=True, decision=decision(), action_chunk=[action()]
+    )
+    real_observation = observation()
+    real_observation["instruction"] = "Stack the bowls on the table."
+    instance.update_obs(real_observation)
+    assert len(instance.get_action()) == 1
+    assert instance.context is not None
+    assert instance.context.task_name == "stack_bowls"
+    assert instance.step_budget == 1220
     print("core policy tests passed")
     return 0
 

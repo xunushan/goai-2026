@@ -4,10 +4,18 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
 import numpy as np
+
+_POLICY_DIR = Path(__file__).resolve().parent
+_ROBODOJO_DIR = _POLICY_DIR.parents[2]
+if str(_ROBODOJO_DIR) not in sys.path:
+    sys.path.insert(0, str(_ROBODOJO_DIR))
+
+from XPolicyLab.utils.task_name_resolver import TaskNameResolver, load_real_task_name_map
 
 try:
     from .bridge_client import BridgeClient, build_image_payload
@@ -57,23 +65,19 @@ def _summary(chunk: dict[str, Any]) -> dict[str, Any]:
 
 class CodexReviewer:
     def __init__(self, config: dict[str, Any]) -> None:
-        self.task_name = str(config["task_name"])
-        tasks = json.loads(TASKS_FILE.read_text(encoding="utf-8"))
-        if self.task_name not in tasks:
-            raise KeyError(f"no task card for {self.task_name!r} in {TASKS_FILE}")
-        self.task = tasks[self.task_name]
+        self.tasks = json.loads(TASKS_FILE.read_text(encoding="utf-8"))
+        self.task_resolver = TaskNameResolver(
+            config.get("task_name"),
+            load_real_task_name_map(config.get("task_instruction_json")),
+        )
+        self.task_name: str | None = None
+        self.task: dict[str, Any] | None = None
         self.bridge = BridgeClient(str(os.environ.get("CODEX_BRIDGE_URL") or config.get("bridge_url") or "http://localhost:8765"), token=os.environ.get("CODEX_BRIDGE_TOKEN"))
         self.timeout_s = float(config.get("bridge_timeout_s", 105.0))
         self.jpeg_quality = int(config.get("jpeg_quality", 88))
         self.gripper_change_threshold = float(config.get("gripper_change_threshold", 0.1))
         if not 0 <= self.gripper_change_threshold <= 1:
             raise ValueError("gripper_change_threshold must be within [0,1]")
-        self.control = {
-            "delta_p_max_m": 0.005, "delta_theta_max_rad": 0.035,
-            "max_target_translation_m": 0.05, "max_target_rotation_rad": 0.35,
-            "settle_steps": 3, "gripper_open": 1.0, "gripper_close": 0.0,
-            **dict(config.get("codex_control") or {}),
-        }
         self.episode_number = 0
         self.calls = 0
         self.steps = 0
@@ -83,8 +87,18 @@ class CodexReviewer:
         self.episode_number += 1
         self.calls = self.steps = 0
         self.continuation = None
+        self.task_resolver.reset()
+
+    def _resolve_task(self, observation: dict[str, Any]) -> None:
+        task_name = self.task_resolver.resolve(observation)
+        if task_name not in self.tasks:
+            raise KeyError(f"no task card for {task_name!r} in {TASKS_FILE}")
+        self.task_name = task_name
+        self.task = self.tasks[task_name]
 
     def review(self, observation: dict[str, Any], actions: list[dict[str, Any]]) -> list[dict[str, np.ndarray]]:
+        self._resolve_task(observation)
+        assert self.task_name is not None and self.task is not None
         self.calls += 1
         episode_id = f"ep{self.episode_number:04d}"
         chunk = _arm_major(actions)
@@ -96,7 +110,6 @@ class CodexReviewer:
             "budget": {"max_decisions": self.task["max_decisions"], "max_sim_steps": self.task["step_budget"],
                        "remaining_decisions": max(0, self.task["max_decisions"] - self.calls),
                        "remaining_steps": max(0, self.task["step_budget"] - self.steps)},
-            "control": self.control,
             "observation": {
                 side: {"position": list(map(float, state[f"{side}_ee_pose"][:3])),
                        "orientation": list(map(float, state[f"{side}_ee_pose"][3:])),

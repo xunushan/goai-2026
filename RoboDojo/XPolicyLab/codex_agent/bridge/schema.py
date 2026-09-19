@@ -37,11 +37,7 @@ MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 _ARM_FIELDS = ("position", "orientation", "gripper")
 _TASK_FIELDS = ("name", "instruction", "guidance")
 _BUDGET_FIELDS = ("max_decisions", "max_sim_steps", "remaining_decisions", "remaining_steps")
-_CONTROL_FIELDS = (
-    "delta_p_max_m", "delta_theta_max_rad", "max_target_translation_m",
-    "max_target_rotation_rad", "settle_steps", "gripper_open", "gripper_close",
-)
-_REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "control", "observation", "images")
+_REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "observation", "images")
 
 
 class PolicyValidationError(ValueError):
@@ -94,7 +90,6 @@ class Observation:
     turn_index: int
     task: dict[str, Any]
     budget: dict[str, int]
-    control: dict[str, float | int]
     arms: dict[str, ArmObservation]
     feedback: tuple[str, ...]
     images: tuple[ImageInput, ...]
@@ -138,17 +133,6 @@ class Observation:
         if parsed_budget["max_decisions"] < 1 or parsed_budget["max_sim_steps"] < 1:
             raise PolicyValidationError("budget limits must be at least 1")
 
-        control = value["control"]
-        if not isinstance(control, dict) or set(control) != set(_CONTROL_FIELDS):
-            raise PolicyValidationError(f"control must contain exactly {sorted(_CONTROL_FIELDS)}")
-        parsed_control: dict[str, float | int] = {
-            key: _number(control[key], f"control.{key}") for key in _CONTROL_FIELDS
-        }
-        parsed_control["settle_steps"] = _count(control["settle_steps"], "control.settle_steps")
-        for key in ("delta_p_max_m", "delta_theta_max_rad", "max_target_translation_m", "max_target_rotation_rad"):
-            if float(parsed_control[key]) <= 0:
-                raise PolicyValidationError(f"control.{key} must be positive")
-
         observation = value["observation"]
         if not isinstance(observation, dict) or set(observation) != set(ARMS):
             raise PolicyValidationError("observation must contain exactly left and right")
@@ -174,7 +158,6 @@ class Observation:
             turn_index=_count(value["turn_index"], "turn_index"),
             task=parsed_task,
             budget=parsed_budget,
-            control=parsed_control,
             arms={arm: _parse_arm(observation[arm], arm) for arm in ARMS},
             feedback=tuple(feedback),
             images=parsed_images,

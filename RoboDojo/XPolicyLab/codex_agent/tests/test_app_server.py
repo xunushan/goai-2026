@@ -73,11 +73,6 @@ def observation(turn: int) -> Observation:
             "remaining_decisions": 9 - turn,
             "remaining_steps": 99 - turn,
         },
-        control={
-            "delta_p_max_m": 0.005, "delta_theta_max_rad": 0.035,
-            "max_target_translation_m": 0.05, "max_target_rotation_rad": 0.35,
-            "settle_steps": 3, "gripper_open": 1.0, "gripper_close": 0.0,
-        },
         arms={"left": left, "right": right},
         feedback=(f"feedback-{turn}",),
         images=(ImageInput("cam_head", "image/jpeg", b"jpeg"),),
