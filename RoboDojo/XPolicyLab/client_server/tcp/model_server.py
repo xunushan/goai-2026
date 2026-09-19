@@ -4,6 +4,8 @@ import traceback
 from .utils import *
 import time
 
+from XPolicyLab.utils.process_data import decode_obs_images
+
 class ModelServer:
     def __init__(self, model, host="localhost", port=None):
         self.model = model
@@ -85,6 +87,12 @@ class ModelServer:
                     # Extract command and observation
                     cmd = data.get("cmd")
                     obs = data.get("obs")  # None if not provided
+
+                    # Decode every payload-carrying command, matching the ws
+                    # server: custom RPCs can ship camera frames too, and
+                    # decode_obs_images leaves non-observation payloads alone.
+                    if obs is not None:
+                        obs = decode_obs_images(obs)
 
                     # Find corresponding model method
                     method = getattr(self.model, cmd, None)
