@@ -39,7 +39,7 @@ def _traj(g: pd.DataFrame, arm: str, kind: str) -> np.ndarray:
     return g[[f"{kind}_{arm}_x", f"{kind}_{arm}_y", f"{kind}_{arm}_z"]].to_numpy(float)
 
 
-def analyze_episode(g: pd.DataFrame, arm: str) -> dict:
+def analyze_episode(g: pd.DataFrame, arm: str, stall_eps: float = STALL_EPS) -> dict:
     """g: 单 episode 全帧、按 frame_index 升序。用密集指令流（action）做判据，
     用实测 state（chunk 边界）做交叉验证。"""
     pa = _traj(g, arm, "action")
@@ -57,7 +57,7 @@ def analyze_episode(g: pd.DataFrame, arm: str) -> dict:
     start = max(first_move, CHUNK) if first_move >= 0 else CHUNK
     stall = np.zeros(n, dtype=bool)
     if n > start:
-        stall[start:] = drift[start:] < STALL_EPS
+        stall[start:] = drift[start:] < stall_eps
 
     # 最长连续 True 段
     best_len = best_start = 0
@@ -107,7 +107,7 @@ def analyze_episode(g: pd.DataFrame, arm: str) -> dict:
     }
 
 
-def analyze(df: pd.DataFrame) -> pd.DataFrame:
+def analyze(df: pd.DataFrame, stall_eps: float = STALL_EPS) -> pd.DataFrame:
     rows = []
     for (model, episode), g in df.groupby(["model_name", "episode"], sort=False):
         g = g.sort_values("frame_index")
@@ -116,7 +116,7 @@ def analyze(df: pd.DataFrame) -> pd.DataFrame:
             continue
         for arm in ("l", "r"):
             rows.append({"model_name": model, "episode": episode, "arm": arm,
-                         **analyze_episode(g, arm)})
+                         **analyze_episode(g, arm, stall_eps)})
     return pd.DataFrame(rows)
 
 
@@ -163,39 +163,80 @@ def plot(df: pd.DataFrame, stats: pd.DataFrame, outdir: Path) -> None:
         plt.close(fig)
 
 
+def _weighted_stall_pct(g: pd.DataFrame) -> float:
+    """帧加权停滞占比 = Σ停滞帧 / Σ(首次移动后的帧数)。"""
+    post = (g["frames"] - np.maximum(g["first_move_frame"], CHUNK)).clip(lower=1)
+    return float(g["stall_frames"].sum() / post.sum())
+
+
+def summarize(stats: pd.DataFrame, outdir: Path) -> None:
+    """按模型聚合停滞占比，打印并写 model_summary.csv。"""
+    rows = []
+    by_model = stats.groupby("model_name")
+    for model, g in by_model:
+        row = {
+            "model_name": model,
+            "n_episodes": g.groupby("episode").ngroups,
+            "n_arm_samples": len(g),
+            "stall_pct_weighted": round(_weighted_stall_pct(g), 3),
+            "stall_pct_mean": round(g["stall_pct"].mean(), 3),
+            "stall_pct_median": round(g["stall_pct"].median(), 3),
+            "stall_pct_min": round(g["stall_pct"].min(), 3),
+            "stall_pct_max": round(g["stall_pct"].max(), 3),
+            "stall_chunk_median": round((g["stall_frames"] / CHUNK).median(), 1),
+            "stall_chunk_max": round((g["stall_frames"] / CHUNK).max(), 1),
+            "stall_start_median": int(g["stall_start"].median()),
+            "ep_with_stall_gt50pct": int(
+                (g.groupby("episode")["stall_pct"].max() > 0.5).sum()
+            ),
+        }
+        for arm in ("l", "r"):
+            sub = g[g["arm"] == arm]
+            row[f"stall_pct_{arm}_weighted"] = round(_weighted_stall_pct(sub), 3) if len(sub) else np.nan
+        rows.append(row)
+    summary = pd.DataFrame(rows).sort_values("stall_pct_weighted", ascending=False)
+    summary.to_csv(outdir / "model_summary.csv", index=False)
+
+    print("\n=== 按模型汇总（停滞占比 = 停滞帧 / 首次移动后的帧数）===")
+    print(summary.to_string(index=False))
+
+    print("\n=== 按 模型 × 手臂（帧加权停滞占比）===")
+    piv = stats.assign(post=(stats["frames"] - np.maximum(stats["first_move_frame"], CHUNK)).clip(lower=1))
+    arm_tab = piv.groupby(["model_name", "arm"]).apply(
+        lambda g: g["stall_frames"].sum() / g["post"].sum(), include_groups=False
+    ).unstack().round(3)
+    arm_tab.columns = [f"stall_pct_{c}" for c in arm_tab.columns]
+    print(arm_tab.sort_values("stall_pct_l", ascending=False).to_string())
+    print(f"\nsummary -> {outdir}/model_summary.csv")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--csv", default="robot_test/real_episodes.csv")
     parser.add_argument("--outdir", default="outputs/real_xyz")
     parser.add_argument("--plot", action="store_true", help="额外输出每个模型的轨迹图")
+    parser.add_argument("--detail", action="store_true", help="打印 episode×手臂 明细")
+    parser.add_argument("--stall-mm", type=float, default=STALL_EPS * 1000,
+                        help="停滞判据：单个 chunk 净位移阈值 (mm)，默认 5")
     args = parser.parse_args()
 
     outdir = Path(args.outdir)
     outdir.mkdir(parents=True, exist_ok=True)
     df = pd.read_csv(args.csv)
-    stats = analyze(df)
+    stats = analyze(df, args.stall_mm / 1000)
     stats.to_csv(outdir / "episode_arm_stats.csv", index=False)
 
-    args.plot and plot(df, stats, outdir)
     if args.plot:
+        plot(df, stats, outdir)
         print(f"plots -> {outdir}/xyz_*.png")
+    if args.detail:
+        print(stats.sort_values(["model_name", "episode", "arm"]).to_string(index=False))
 
-    show = stats.copy()
-    print(show.sort_values(["model_name", "episode", "arm"]).to_string(index=False))
-
-    print("\n=== 汇总 ===")
-    print(f"episode 数: {stats.groupby(['model_name','episode']).ngroups}  "
-          f"(臂级样本 {len(stats)})")
-    for thr in (0.3, 0.5, 0.8):
-        n = (stats.stall_pct > thr).sum()
-        print(f"停滞占比 >{thr:.0%} 的臂级样本: {n}/{len(stats)}")
+    summarize(stats, outdir)
     print("\n停滞段抖动幅度 (mm/帧): "
           f"中位 {stats.jitter_mm.median():.2f}, 最大 {stats.jitter_mm.max():.2f}")
-    print("停滞段颤动半径 gyro (mm): "
-          f"中位 {stats.gyro_mm.median():.2f}, 最大 {stats.gyro_mm.max():.2f}")
     print("停滞段 chunk 边界跳变 (mm): "
           f"中位 {stats.boundary_jump_mm.median():.2f}, 最大 {stats.boundary_jump_mm.max():.2f}")
-    print(f"progress_ratio 中位: {stats.progress_ratio.median():.3f}")
     print(f"stats -> {outdir}/episode_arm_stats.csv")
     return 0
 
