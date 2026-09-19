@@ -26,6 +26,10 @@ task 名（真机客户端只发指令、不发 task_name）：按 `configs/real
 各占一个 `<root>/<时间戳>_<task>` 目录；映射不到就退回配置里的 task_name（服务启动
 时 `--task_name` 传入的那个），行为与从前一致。
 
+**指令只出现在 episode 首帧**（真机客户端如此），后续重规划帧不带指令，所以查表
+结果必须按 episode 粘住（见 TaskNameResolver）——否则同一个 episode 的图会被拆进
+「映射出的任务目录」和「配置 task_name 目录」两份。
+
 写盘时机与代价：每次重规划前同步写 JPEG（q=90，480x640 约 30~50KB）。批评测
 （eval_batch）下客户端只把「需要重规划」的 env 观测发给服务端，所以存到的是每次
 重规划时的画面，**不含 chunk 中间步**；单 env 路径才每步都有观测，但保存点仍在
@@ -41,7 +45,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 import numpy as np
 from PIL import Image
@@ -322,6 +326,58 @@ def resolve_task_name(
     """把客户端发来的指令查成 task_name；查不到返回 None（由调用方兜底）。"""
     key = _normalize_text(instruction)
     return task_name_map.get(key) if key else None
+
+
+class TaskNameResolver:
+    """把「时有时无的指令」解析成跨帧稳定的 task_name（一帧一调，状态粘住）。
+
+    真机客户端**只在 episode 首帧带指令**，之后每次重规划都不带；逐帧独立查表的话，
+    同一个 episode 会被拆成两个目录：首帧落进映射出的任务目录，其余帧因为查不到指令
+    退回配置 task_name。所以解析结果按 episode 粘住：
+
+    - 本帧带指令 → 以本帧为准（查得到就用它；查不到就是查不到，退回配置 task_name），
+      并更新粘住值；
+    - 本帧不带指令 → 沿用上一次的粘住值。
+
+    粘住值**不在 episode 之间清空**：清了反而会在「新 episode 首帧没带指令」时把整段
+    落回配置 task_name，而沿用旧值大概率仍对；只要首帧带了指令（协议约定），下一次
+    解析就会立即刷新，不存在跨 episode 串任务的情况。
+    """
+
+    # 取值顺序与 model.py resolve_prompt 一致
+    INSTRUCTION_KEYS = ("prompt", "instruction", "task", "language_instruction")
+
+    def __init__(
+        self,
+        task_name_map: Mapping[str, str] | None,
+        *,
+        on_unmapped: Callable[[str], None] | None = None,
+    ) -> None:
+        self._map = dict(task_name_map or {})
+        self._on_unmapped = on_unmapped
+        self._reported_unmapped: set[str] = set()
+        self._episode_task_name: str | None = None
+
+    @property
+    def enabled(self) -> bool:
+        return bool(self._map)
+
+    def resolve(self, observation: Mapping[str, Any] | None) -> str | None:
+        """本次观测对应哪个 task_name；没表/没观测/没粘住值时返回 None（走兜底）。"""
+        if not self._map or not isinstance(observation, Mapping):
+            return None
+        for key in self.INSTRUCTION_KEYS:
+            raw = observation.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            mapped = resolve_task_name(raw, self._map)
+            self._episode_task_name = mapped
+            if mapped is None and raw not in self._reported_unmapped:
+                self._reported_unmapped.add(raw)
+                if self._on_unmapped is not None:
+                    self._on_unmapped(raw)
+            return mapped
+        return self._episode_task_name
 
 
 def _normalize_text(value: Any) -> str:

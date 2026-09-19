@@ -32,8 +32,8 @@ from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
 from save_images import (
     EpisodeImageWriter,
     SaveImagesConfig,
+    TaskNameResolver,
     load_task_name_map,
-    resolve_task_name,
 )
 from temporal_ensemble import ServerTemporalEnsembler
 
@@ -581,8 +581,11 @@ class Model(ModelTemplate):
             if self._image_writer.active
             else {}
         )
-        # 没查到的指令只提示一次，免得每个 episode 刷屏
-        self._unmapped_instructions: set[str] = set()
+        # 指令只在 episode 首帧出现，解析结果按 episode 粘住（见 TaskNameResolver）；
+        # 没查到的指令只提示一次，免得每个 episode 刷屏。
+        self._task_name_resolver = TaskNameResolver(
+            self._task_name_map, on_unmapped=self._warn_unmapped_instruction
+        )
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
@@ -938,24 +941,18 @@ class Model(ModelTemplate):
         """本次观测属于哪个任务：按指令查映射表（同 resolve_prompt 的取值顺序）。
 
         查不到返回 None，落盘器会退回配置里的 task_name——真机服务一个实例按 task
-        启动，单任务评测时映射表没登记也照样落在老目录，不会没图。
+        启动，单任务评测时映射表没登记也照样落在老目录，不会没图。指令只在 episode
+        首帧出现，粘住逻辑见 TaskNameResolver。
         """
-        if not self._task_name_map:
-            return None
-        for key in ("prompt", "instruction", "task", "language_instruction"):
-            raw = observation.get(key)
-            if not isinstance(raw, str) or not raw.strip():
-                continue
-            mapped = resolve_task_name(raw, self._task_name_map)
-            if mapped is None and raw not in self._unmapped_instructions:
-                self._unmapped_instructions.add(raw)
-                print(
-                    "[x_vla][images] 指令不在 task_name 映射表里，落盘用配置的 "
-                    f"task_name={self.task_name}：{raw!r}",
-                    flush=True,
-                )
-            return mapped
-        return None
+        return self._task_name_resolver.resolve(observation)
+
+    def _warn_unmapped_instruction(self, instruction: str) -> None:
+        """指令不在映射表里时提示一次（落盘仍走配置的 task_name）。"""
+        print(
+            "[x_vla][images] 指令不在 task_name 映射表里，落盘用配置的 "
+            f"task_name={self.task_name}：{instruction!r}",
+            flush=True,
+        )
 
     def _finalize_chunk(self, resolved_env_idx, raw_chunk):
         """raw_chunk 之后的全部后处理：校验→temporal ensemble/截取→16 维 ee

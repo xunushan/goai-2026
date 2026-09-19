@@ -5,7 +5,8 @@
 覆盖：开关的零副作用、目录与命名约定、逐 episode/逐相机/逐帧的落盘、帧号在
 reset 后归零、相机名 slug 化与缺名回退、写盘失败不抛异常、配置校验、客户端
 不发 episode_idx 时按 request 归零自编号（含多 env 同 episode、reset 换号），
-以及指令 → task_name 映射（含真表核对、缺表/坏表处理、按任务分目录）。
+以及指令 → task_name 映射（含真表核对、缺表/坏表处理、按任务分目录、指令只在
+episode 首帧出现时的粘住行为）。
 """
 import json
 import re
@@ -22,6 +23,7 @@ from save_images import (  # noqa: E402
     DEFAULT_TASK_INSTRUCTION_JSON,
     EpisodeImageWriter,
     SaveImagesConfig,
+    TaskNameResolver,
     load_task_name_map,
     resolve_task_name,
 )
@@ -337,6 +339,42 @@ def test_task_name_map_from_json():
             assert got == entry["task_name"], (entry, got)
     else:
         print(f"SKIP 真表不存在：{DEFAULT_TASK_INSTRUCTION_JSON}")
+
+
+def test_task_name_resolver_sticks_across_frames():
+    """指令只在 episode 首帧出现：后续不带指令的帧必须沿用首帧解析出的任务名。"""
+    mapping = {"stack the bowls on the table.": "stack_bowls"}
+    resolver = TaskNameResolver(mapping)
+
+    # 首帧带指令 → 解析出任务名
+    assert resolver.resolve({"instruction": "Stack the bowls on the table."}) == "stack_bowls"
+    # 后续帧不带任何指令字段 → 沿用，而不是掉回 None（否则半段图会落进兜底目录）
+    assert resolver.resolve({"env_idx": 0}) == "stack_bowls"
+    assert resolver.resolve({}) == "stack_bowls"
+    assert resolver.resolve({"instruction": "   "}) == "stack_bowls"
+    # 出现新指令就以新指令为准（同一进程跑第二个任务）
+    assert resolver.resolve({"prompt": "stack the bowls on the table."}) == "stack_bowls"
+    # 带了指令但查不到：明确退回兜底，且之后的无指令帧也保持兜底
+    assert resolver.resolve({"instruction": "do something else"}) is None
+    assert resolver.resolve({"env_idx": 0}) is None
+    # 再出现能查到的指令 → 恢复
+    assert resolver.resolve({"instruction": "Stack the bowls on the table."}) == "stack_bowls"
+
+
+def test_task_name_resolver_reports_unmapped_once():
+    """未登记指令只提示一次；空表 / 非 dict 观测一律返回 None（关掉图片落盘时即如此）。"""
+    seen = []
+    resolver = TaskNameResolver({"a": "task_a"}, on_unmapped=seen.append)
+    assert resolver.enabled is True
+    resolver.resolve({"instruction": "unknown"})
+    resolver.resolve({"instruction": "unknown"})
+    assert seen == ["unknown"], seen
+
+    assert TaskNameResolver({}).enabled is False
+    assert TaskNameResolver({}).resolve({"instruction": "a"}) is None
+    assert TaskNameResolver(None).resolve({"instruction": "a"}) is None
+    assert TaskNameResolver({"a": "task_a"}).resolve(None) is None
+    assert TaskNameResolver({"a": "task_a"}).resolve("not-a-dict") is None
 
 
 def test_task_name_map_missing_or_broken():
