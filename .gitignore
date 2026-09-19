@@ -22,6 +22,9 @@ notebooks/
 # 分析测试结果输出
 outputs/
 
+# 真机测试日志
+robot_test/
+
 # macOS
 .DS_Store
 
