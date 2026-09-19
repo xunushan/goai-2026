@@ -150,6 +150,10 @@ class BridgeState:
         self.lock = threading.Lock()
         self.episode_id: str | None = None
         self.use_experience: bool | None = None
+        self.experience_status: dict[str, Any] = {
+            "enabled": False,
+            "status": "not_started",
+        }
         self.initial_context: list[dict[str, Any]] = []
         self.initial_context_loaded = False
         self.history: list[dict[str, Any]] = []
@@ -169,6 +173,10 @@ class BridgeState:
             return
         self.episode_id = episode_id
         self.use_experience = use_experience
+        self.experience_status = {
+            "enabled": use_experience,
+            "status": "pending" if use_experience else "disabled",
+        }
         self.initial_context = []
         self.initial_context_loaded = False
         self.history = []
@@ -218,10 +226,52 @@ class BridgeState:
         if not self.initial_context_loaded:
             # Load and render once per episode. Later thread replacements replay
             # these exact saved items as part of the bridge-maintained history.
-            self.initial_context = (
-                self.experience_library.items(task_name)
-                if self.use_experience
-                else []
+            try:
+                self.initial_context = (
+                    self.experience_library.items(task_name)
+                    if self.use_experience
+                    else []
+                )
+            except ExperienceError as exc:
+                self.experience_status = {
+                    "enabled": True,
+                    "status": "error",
+                    "task_name": task_name,
+                    "error": str(exc),
+                }
+                print(
+                    f"[bridge][experience] episode={self.episode_id} "
+                    f"task={task_name} status=error error={exc}",
+                    flush=True,
+                )
+                raise
+            images = sum(
+                item.get("type") == "image" for item in self.initial_context
+            )
+            keyframes = sum(
+                item.get("type") == "text"
+                and item.get("text", "").startswith("[EXAMPLE ")
+                for item in self.initial_context
+            )
+            source = self.experience_library.source(task_name)
+            status = (
+                "loaded"
+                if self.use_experience and self.initial_context
+                else "no_match" if self.use_experience else "disabled"
+            )
+            self.experience_status = {
+                "enabled": bool(self.use_experience),
+                "status": status,
+                "task_name": task_name,
+                "demo": source,
+                "keyframes": keyframes,
+                "images": images,
+            }
+            print(
+                f"[bridge][experience] episode={self.episode_id} "
+                f"task={task_name} status={status} demo={source or '-'} "
+                f"keyframes={keyframes} images={images}",
+                flush=True,
             )
             self.initial_context_loaded = True
         return self.replay()
@@ -358,6 +408,7 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
                     turn_index=observation.turn_index,
                     image_paths=image_paths,
                     observation_state=observation_state,
+                    experience=state.experience_status,
                     **fields,
                 ),
             )
@@ -479,6 +530,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "experience_library": str(state.experience_library.root),
                 "episode_id": state.episode_id,
                 "use_experience": state.use_experience,
+                "experience": state.experience_status,
                 "cameras": list(state.expected_cameras),
                 "max_live_image_turns": state.server.max_live_image_turns,
                 "timeout_s": state.args.timeout_s,

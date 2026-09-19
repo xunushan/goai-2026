@@ -51,6 +51,11 @@ class ExperienceLibrary:
             self._cache[task_name] = cached
         return [dict(item) for item in cached]
 
+    def source(self, task_name: str) -> str | None:
+        """Configured demo path relative to the library, if the task is mapped."""
+        config = self.index.get(task_name)
+        return None if config is None else str(config["demo"])
+
 
 def render_demo_text(demo: dict[str, Any], task_name: str) -> list[str]:
     """Render the concise text blocks paired with a demonstration's images."""

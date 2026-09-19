@@ -36,6 +36,17 @@ codex_agent/experience_library/
 `index.json` is the only routing table. Merely placing another directory in the
 library does not cause it to be loaded.
 
+When the first Codex thread opens, Bridge stdout prints one audit line:
+
+```text
+[bridge][experience] episode=... task=stack_bowls status=loaded demo=stack_bowls/demo.json keyframes=5 images=9
+```
+
+`status` is one of `disabled`, `no_match`, `loaded`, or `error`. The same object
+is stored as `experience` in every `workspace/output/<episode>/rollout.jsonl`
+record. Before a Codex turn actually opens it may be `pending`; this commonly
+occurs when VLA review routing accepts a chunk without calling Codex.
+
 ## Bridge startup parameters
 
 Run from `RoboDojo/XPolicyLab/codex_agent`:

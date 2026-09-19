@@ -83,6 +83,14 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     assert fresh and fresh[0]["text"].startswith("HISTORICAL SUCCESSFUL DEMONSTRATION")
     assert state.initial_context == fresh
     assert state.initial_context_loaded
+    assert state.experience_status == {
+        "enabled": True,
+        "status": "loaded",
+        "task_name": "stack_bowls",
+        "demo": "stack_bowls/demo.json",
+        "keyframes": 5,
+        "images": 9,
+    }
     assert state.thread_prefix("stack_bowls", fresh_thread=False) == []
 
     state.history = [{
@@ -107,6 +115,18 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     disabled.history = []
     assert disabled.thread_prefix("stack_bowls", fresh_thread=True) == []
     assert disabled.initial_context_loaded
+    assert disabled.experience_status["status"] == "disabled"
+
+    missing = object.__new__(BridgeState)
+    missing.experience_library = ExperienceLibrary(LIBRARY)
+    missing.workspace = PACKAGE / "workspace"
+    missing.episode_id = "ep-no-match"
+    missing.use_experience = True
+    missing.initial_context = []
+    missing.initial_context_loaded = False
+    missing.history = []
+    assert missing.thread_prefix("unknown_task", fresh_thread=True) == []
+    assert missing.experience_status["status"] == "no_match"
 
 
 def main() -> int:
