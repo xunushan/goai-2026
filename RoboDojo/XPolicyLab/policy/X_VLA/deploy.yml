@@ -34,7 +34,7 @@ steps: 10
 policy_seed: 42
 # The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
-actions_per_chunk: 30
+actions_per_chunk: 15
 # 在线 temporal ensemble（ACT 式，参照 act_lerobot）。coefficient=null 关闭
 # （保持整段 chunk 执行）。启用时按 actions_per_chunk 滑动窗口对齐多条预测做
 # 指数加权平均：每个仿真步不再重新推理，而是每隔 actions_per_chunk 步重规划
@@ -44,7 +44,20 @@ actions_per_chunk: 30
 # 直通，不产生额外计算。示例：actions_per_chunk: 5 + coeff: 0.01。
 # horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
 # 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
-temporal_ensemble_coeff: null
+temporal_ensemble_coeff: 0.01
+# 闭环自锁临时保护（默认关闭）。连续 3 次重规划仍停留在 12 mm 范围内，且某臂
+# 连续 2 个 chunk 都出现「首点反向跳 2~15 mm、随后至少向前 3 mm、夹角 cosine<=-0.8」
+# 时，只平移该臂整条 xyz 轨迹使首点对齐当前实测位置。相对轨迹、旋转和夹爪不变；
+# 触发详情写入 server_actions.self_lock_guard。真机临时解锁时设 enabled: true。
+self_lock_guard:
+  enabled: false
+  history_replans: 3
+  trigger_count: 2
+  stall_radius_m: 0.012
+  min_start_jump_m: 0.002
+  max_start_jump_m: 0.015
+  min_chunk_motion_m: 0.003
+  reverse_cosine: -0.8
 # 批量推理（优化 B）：true 时 get_action_batch 收到多个 env 会合并为一次 B=N 的
 # generate_actions（值保持，见 model.py 注释）。仅多 env eval（eval_batch）生效，
 # 单 env 仍走顺序路径。默认 false 与旧行为完全一致。

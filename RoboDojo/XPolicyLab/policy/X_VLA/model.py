@@ -36,6 +36,7 @@ from save_images import (
     load_task_name_map,
 )
 from temporal_ensemble import ServerTemporalEnsembler
+from self_lock_guard import ChunkSelfLockGuard, SelfLockGuardConfig
 
 # R0/R1 腕部残差模型（config.json 的 architectures / wrist_residual_mode 由此判别）。
 WRIST_RESIDUAL_CLASS = "WristActionResidualXVLA"
@@ -497,6 +498,13 @@ class Model(ModelTemplate):
             self.temporal_ensemble_coeff is not None
             and self.actions_per_chunk < self.temporal_ensemble_horizon
         )
+        # Opt-in emergency guard for the observed closed-loop limit cycle:
+        # repeated small-range re-plans whose fresh chunk first jumps opposite
+        # to its own subsequent motion.  One guard instance is kept per env.
+        self._self_lock_guard_cfg = SelfLockGuardConfig.from_model_cfg(
+            self.model_cfg
+        )
+        self._self_lock_guards: dict[int, ChunkSelfLockGuard] = {}
         self.gripper_mode = str(
             self.model_cfg.get("gripper_mode", "continuous")
         ).lower()
@@ -598,6 +606,7 @@ class Model(ModelTemplate):
             f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
+            f"self_lock_guard={'on' if self._self_lock_guard_cfg.enabled else 'off'} "
             f"save_images={self._image_writer.describe()} "
             f"task_name_map={len(self._task_name_map) if self._image_writer.active else 'off'} "
             f"policy_seed={self.policy_seed} "
@@ -973,6 +982,24 @@ class Model(ModelTemplate):
                 "X-VLA returned an unexpected chunk length: "
                 f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
             )
+        self_lock_diagnostics = None
+        if self._self_lock_guard_cfg.enabled:
+            guard = self._self_lock_guards.get(resolved_env_idx)
+            if guard is None:
+                guard = ChunkSelfLockGuard(self._self_lock_guard_cfg)
+                self._self_lock_guards[resolved_env_idx] = guard
+            current_proprio = self._latest_by_env[resolved_env_idx]["proprio"]
+            raw_chunk, self_lock_diagnostics = guard.apply(
+                current_proprio,
+                raw_chunk,
+                self.actions_per_chunk,
+            )
+            if self_lock_diagnostics["triggered"]:
+                # Predictions already stored by temporal ensemble predate the
+                # correction and can re-introduce the rollback.  Restart this
+                # env's ensemble from the corrected chunk.
+                self._temporal_ensemblers.pop(resolved_env_idx, None)
+
         temporal_ensemble_diagnostics = None
         if self.temporal_ensemble_active:
             assert self.temporal_ensemble_coeff is not None
@@ -1042,6 +1069,7 @@ class Model(ModelTemplate):
                     else None
                 ),
                 "temporal_ensemble": temporal_ensemble_diagnostics,
+                "self_lock_guard": self_lock_diagnostics,
                 "policy_seed": self.policy_seed,
                 "policy_noise_draw": (
                     self._policy_noise_draws[resolved_env_idx]
@@ -1143,6 +1171,7 @@ class Model(ModelTemplate):
         # episode 开始：清空 temporal ensemble 状态，每个 episode 从新的预测
         # 序列起点开始对齐
         self._temporal_ensemblers = {}
+        self._self_lock_guards = {}
         # episode 开始：图片落盘的帧号回到 000000，客户端不发 episode_idx 时
         # 下一次落盘换一个新编号（已写文件不动）
         self._image_writer.reset()

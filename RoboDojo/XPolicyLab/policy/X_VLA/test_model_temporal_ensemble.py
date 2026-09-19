@@ -162,6 +162,20 @@ def chunk_for(step, model_chunk_size=30):
     return np.stack(rows)
 
 
+def rollback_chunk(model_chunk_size=30):
+    """Absolute EE chunk that first jumps -6 mm, then moves back forwards."""
+    chunk = np.zeros((model_chunk_size, 20), dtype=np.float32)
+    chunk[:, 0] = np.linspace(-0.006, 0.001, model_chunk_size)
+    identity_rot6d = model_mod.quat_to_rotate6d(
+        np.asarray([1.0, 0.0, 0.0, 0.0], dtype=np.float32)
+    )
+    chunk[:, 3:9] = identity_rot6d
+    chunk[:, 13:19] = identity_rot6d
+    chunk[:, 9] = 0.5
+    chunk[:, 19] = 0.5
+    return chunk
+
+
 # ---------------------------------------------------------------- tests
 def expect_value_error(cfg, fragment, label):
     try:
@@ -341,6 +355,36 @@ def test_counts_ramp():
     return True
 
 
+def test_self_lock_guard_reanchors_and_restarts_ensemble():
+    m = make_model(
+        {
+            "actions_per_chunk": 15,
+            "temporal_ensemble_coeff": 0.01,
+            "self_lock_guard": {
+                "enabled": True,
+                "history_replans": 2,
+                "trigger_count": 1,
+            },
+        }
+    )
+    chunk = rollback_chunk()
+    prime_action(m, chunk)
+    m.get_action_batch()
+    previous_ensembler = m._temporal_ensemblers[0]
+
+    # Same measured proprio at the next re-plan: stalled closed loop.  The
+    # repeated reverse-boundary pattern now meets the configured trigger.
+    prime_action(m, chunk)
+    actions = m.get_action_batch()[0]
+    assert np.isclose(actions[0]["left_ee_pose"][0], 0.0)
+    assert m._temporal_ensemblers[0] is not previous_ensembler
+
+    m.reset()
+    assert m._self_lock_guards == {}
+    print("[PASS] self-lock guard reanchors xyz, restarts ensemble, reset clears state")
+    return True
+
+
 def main():
     ok = True
     ok &= test_validation()
@@ -351,6 +395,7 @@ def main():
     ok &= test_horizon_absent_defaults_to_num_actions()
     ok &= test_reset_clears()
     ok &= test_counts_ramp()
+    ok &= test_self_lock_guard_reanchors_and_restarts_ensemble()
     print("ALL INTEGRATION TESTS PASSED" if ok else "SOME INTEGRATION TESTS FAILED")
 
 
