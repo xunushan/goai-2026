@@ -6,14 +6,20 @@ camera_names 顺序、ensure_hwc_uint8 已经解码成 HWC uint8 RGB 的那一�
 排查「模型到底看到了什么画面」时不需要再对流式协议里的压缩字节做二次解读。
 
 目录结构：
-    <root>/<服务启动时间戳>_<task_name>/env<env_idx>_<episode_idx>/<相机名>/<帧号>.jpg
+    <root>/<服务启动时间戳>_<task_name>/env<env_idx>_<episode>/<相机名>/<帧号>.jpg
 
 - 最外层带服务启动时间戳：同一台机器上同 task 反复评测不会互相覆盖；
 - 每个 episode 一个文件夹（episode_idx 由 eval client 逐 env 生成，多 env 并行
   评测各有各的目录），前缀 env<env_idx> 便于回溯是哪台 env；
+- **客户端不发 episode_idx 时（真机测评即如此）自己编号**，见下节「episode 编号」；
 - 每路相机一个子文件夹，名字取 deploy.yml 的 camera_names；未配置 camera_names
   时按位置退化为 view_0 / view_1…；
 - 帧号是该 episode 内的第几次推理（每次重规划一张，从 000000 起）。
+
+episode 编号（客户端不发 episode_idx 时）：真机客户端只发观测、不带 episode 标识，
+落盘器就用**推理计数 request 归零**当 episode 边界——同一 episode 内 request 单调
+递增，回到 0 即新一轮（服务端 model.py 只在 reset() 与进程启动时清 0）。每次边界
+生成一个 `ep<序号>_<4 位随机>` 编号，文件夹因此按 episode 隔离、且序号可排序。
 
 写盘时机与代价：每次重规划前同步写 JPEG（q=90，480x640 约 30~50KB）。批评测
 （eval_batch）下客户端只把「需要重规划」的 env 观测发给服务端，所以存到的是每次
@@ -25,6 +31,7 @@ enabled=false 时本模块完全不碰磁盘（save_observation 首行即返回�
 from __future__ import annotations
 
 import re
+import uuid
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -83,8 +90,8 @@ class SaveImagesConfig:
 class EpisodeImageWriter:
     """按 episode / 相机分目录落 JPEG。
 
-    跨请求状态只有「每个 episode 已写到第几帧」的计数；reset() 清空计数，
-    不与服务端其它状态耦合。
+    跨请求状态只有「每个 episode 已写到第几帧」的计数，以及客户端不发 episode_idx
+    时自己编的号；reset() 把这两者都推进到下一个 episode，不与服务端其它状态耦合。
     """
 
     def __init__(
@@ -104,6 +111,11 @@ class EpisodeImageWriter:
             f"{self.run_timestamp}_{_slug(task_name) or 'unknown_task'}"
         )
         self._frame_index: dict[str, int] = {}
+        # 客户端不发 episode_idx 时的自编号状态：已编到第几个、当前是哪个、
+        # 上一次见到的 request（用来识别 request 归零这个 episode 边界）。
+        self._episode_seq = 0
+        self._synth_episode: str | None = None
+        self._last_request_index: int | None = None
         self._shape_warned = False
         self._write_failed = False
 
@@ -121,8 +133,15 @@ class EpisodeImageWriter:
         episode_idx: Any,
         env_idx: int,
         images: Sequence[Any] | None,
+        request_index: int | None,
     ) -> list[Path]:
-        """落一次推理的输入图像，返回实际写出的路径列表（关闭时返回空）。"""
+        """落一次推理的输入图像，返回实际写出的路径列表（关闭时返回空）。
+
+        request_index 是服务端 model.py 的推理计数（同一 episode 内单调递增、
+        episode 边界归零），只在客户端不发 episode_idx 时用来切 episode。
+        它是必传的：调用方忘了传会直接 TypeError，而不是静默把多个 episode
+        的图混进同一个目录。
+        """
         if not self.config.enabled or images is None:
             return []
         images = list(images)
@@ -137,7 +156,8 @@ class EpisodeImageWriter:
                 flush=True,
             )
 
-        episode_key = f"env{int(env_idx)}_{_slug(episode_idx) or 'unknown_episode'}"
+        episode = self._resolve_episode(episode_idx, request_index)
+        episode_key = f"env{int(env_idx)}_{episode}"
         frame = self._frame_index.get(episode_key, 0)
         episode_dir = self.run_dir / episode_key
         written: list[Path] = []
@@ -149,8 +169,46 @@ class EpisodeImageWriter:
         return written
 
     def reset(self) -> None:
-        """episode 边界重置帧号（落盘目录与已写文件不动）。"""
+        """episode 边界：帧号归零、下一次落盘换一个新编号（已写文件不动）。"""
         self._frame_index = {}
+        self._synth_episode = None
+        self._last_request_index = None
+
+    def _resolve_episode(self, episode_idx: Any, request_index: int | None) -> str:
+        """这一帧属于哪个 episode 目录：客户端给了 id 就用它，否则自己编号。
+
+        自编号的触发点有两个，取「或」——两者都表示新一轮 episode，且都只在前一次
+        落盘之后才可能发生，所以同一个 episode 内无论落多少帧、多少个 env，只会
+        生成一个编号：
+
+        - 本次 request_index 归零而上一次不是 0（真机：服务端 request 单调递增，
+          回 0 只可能是新 episode 或进程重启）；
+        - 还没有编号（进程启动后的第一帧，或刚 reset 过）。
+        """
+        client_episode = _slug(episode_idx)
+        if client_episode:
+            return client_episode
+        new_episode = request_index == 0 and self._last_request_index != 0
+        self._last_request_index = request_index
+        if new_episode or self._synth_episode is None:
+            if request_index is None:
+                # 调用方拿不到 request（理论上不会发生，接口是必传的）：
+                # 别编号，退回旧的兜底目录名，免得把多个 episode 混成一个编号。
+                return "unknown_episode"
+            self._episode_seq += 1
+            self._synth_episode = (
+                f"ep{self._episode_seq:03d}_{uuid.uuid4().hex[:4]}"
+            )
+            self._announce_episode()
+        return self._synth_episode
+
+    def _announce_episode(self) -> None:
+        """新 episode 编号落定时打一行，方便从日志直接定位图片目录。"""
+        print(
+            f"[x_vla][images] new episode #{self._episode_seq} "
+            f"({self._synth_episode}) -> {self.run_dir}",
+            flush=True,
+        )
 
     def _camera_dir(self, index: int) -> str:
         name = (

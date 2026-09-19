@@ -905,10 +905,14 @@ class Model(ModelTemplate):
         self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
         # 图片落盘与推理同源：存的就是紧接着喂进模型的那份图像
         # （deploy.yml save_images.enabled=false 时零开销直接返回）。
+        # request_index 传当前请求号（_finalize_chunk 末尾才自增，所以本次请求的
+        # 首个 env 落盘时它仍是本 episode 的第 0/1/2… 次）；真机客户端不发
+        # episode_idx，落盘器靠它归零来切 episode 编号。
         self._image_writer.save_observation(
             episode_idx=raw_obs.get("episode_idx"),
             env_idx=resolved_env_idx,
             images=encoded_obs["images"],
+            request_index=self._request_index,
         )
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
@@ -1097,5 +1101,6 @@ class Model(ModelTemplate):
         # episode 开始：清空 temporal ensemble 状态，每个 episode 从新的预测
         # 序列起点开始对齐
         self._temporal_ensemblers = {}
-        # episode 开始：图片落盘的帧号回到 000000（已写文件不动）
+        # episode 开始：图片落盘的帧号回到 000000，客户端不发 episode_idx 时
+        # 下一次落盘换一个新编号（已写文件不动）
         self._image_writer.reset()
