@@ -106,17 +106,20 @@ save_images:
 # 唯一源（process_data.py 按 task_id 读取），改一处必须同步改另一处。
 # 若平台实际不发 instruction（服务端回落到 default_prompt = prompt 配置或 task_name），
 # 本表不会命中，日志里的 model_prompt 会直接暴露成裸 task_name —— 届时按日志原文补 key。
-task_prompt_map:
-  "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
-  "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
-  "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
-  "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
-  "Pick up the pen holder and place all the pens into it.": "Pick up and hold the pen holder upright, insert all three pens one by one, then place the filled holder on the table."
-  "Place all the objects on the table into the basket.": "Place all objects on the table into the basket one by one."
-  "Stack the blocks on the table, then cover them with the cup.": "Stack all three blocks into one vertical stack, then place the cup over the entire stack."
-  "Stack the bowls on the table.": "Nest all three bowls upright at the center of the table."
-  "Stand the bottle upright.": "Place all three bottles stably upright on the table."
-  "Insert the charger plug into the power strip, then connect the charging cable to the plug.": "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
+# ⚠️ 2026-09-20：复评官方 ckpt-100000 期间整体关闭（null → env 原文直通，与官方
+# 训练同域）。下方注释块保留映射原值，跑自训模型（X3/X0）或真机 piper_x 时恢复即可。
+task_prompt_map: null
+# task_prompt_map:
+#   "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
+#   "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
+#   "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
+#   "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
+#   "Pick up the pen holder and place all the pens into it.": "Pick up and hold the pen holder upright, insert all three pens one by one, then place the filled holder on the table."
+#   "Place all the objects on the table into the basket.": "Place all objects on the table into the basket one by one."
+#   "Stack the blocks on the table, then cover them with the cup.": "Stack all three blocks into one vertical stack, then place the cup over the entire stack."
+#   "Stack the bowls on the table.": "Nest all three bowls upright at the center of the table."
+#   "Stand the bottle upright.": "Place all three bottles stably upright on the table."
+#   "Insert the charger plug into the power strip, then connect the charging cable to the plug.": "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
 log_io: true
