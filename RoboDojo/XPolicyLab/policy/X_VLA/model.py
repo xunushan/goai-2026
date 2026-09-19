@@ -29,7 +29,12 @@ from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
 
 from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
-from save_images import EpisodeImageWriter, SaveImagesConfig
+from save_images import (
+    EpisodeImageWriter,
+    SaveImagesConfig,
+    load_task_name_map,
+    resolve_task_name,
+)
 from temporal_ensemble import ServerTemporalEnsembler
 
 # R0/R1 腕部残差模型（config.json 的 architectures / wrist_residual_mode 由此判别）。
@@ -568,6 +573,16 @@ class Model(ModelTemplate):
             task_name=self.task_name,
             camera_names=self.camera_names,
         )
+        # 真机客户端只发指令、不发 task_name，落盘目录按指令查映射表得到任务名
+        # （源文件见 deploy.yml save_images.task_instruction_json）。关掉图片落盘
+        # 就不读这份表，缺文件也不影响服务启动（load_task_name_map 内部只告警）。
+        self._task_name_map = (
+            load_task_name_map(self._save_images_cfg.task_instruction_json)
+            if self._image_writer.active
+            else {}
+        )
+        # 没查到的指令只提示一次，免得每个 episode 刷屏
+        self._unmapped_instructions: set[str] = set()
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
@@ -581,6 +596,7 @@ class Model(ModelTemplate):
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
             f"save_images={self._image_writer.describe()} "
+            f"task_name_map={len(self._task_name_map) if self._image_writer.active else 'off'} "
             f"policy_seed={self.policy_seed} "
             f"batch_inference={self.batch_inference}",
             flush=True,
@@ -913,9 +929,33 @@ class Model(ModelTemplate):
             env_idx=resolved_env_idx,
             images=encoded_obs["images"],
             request_index=self._request_index,
+            task_name=self._task_name_for(raw_obs),
         )
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
+
+    def _task_name_for(self, observation: dict[str, Any]) -> str | None:
+        """本次观测属于哪个任务：按指令查映射表（同 resolve_prompt 的取值顺序）。
+
+        查不到返回 None，落盘器会退回配置里的 task_name——真机服务一个实例按 task
+        启动，单任务评测时映射表没登记也照样落在老目录，不会没图。
+        """
+        if not self._task_name_map:
+            return None
+        for key in ("prompt", "instruction", "task", "language_instruction"):
+            raw = observation.get(key)
+            if not isinstance(raw, str) or not raw.strip():
+                continue
+            mapped = resolve_task_name(raw, self._task_name_map)
+            if mapped is None and raw not in self._unmapped_instructions:
+                self._unmapped_instructions.add(raw)
+                print(
+                    "[x_vla][images] 指令不在 task_name 映射表里，落盘用配置的 "
+                    f"task_name={self.task_name}：{raw!r}",
+                    flush=True,
+                )
+            return mapped
+        return None
 
     def _finalize_chunk(self, resolved_env_idx, raw_chunk):
         """raw_chunk 之后的全部后处理：校验→temporal ensemble/截取→16 维 ee

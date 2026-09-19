@@ -3,9 +3,11 @@
 运行：python3 test_save_images.py（需 numpy + PIL）
 
 覆盖：开关的零副作用、目录与命名约定、逐 episode/逐相机/逐帧的落盘、帧号在
-reset 后归零、相机名 slug 化与缺名回退、写盘失败不抛异常、配置校验，以及客户端
-不发 episode_idx 时按 request 归零自编号（含多 env 同 episode、reset 换号）。
+reset 后归零、相机名 slug 化与缺名回退、写盘失败不抛异常、配置校验、客户端
+不发 episode_idx 时按 request 归零自编号（含多 env 同 episode、reset 换号），
+以及指令 → task_name 映射（含真表核对、缺表/坏表处理、按任务分目录）。
 """
+import json
 import re
 import sys
 import tempfile
@@ -16,7 +18,13 @@ from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from save_images import EpisodeImageWriter, SaveImagesConfig  # noqa: E402
+from save_images import (  # noqa: E402
+    DEFAULT_TASK_INSTRUCTION_JSON,
+    EpisodeImageWriter,
+    SaveImagesConfig,
+    load_task_name_map,
+    resolve_task_name,
+)
 
 _IMG = np.zeros((48, 64, 3), dtype=np.uint8)
 _IMG[..., 1] = 128
@@ -50,6 +58,17 @@ def test_defaults_and_enabled_parsing():
         {"save_images": {"enabled": "true", "root": "/tmp/x", "jpeg_quality": 75}}
     )
     assert (cfg.enabled, cfg.root, cfg.jpeg_quality) == (True, "/tmp/x", 75)
+    # 映射表默认指向仓库里那份真机任务表，可在 deploy.yml 覆盖
+    assert cfg.task_instruction_json == DEFAULT_TASK_INSTRUCTION_JSON
+    # 默认路径必须真的指向仓库里那份表（走查目录层数，别只对文件名）
+    assert Path(DEFAULT_TASK_INSTRUCTION_JSON).is_file(), (
+        f"默认映射表路径不对：{DEFAULT_TASK_INSTRUCTION_JSON}"
+    )
+    assert Path(DEFAULT_TASK_INSTRUCTION_JSON).parent.name == "configs"
+    overridden = SaveImagesConfig.from_model_cfg(
+        {"save_images": {"task_instruction_json": "/tmp/other.json"}}
+    )
+    assert overridden.task_instruction_json == "/tmp/other.json"
     for value, expected in (("false", False), ("off", False), ("", False), (1, True)):
         got = SaveImagesConfig.from_model_cfg({"save_images": {"enabled": value}})
         assert got.enabled is expected, (value, got.enabled)
@@ -251,6 +270,101 @@ def test_request_index_is_required():
         pass
     else:
         raise AssertionError("expected TypeError when request_index is omitted")
+
+
+def test_images_split_by_task_name():
+    """一个服务实例跑多个任务：不同 task_name 落进不同的 <时间戳>_<task> 目录。"""
+    root = Path(tempfile.mkdtemp()) / "sim_images"
+    writer = _writer(root, task_name="stack_blocks", camera_names=["cam_head"])
+    writer.save_observation(
+        episode_idx=None,
+        env_idx=0,
+        images=[_IMG],
+        request_index=0,
+        task_name="fill_pen_holder",
+    )
+    writer.save_observation(
+        episode_idx=None, env_idx=0, images=[_IMG], request_index=1
+    )  # 不给 task_name → 兜底 stack_blocks
+    dirs = sorted(p.name for p in root.iterdir())
+    assert dirs == [
+        "20260919_101112_fill_pen_holder",
+        "20260919_101112_stack_blocks",
+    ], dirs
+    # 兜底目录就是 run_dir / describe() 报的那个
+    assert writer.run_dir.name == "20260919_101112_stack_blocks"
+    assert writer.describe() == str(root / "20260919_101112_stack_blocks")
+
+
+def test_task_name_map_from_json():
+    """映射表三个字段都能查到同一个 task_name，忽略大小写与多余空白。"""
+    tmp = Path(tempfile.mkdtemp())
+    path = tmp / "real_task_instruction.json"
+    path.write_text(
+        json.dumps(
+            {
+                "tasks": [
+                    {
+                        "task_id": "fill_pen_holder_001",
+                        "task_name": "fill_pen_holder",
+                        "original_instruction": "Pick up the pen holder and place all the pens into it.",
+                        "modified_instruction": "Pick up and hold the pen holder upright.",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    mapping = load_task_name_map(path)
+    for text in (
+        "Pick up the pen holder and place all the pens into it.",  # original
+        "Pick up and hold the pen holder upright.",                # modified
+        "fill_pen_holder_001",                                     # task_id
+        "fill_pen_holder",                                         # task_name
+        "  pick up the pen   holder and place all the pens into it.  ",  # 空白/大小写
+    ):
+        assert resolve_task_name(text, mapping) == "fill_pen_holder", text
+    assert resolve_task_name("Do something else.", mapping) is None
+    assert resolve_task_name(None, mapping) is None
+
+    # 仓库里那份真表：6 个真机任务的 original 指令都应能查到
+    if Path(DEFAULT_TASK_INSTRUCTION_JSON).is_file():
+        real = load_task_name_map(DEFAULT_TASK_INSTRUCTION_JSON)
+        with open(DEFAULT_TASK_INSTRUCTION_JSON, encoding="utf-8") as handle:
+            entries = json.load(handle)["tasks"]
+        for entry in entries:
+            got = resolve_task_name(entry["original_instruction"], real)
+            assert got == entry["task_name"], (entry, got)
+    else:
+        print(f"SKIP 真表不存在：{DEFAULT_TASK_INSTRUCTION_JSON}")
+
+
+def test_task_name_map_missing_or_broken():
+    """文件缺失只告警（退回配置 task_name），文件格式错则直接抛。"""
+    tmp = Path(tempfile.mkdtemp())
+    assert load_task_name_map(tmp / "nope.json") == {}
+    assert load_task_name_map(None) == {}
+
+    broken = tmp / "broken.json"
+    broken.write_text(json.dumps({"tasks": "not-a-list"}), encoding="utf-8")
+    try:
+        load_task_name_map(broken)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for tasks not being a list")
+
+    no_task_name = tmp / "no_task_name.json"
+    no_task_name.write_text(
+        json.dumps({"tasks": [{"task_id": "x", "original_instruction": "y"}]}),
+        encoding="utf-8",
+    )
+    try:
+        load_task_name_map(no_task_name)
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("expected ValueError for missing task_name")
 
 
 if __name__ == "__main__":
