@@ -11,7 +11,7 @@ import numpy as np
 
 try:
     from .bridge_client import BridgeClient, build_image_payload
-except ImportError:  # model.py is also loaded directly by X_VLA's offline tests
+except ImportError:  # model.py is also loaded directly by X_VLA_OPT's offline tests
     from bridge_client import BridgeClient, build_image_payload
 
 CAMERAS = ("cam_head", "cam_left_wrist", "cam_right_wrist")

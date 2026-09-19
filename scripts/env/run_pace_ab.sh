@@ -24,7 +24,7 @@ VIEWS="${6:-1}"
 MODEL_CLASS="${7:--}"
 
 ROBO=/data/RoboDojo
-DEPLOY="${ROBO}/XPolicyLab/policy/X_VLA/deploy.yml"
+DEPLOY="${ROBO}/XPolicyLab/policy/X_VLA_OPT/deploy.yml"
 LOG_DIR=/data/outputs
 TS=$(date +%Y%m%d_%H%M%S)
 LOG="${LOG_DIR}/pace_ab_${TASK}_s${SEED}_${TS}.log"
@@ -40,7 +40,7 @@ set_pace () {
   local WANT="$1"
   python3 - "${WANT}" <<'PY' || exit 3
 import re, sys
-p = "/data/RoboDojo/XPolicyLab/policy/X_VLA/deploy.yml"
+p = "/data/RoboDojo/XPolicyLab/policy/X_VLA_OPT/deploy.yml"
 want = sys.argv[1]
 assert want in ("true", "false"), want
 s = open(p).read()
@@ -72,7 +72,7 @@ run_arm xvla_ab_paceon  true
 cp "${BAK}" "${DEPLOY}"
 python3 - <<'PY'
 import re
-p = "/data/RoboDojo/XPolicyLab/policy/X_VLA/deploy.yml"
+p = "/data/RoboDojo/XPolicyLab/policy/X_VLA_OPT/deploy.yml"
 m = re.search(r"^pace:\n(  enabled:\s*)(\S+)\s*$", open(p).read(), flags=re.M)
 print(f"[pace_ab] deploy.yml restored: pace.enabled={m.group(2) if m else 'MISSING'}")
 PY

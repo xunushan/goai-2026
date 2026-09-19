@@ -27,7 +27,7 @@ import torch
 import yaml
 from PIL import Image
 
-POLICY_DIR = Path("/data/RoboDojo/XPolicyLab/policy/X_VLA")
+POLICY_DIR = Path("/data/RoboDojo/XPolicyLab/policy/X_VLA_OPT")
 sys.path.insert(0, str(POLICY_DIR))
 
 import model as xvla_policy  # noqa: E402

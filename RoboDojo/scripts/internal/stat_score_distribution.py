@@ -16,7 +16,7 @@ Rules:
 
 Usage:
     python stat_score_distribution.py
-    python stat_score_distribution.py --policies Pi_05 X_VLA Xiaomi_Robotics_0
+    python stat_score_distribution.py --policies Pi_05 X_VLA_OPT Xiaomi_Robotics_0
     python scripts/internal/stat_score_distribution.py --task stack_bowls --json-out score_stats.json
 """
 
@@ -34,7 +34,7 @@ DEFAULT_ROOT = os.path.normpath(
     os.path.join(SCRIPT_DIR, "..", "..", "eval_result", "RoboDojo")
 )
 
-DEFAULT_POLICIES = ("Xiaomi_Robotics_0", "X_VLA", "Pi_05")
+DEFAULT_POLICIES = ("Xiaomi_Robotics_0", "X_VLA_OPT", "Pi_05")
 POLICY_ALIASES = {
     "xiaomi_robotics_0": "Xiaomi_Robotics_0",
 }

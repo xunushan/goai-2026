@@ -1,8 +1,8 @@
-# X_VLA
+# X_VLA_OPT
 
 **Contributor:** RoboDojo Team | **Paper:** X-VLA technical report | **arXiv:** TBD | **Original code:** See vendored `xvla/`.
 
-`X_VLA` is the XPolicyLab/RoboDojo adapter for the corresponding policy. It keeps integration-facing scripts at this directory level and leaves the original or vendored implementation in the nested source tree when present.
+`X_VLA_OPT` is the XPolicyLab/RoboDojo adapter for the corresponding policy. It keeps integration-facing scripts at this directory level and leaves the original or vendored implementation in the nested source tree when present.
 
 <details>
 <summary>File Structure</summary>
@@ -33,8 +33,8 @@ Parameters used by the command:
 | `policy_env` | Name of the conda environment used by the policy runtime. |
 
 ```bash
-cd XPolicyLab/policy/X_VLA
-# Example: install dependencies for the X_VLA policy adapter.
+cd XPolicyLab/policy/X_VLA_OPT
+# Example: install dependencies for the X_VLA_OPT policy adapter.
 bash install.sh
 # Example: activate the environment used later as <policy_conda_env>.
 conda activate <policy_env>  # e.g. x-vla
@@ -57,12 +57,12 @@ Parameters used by the command:
 | `bench_name` | Benchmark or dataset family, usually `RoboDojo`. |
 | `ckpt_name` | Training run identifier, for example `cotrain`. |
 | `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation. X_VLA currently supports only `ee`. |
+| `action_type` | Action representation. X_VLA_OPT currently supports only `ee`. |
 | `seed` | Random seed. |
 | `gpu_id` | GPU id or comma-separated GPU ids for the policy trainer. |
 
 ```bash
-cd XPolicyLab/policy/X_VLA
+cd XPolicyLab/policy/X_VLA_OPT
 # Template: train a policy run on one GPU or a GPU list.
 bash train.sh <bench_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <gpu_id>
 
@@ -87,7 +87,7 @@ Parameters used by `eval.sh`:
 | `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
 | `ckpt_name` | Checkpoint/run directory name, usually under `checkpoints/`. |
 | `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation. Must be `ee` for X_VLA. |
+| `action_type` | Action representation. Must be `ee` for X_VLA_OPT. |
 | `seed` | Evaluation seed. |
 | `policy_gpu_id` | GPU used by the policy server. |
 | `env_gpu_id` | GPU used by the RoboDojo simulation client. |
@@ -95,7 +95,7 @@ Parameters used by `eval.sh`:
 | `eval_env_conda_env` | Conda environment for RoboDojo simulation/client. |
 
 ```bash
-cd XPolicyLab/policy/X_VLA
+cd XPolicyLab/policy/X_VLA_OPT
 # Template: run same-machine policy server and RoboDojo environment client.
 bash eval.sh <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> <policy_gpu_id> <env_gpu_id> <policy_conda_env> <eval_env_conda_env>
 
@@ -111,7 +111,7 @@ Parameters used by the split server/client flow:
 | `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
 | `ckpt_name` | Checkpoint/run directory name, usually under `checkpoints/`. |
 | `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation. Must be `ee` for X_VLA. |
+| `action_type` | Action representation. Must be `ee` for X_VLA_OPT. |
 | `seed` | Evaluation seed. |
 | `policy_gpu_id` | GPU used by the policy server. |
 | `env_gpu_id` | GPU used by the RoboDojo simulation client. |
@@ -123,7 +123,7 @@ Parameters used by the split server/client flow:
 | `additional_info` | Comma-separated runtime overrides passed to the eval client, for example `ckpt_name=...,action_type=ee`. |
 
 ```bash
-cd XPolicyLab/policy/X_VLA
+cd XPolicyLab/policy/X_VLA_OPT
 # Terminal 1 on the policy machine: start the policy server.
 bash setup_eval_policy_server.sh \
   <bench_name> <task_name> <ckpt_name> <env_cfg_type> <action_type> <seed> \
@@ -159,7 +159,7 @@ Common parameter meanings used across the commands above:
 | `task_name` | RoboDojo simulation task to evaluate, for example `stack_bowls`. |
 | `ckpt_name` | Checkpoint/run directory name, usually under `checkpoints/`. |
 | `env_cfg_type` | Robot/environment configuration, for example `arx_x5`. |
-| `action_type` | Action representation. Must be `ee` for X_VLA. |
+| `action_type` | Action representation. Must be `ee` for X_VLA_OPT. |
 | `seed` | Evaluation seed. |
 | `policy_gpu_id` | GPU used by the policy server. |
 | `env_gpu_id` | GPU used by the RoboDojo simulation client. |
@@ -198,7 +198,7 @@ Frequently used environment variables detected in the adapter scripts:
 | `XVLA_MODEL_PATH` | Required by `train.sh`; path or HF id for the pretrained X-VLA base model. Use a local directory when you want automatic processor/tokenizer copying into saved checkpoints. |
 | `XVLA_ROOT` | Optional override used by the local scripts or upstream runtime. |
 | `XVLA_SKIP_CONDA_CREATE` | Optional override used by the local scripts or upstream runtime. |
-| `X_VLA` | Optional override used by the local scripts or upstream runtime. |
+| `X_VLA_OPT` | Optional override used by the local scripts or upstream runtime. |
 
 ## Notes
 

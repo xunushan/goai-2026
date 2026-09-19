@@ -26,7 +26,7 @@ patch_policy/
 ├── model.py              # 策略服务核心（观测→推理→动作协议）
 ├── deploy.yml            # 服务配置（ckpt 路径、模型超参、steps/actions_per_chunk 等）
 ├── flow_policy/models/   # vendored 模型代码（models 包，自包含；vision.py 已做离线加固）
-├── deploy.py / eval.sh / setup_eval_*.sh   # RoboDojo 集成入口（与 X_VLA 一致）
+├── deploy.py / eval.sh / setup_eval_*.sh   # RoboDojo 集成入口（与 X_VLA_OPT 一致）
 ├── install.sh            # 校验依赖（复用 XVLA conda 环境，不安装新包）
 └── serve_remote.sh       # 便捷启动脚本
 ```

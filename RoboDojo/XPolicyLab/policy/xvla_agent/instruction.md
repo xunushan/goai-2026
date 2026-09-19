@@ -1,6 +1,6 @@
 # xvla_agent deployment
 
-Use the same model checkpoint and Python environment as `X_VLA`. Start the
+Use the same model checkpoint and Python environment as `X_VLA_OPT`. Start the
 standalone `XPolicyLab/codex_agent` Bridge first, then launch this policy:
 
 ```bash

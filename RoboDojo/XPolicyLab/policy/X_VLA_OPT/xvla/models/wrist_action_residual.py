@@ -11,7 +11,7 @@ sample-level, per-arm dynamic gate.
 约定所迫，不改变任何数值口径：
 
 1. `generate_actions` 增加 `generator` / `x1` 两个形参：策略服务端 model.py 的
-   顺序路径传 `generator=`、批量路径传 `x1=`（见 policy/X_VLA/model.py 的 infer
+   顺序路径传 `generator=`、批量路径传 `x1=`（见 policy/X_VLA_OPT/model.py 的 infer
    与 _batch_infer），训练侧版本不接受这两个参数会直接 TypeError。两者都只影响
    初始 flow 噪声的抽样来源，抽出的 x1 与基线 XVLA 同值同序，保住了
    deploy.yml 中 policy_seed 的可复现语义。

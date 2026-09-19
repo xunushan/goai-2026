@@ -1,5 +1,5 @@
 # Basic experiment configuration
-policy_name: X_VLA
+policy_name: X_VLA_OPT
 protocol: ws
 host: localhost
 bench_name: null

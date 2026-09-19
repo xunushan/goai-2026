@@ -30,10 +30,10 @@ RoboDojo/XPolicyLab/policy/xvla_mumugo
 
 ### 2. 安装 conda 环境
 
-所需环境与 **X_VLA 策略完全一致**（Python 3.10）。
+所需环境与 **X_VLA_OPT 策略完全一致**（Python 3.10）。
 
 - **首次使用**：运行 `bash install.sh`，创建默认 `XVLA` 环境并安装全部依赖；
-- **已装过**（包括已存在 X_VLA 用的环境）：跳过本步，启动时用 `--policy-env <环境名>` 直接指定即可。
+- **已装过**（包括已存在 X_VLA_OPT 用的环境）：跳过本步，启动时用 `--policy-env <环境名>` 直接指定即可。
 
 ### 3. 模型说明
 

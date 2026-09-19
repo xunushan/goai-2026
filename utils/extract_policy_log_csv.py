@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""从 X_VLA 策略服务日志（[x_vla][io] 行）提取仿真轨迹并导出 CSV。
+"""从 X_VLA_OPT 策略服务日志（[x_vla][io] 行）提取仿真轨迹并导出 CSV。
 
-日志来源：RoboDojo/XPolicyLab/policy/X_VLA/model.py 的 get_action_batch()
+日志来源：RoboDojo/XPolicyLab/policy/X_VLA_OPT/model.py 的 get_action_batch()
 打印的 `[x_vla][io] {json}` 事件，成对出现：
   - client_observation：含 instruction（task）与 16 维 state（左右 7 维 ee
     pose + 1 维夹爪），仅在 action chunk 边界（每 execute_steps 帧）上报；
@@ -30,7 +30,7 @@ CSV 字段（一行 = 一个仿真帧）：
 
 用法：
   python utils/extract_policy_log_csv.py \
-      --log outputs/abtest/_logs/policy_X_VLA_port80.log --out out.csv
+      --log outputs/abtest/_logs/policy_X_VLA_OPT_port80.log --out out.csv
 """
 
 from __future__ import annotations

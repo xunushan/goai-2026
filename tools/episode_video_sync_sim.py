@@ -2,7 +2,7 @@
 """仿真评测结果 (exp1_1cam) 的视频 + action 轨迹联动 HTML 生成工具。
 
 与 tools/episode_video_sync.py (训练集) 的差异:
-- 数据源: 评测日志 (X_VLA_*.log) + 按 task 目录组织的 episode 视频;
+- 数据源: 评测日志 (X_VLA_OPT_*.log) + 按 task 目录组织的 episode 视频;
 - episode 标识: 日志里的 8 位 hex uuid (episode_idx), 视频文件名含同一 uuid;
 - 轨迹: 用 episode 的 action (16 维, 逐帧), 不是 state;
 - 对齐: 视频文件 start_time=0、三路同长, 直接整文件取; 视频帧数为
@@ -11,7 +11,7 @@
 
 目录结构 (exp 目录):
     <exp>/
-        X_VLA_*.log                    # 策略服务日志
+        X_VLA_OPT_*.log                    # 策略服务日志
         <task>/
             episode_{uuid}_cam_head_{success|fail}.mp4
             episode_{uuid}_cam_left_wrist_{success|fail}.mp4
@@ -152,7 +152,7 @@ def main() -> None:
     args = parser.parse_args()
 
     exp_dir = Path(args.exp)
-    log_paths = sorted(exp_dir.glob("X_VLA_*.log")) + sorted(exp_dir.glob("*.log"))
+    log_paths = sorted(exp_dir.glob("X_VLA_OPT_*.log")) + sorted(exp_dir.glob("*.log"))
     if not log_paths:
         raise SystemExit(f"no log found in {exp_dir}")
     log_path = log_paths[0]
