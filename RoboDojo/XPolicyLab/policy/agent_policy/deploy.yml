@@ -21,6 +21,10 @@ bridge:
 images:
   jpeg_quality: 88
 
+# Inject the task demo selected by codex_agent/experience_library/index.json.
+experience:
+  enabled: true
+
 # JSON lines on stdout for observation state and returned 16-D action chunks.
 log_io: true
 

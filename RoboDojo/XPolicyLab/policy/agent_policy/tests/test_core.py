@@ -49,7 +49,11 @@ def observation(with_images=True):
 
 
 def model(result):
-    instance = Model({"task_name": "stack_blocks", "bridge_url": "http://unused"})
+    instance = Model({
+        "task_name": "stack_blocks",
+        "bridge_url": "http://unused",
+        "experience": {"enabled": False},
+    })
     instance.bridge.decide = lambda packet, timeout_s: result
     instance.update_obs(observation())
     return instance
@@ -121,7 +125,11 @@ def main() -> int:
     assert instance.step_budget == 1220
 
     captured = {}
-    instance = Model({"task_name": "stack_blocks", "bridge_url": "http://unused"})
+    instance = Model({
+        "task_name": "stack_blocks",
+        "bridge_url": "http://unused",
+        "experience": {"enabled": False},
+    })
     instance.bridge.decide = lambda packet, timeout_s: (
         captured.update(packet)
         or BridgeResult(ok=True, decision=decision(), action_chunk=[action()])
@@ -131,6 +139,7 @@ def main() -> int:
     instance.update_obs(sim_observation)
     instance.get_action()
     assert captured["episode_id"] == "23"
+    assert captured["use_experience"] is False
     print("core policy tests passed")
     return 0
 

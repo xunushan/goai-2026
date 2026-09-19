@@ -83,6 +83,7 @@ def build_request(
     right: ArmState,
     feedback: Sequence[str],
     images: Sequence[dict[str, str]],
+    use_experience: bool,
     continuation: dict[str, Any] | None = None,
     vla_review: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -113,6 +114,7 @@ def build_request(
             "remaining_decisions": max(0, int(context.max_decisions) - int(calls_used)),
             "remaining_steps": max(0, int(context.step_budget) - int(steps_used)),
         },
+        "use_experience": bool(use_experience),
         "observation": {
             "left": arm_observation(left),
             "right": arm_observation(right),

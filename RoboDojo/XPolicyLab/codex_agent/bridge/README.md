@@ -113,6 +113,7 @@ cameras, max_live_image_turns, timeout_s, timeout_first_turn_s, motion}`.
   "task": {"name": "stack_bowls", "instruction": "…"},
   "budget": {"max_decisions": 100, "max_sim_steps": 550,
              "remaining_decisions": 59, "remaining_steps": 320},
+  "use_experience": true,             // fixed for this episode
   "observation": {
     "left":  {"position": [x, y, z], "orientation": [w, x, y, z], "gripper": 1.0},
     "right": {"position": [x, y, z], "orientation": [w, x, y, z], "gripper": 1.0}

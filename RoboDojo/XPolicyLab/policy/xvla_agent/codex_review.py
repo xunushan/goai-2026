@@ -77,6 +77,10 @@ class CodexReviewer:
         self.timeout_s = float(config.get("bridge_timeout_s", 105.0))
         self.jpeg_quality = int(config.get("jpeg_quality", 88))
         self.gripper_change_threshold = float(config.get("gripper_change_threshold", 0.1))
+        experience = config.get("experience") or {}
+        if not isinstance(experience, dict):
+            raise TypeError("experience config must be a dict")
+        self.use_experience = bool(experience.get("enabled", True))
         if not 0 <= self.gripper_change_threshold <= 1:
             raise ValueError("gripper_change_threshold must be within [0,1]")
         self.episode_index = EpisodeIndexResolver()
@@ -111,6 +115,7 @@ class CodexReviewer:
             "budget": {"max_decisions": self.task["max_decisions"], "max_sim_steps": self.task["step_budget"],
                        "remaining_decisions": max(0, self.task["max_decisions"] - self.calls),
                        "remaining_steps": max(0, self.task["step_budget"] - self.steps)},
+            "use_experience": self.use_experience,
             "observation": {
                 side: {"position": list(map(float, state[f"{side}_ee_pose"][:3])),
                        "orientation": list(map(float, state[f"{side}_ee_pose"][3:])),

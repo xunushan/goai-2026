@@ -149,11 +149,12 @@ class BridgeState:
         # at a time, and two overlapping requests would interleave their events.
         self.lock = threading.Lock()
         self.episode_id: str | None = None
+        self.use_experience: bool | None = None
         self.initial_context: list[dict[str, Any]] = []
         self.initial_context_loaded = False
         self.history: list[dict[str, Any]] = []
 
-    def begin_episode(self, episode_id: str) -> None:
+    def begin_episode(self, episode_id: str, use_experience: bool) -> None:
         """Forget the previous episode's history when a new one starts.
 
         Decisions are only meaningful within their own episode -- the arm state
@@ -161,8 +162,13 @@ class BridgeState:
         describe a scene that no longer exists.
         """
         if episode_id == self.episode_id:
+            if use_experience != self.use_experience:
+                raise PolicyValidationError(
+                    "use_experience cannot change within an episode"
+                )
             return
         self.episode_id = episode_id
+        self.use_experience = use_experience
         self.initial_context = []
         self.initial_context_loaded = False
         self.history = []
@@ -212,7 +218,11 @@ class BridgeState:
         if not self.initial_context_loaded:
             # Load and render once per episode. Later thread replacements replay
             # these exact saved items as part of the bridge-maintained history.
-            self.initial_context = self.experience_library.items(task_name)
+            self.initial_context = (
+                self.experience_library.items(task_name)
+                if self.use_experience
+                else []
+            )
             self.initial_context_loaded = True
         return self.replay()
 
@@ -318,7 +328,7 @@ def _decide(state: BridgeState, payload: Any, started: float) -> dict[str, Any]:
     _check_images(observation, state.expected_cameras)
 
     with state.lock:
-        state.begin_episode(observation.episode_id)
+        state.begin_episode(observation.episode_id, observation.use_experience)
         record_dir = record.prepare(state.workspace, observation.episode_id)
         image_paths = record.relative_paths(
             record.store_images(
@@ -468,6 +478,7 @@ class BridgeHandler(BaseHTTPRequestHandler):
                 "workspace": str(state.workspace),
                 "experience_library": str(state.experience_library.root),
                 "episode_id": state.episode_id,
+                "use_experience": state.use_experience,
                 "cameras": list(state.expected_cameras),
                 "max_live_image_turns": state.server.max_live_image_turns,
                 "timeout_s": state.args.timeout_s,

@@ -115,6 +115,8 @@ class Model(ModelTemplate):
 
         bridge = _section(config, "bridge")
         images = _section(config, "images")
+        experience = _section(config, "experience")
+        self.use_experience = bool(experience.get("enabled", True))
         self.jpeg_quality = int(images.get("jpeg_quality", 88))
         self.request_timeout_s = float(bridge.get("request_timeout_s", 105.0))
         self.bridge = BridgeClient(
@@ -291,6 +293,7 @@ class Model(ModelTemplate):
                 right=right,
                 feedback=state.feedback,
                 images=images,
+                use_experience=self.use_experience,
                 continuation=state.continuation,
             ),
             timeout_s=self.request_timeout_s,

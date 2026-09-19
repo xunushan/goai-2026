@@ -92,3 +92,5 @@ codex_enabled: true
 bridge_timeout_s: 105
 jpeg_quality: 88
 gripper_change_threshold: 0.1
+experience:
+  enabled: true

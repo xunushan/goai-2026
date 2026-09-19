@@ -39,12 +39,13 @@ def test_review_packet_and_response() -> None:
     assert captured["vla_review"]["gripper_change_threshold"] == 0.1
     assert captured["budget"]["max_sim_steps"] == 550
     assert captured["episode_id"] == "12"
+    assert captured["use_experience"] is True
     reviewer.review(observation, [action(0, 1)])
     assert captured["continuation"]["verify_previous"] is True
 
 
 def test_real_instruction_resolves_task() -> None:
-    reviewer = CodexReviewer({"task_name": None})
+    reviewer = CodexReviewer({"task_name": None, "experience": {"enabled": False}})
     captured = {}
     reviewer.bridge.decide = lambda packet, timeout_s: (
         captured.update(packet)
@@ -61,6 +62,7 @@ def test_real_instruction_resolves_task() -> None:
     assert captured["task"]["name"] == "stand_up_bottles"
     assert captured["budget"]["max_sim_steps"] == 1190
     assert captured["episode_id"].startswith("ep001_")
+    assert captured["use_experience"] is False
 
 
 if __name__ == "__main__":

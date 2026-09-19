@@ -75,6 +75,7 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     state.experience_library = ExperienceLibrary(LIBRARY)
     state.workspace = PACKAGE / "workspace"
     state.episode_id = "ep-test"
+    state.use_experience = True
     state.initial_context = []
     state.initial_context_loaded = False
     state.history = []
@@ -95,6 +96,17 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
     assert rotated[:len(state.initial_context)] == state.initial_context
     assert "HISTORICAL SUCCESSFUL DEMONSTRATION" in text
     assert "prior observation" in text
+
+    disabled = object.__new__(BridgeState)
+    disabled.experience_library = ExperienceLibrary(LIBRARY)
+    disabled.workspace = PACKAGE / "workspace"
+    disabled.episode_id = "ep-no-demo"
+    disabled.use_experience = False
+    disabled.initial_context = []
+    disabled.initial_context_loaded = False
+    disabled.history = []
+    assert disabled.thread_prefix("stack_bowls", fresh_thread=True) == []
+    assert disabled.initial_context_loaded
 
 
 def main() -> int:

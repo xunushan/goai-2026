@@ -32,5 +32,9 @@ The default endpoint is `http://127.0.0.1:8765`. The Bridge starts
 `codex app-server --stdio` as a child process. Run `bash tests/run_all.sh` for
 offline verification.
 
+See [`docs/configuration-guide.md`](docs/configuration-guide.md) for the policy
+experience switch, model/reasoning settings, timeouts, image window and motion
+parameters.
+
 The Bridge may run beside a policy server or on another host reached through an
 SSH tunnel. The HTTP protocol remains the same in both deployments.

@@ -37,7 +37,10 @@ MAX_TOTAL_IMAGE_BYTES = 12 * 1024 * 1024
 _ARM_FIELDS = ("position", "orientation", "gripper")
 _TASK_FIELDS = ("name", "instruction", "guidance")
 _BUDGET_FIELDS = ("max_decisions", "max_sim_steps", "remaining_decisions", "remaining_steps")
-_REQUIRED = ("episode_id", "request_id", "step_id", "turn_index", "task", "budget", "observation", "images")
+_REQUIRED = (
+    "episode_id", "request_id", "step_id", "turn_index", "task", "budget",
+    "use_experience", "observation", "images",
+)
 
 
 class PolicyValidationError(ValueError):
@@ -90,6 +93,7 @@ class Observation:
     turn_index: int
     task: dict[str, Any]
     budget: dict[str, int]
+    use_experience: bool
     arms: dict[str, ArmObservation]
     feedback: tuple[str, ...]
     images: tuple[ImageInput, ...]
@@ -133,6 +137,9 @@ class Observation:
         if parsed_budget["max_decisions"] < 1 or parsed_budget["max_sim_steps"] < 1:
             raise PolicyValidationError("budget limits must be at least 1")
 
+        if type(value["use_experience"]) is not bool:
+            raise PolicyValidationError("use_experience must be boolean")
+
         observation = value["observation"]
         if not isinstance(observation, dict) or set(observation) != set(ARMS):
             raise PolicyValidationError("observation must contain exactly left and right")
@@ -158,6 +165,7 @@ class Observation:
             turn_index=_count(value["turn_index"], "turn_index"),
             task=parsed_task,
             budget=parsed_budget,
+            use_experience=value["use_experience"],
             arms={arm: _parse_arm(observation[arm], arm) for arm in ARMS},
             feedback=tuple(feedback),
             images=parsed_images,

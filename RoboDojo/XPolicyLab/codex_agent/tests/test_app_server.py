@@ -73,6 +73,7 @@ def observation(turn: int) -> Observation:
             "remaining_decisions": 9 - turn,
             "remaining_steps": 99 - turn,
         },
+        use_experience=True,
         arms={"left": left, "right": right},
         feedback=(f"feedback-{turn}",),
         images=(ImageInput("cam_head", "image/jpeg", b"jpeg"),),

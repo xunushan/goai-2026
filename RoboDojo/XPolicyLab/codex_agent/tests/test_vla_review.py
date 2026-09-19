@@ -26,6 +26,7 @@ def packet() -> dict:
         "episode_id": "ep", "request_id": "req", "step_id": 0, "turn_index": 0,
         "task": {"name": "task", "instruction": "do task", "guidance": []},
         "budget": {"max_decisions": 10, "max_sim_steps": 20, "remaining_decisions": 9, "remaining_steps": 20},
+        "use_experience": True,
         "observation": {"left": arm, "right": arm}, "feedback": [],
         "images": [{"name": "cam_head", "mime": "image/jpeg", "b64": base64.b64encode(b"\xff\xd8\xffx").decode()}],
         "vla_review": {
