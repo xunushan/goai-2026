@@ -1024,7 +1024,11 @@ class Model(ModelTemplate):
             )
         self._request_index += 1
         if self.codex_reviewer is not None:
-            return self.codex_reviewer.review(self._raw_by_env[resolved_env_idx], actions)
+            observation = self._raw_by_env[resolved_env_idx]
+            try:
+                return self.codex_reviewer.review(observation, actions)
+            except Exception as exc:
+                return self.codex_reviewer.hold_after_error(observation, exc)
         return actions
 
     def _batch_infer(self, encoded_obs_list, generators):

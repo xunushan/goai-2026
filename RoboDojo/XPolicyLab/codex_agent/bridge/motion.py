@@ -182,7 +182,16 @@ def interpolate_chunk(
     last = chunk[-1]
     last["left_ee_joint_state"] = np.asarray([left_plan.target_gripper], dtype=np.float32)
     last["right_ee_joint_state"] = np.asarray([right_plan.target_gripper], dtype=np.float32)
-    for _ in range(max(0, int(config.settle_steps))):
-        chunk.append({key: value.copy() for key, value in last.items()})
+    changed = any(
+        (
+            np.linalg.norm(plan.target_pos - plan.start_pos) > 1e-12
+            or quat_angle_between(plan.target_quat, plan.start_quat) > 1e-12
+            or abs(plan.target_gripper - plan.start_gripper) > 1e-12
+        )
+        for plan in (left_plan, right_plan)
+    )
+    if changed:
+        for _ in range(max(0, int(config.settle_steps))):
+            chunk.append({key: value.copy() for key, value in last.items()})
 
     return chunk

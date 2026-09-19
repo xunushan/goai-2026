@@ -51,6 +51,9 @@ def main() -> int:
     eef = validate_response({"mode": "eef", "left": {"position": "keep", "orientation": "keep", "gripper": "keep"}, "right": {"position": [0.01, 0, 0], "orientation": "keep", "gripper": "keep"}, "note": "align", "phase": "align"}, vla_horizon=2)
     chunk, continuation = _synthesise(observation, eef, motion)
     assert len(chunk) == 2 and continuation["verify_previous"] is False
+    keep = validate_response({"mode": "eef", "left": {"position": "keep", "orientation": "keep", "gripper": "keep"}, "right": {"position": "keep", "orientation": "keep", "gripper": "keep"}, "note": "hold", "phase": "wait"}, vla_horizon=2)
+    chunk, _ = _synthesise(observation, keep, MotionConfig(settle_steps=3))
+    assert len(chunk) == 1
     print("vla-review tests passed")
     return 0
 

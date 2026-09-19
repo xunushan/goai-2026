@@ -64,6 +64,23 @@ def _summary(chunk: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def _hold(observation: dict[str, Any]) -> list[dict[str, np.ndarray]]:
+    """One measured-state action; no interpolation or settle points."""
+    state = observation["state"]
+    return [{
+        "left_ee_pose": np.asarray(state["left_ee_pose"], dtype=np.float32).reshape(7),
+        "left_ee_joint_state": np.asarray(
+            [np.asarray(state["left_ee_joint_state"]).reshape(-1)[-1]],
+            dtype=np.float32,
+        ),
+        "right_ee_pose": np.asarray(state["right_ee_pose"], dtype=np.float32).reshape(7),
+        "right_ee_joint_state": np.asarray(
+            [np.asarray(state["right_ee_joint_state"]).reshape(-1)[-1]],
+            dtype=np.float32,
+        ),
+    }]
+
+
 class CodexReviewer:
     def __init__(self, config: dict[str, Any]) -> None:
         self.tasks = json.loads(TASKS_FILE.read_text(encoding="utf-8"))
@@ -101,6 +118,18 @@ class CodexReviewer:
         self.task_name = task_name
         self.task = self.tasks[task_name]
 
+    def hold_after_error(
+        self, observation: dict[str, Any], error: Exception
+    ) -> list[dict[str, np.ndarray]]:
+        self.continuation = None
+        self.steps += 1
+        print(
+            f"[xvla_agent][codex] review failed; holding measured pose for "
+            f"one step: {type(error).__name__}: {error}",
+            flush=True,
+        )
+        return _hold(observation)
+
     def review(self, observation: dict[str, Any], actions: list[dict[str, Any]]) -> list[dict[str, np.ndarray]]:
         self._resolve_task(observation)
         assert self.task_name is not None and self.task is not None
@@ -132,9 +161,14 @@ class CodexReviewer:
         }
         if self.continuation is not None:
             request["continuation"] = self.continuation
-        result = self.bridge.decide(request, timeout_s=self.timeout_s)
-        if not result.ok or not result.action_chunk:
-            raise RuntimeError(f"Codex Bridge failed: {result.error_kind}: {result.error}")
+        try:
+            result = self.bridge.decide(request, timeout_s=self.timeout_s)
+            if not result.ok or not result.action_chunk:
+                raise RuntimeError(
+                    f"{result.error_kind}: {result.error}"
+                )
+        except Exception as exc:
+            return self.hold_after_error(observation, exc)
         self.continuation = result.continuation
         self.steps += len(result.action_chunk)
         return [{key: np.asarray(value, dtype=np.float32) for key, value in action.items()} for action in result.action_chunk]
