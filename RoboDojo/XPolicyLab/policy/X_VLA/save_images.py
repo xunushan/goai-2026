@@ -140,6 +140,8 @@ class EpisodeImageWriter:
         self._episode_seq = 0
         self._synth_episode: str | None = None
         self._last_request_index: int | None = None
+        # env_idx → (任务名, episode)，最近一次落盘用了什么（_log_observation 读它）
+        self._last_by_env: dict[int, tuple[str, str]] = {}
         self._shape_warned = False
         self._write_failed = False
 
@@ -198,9 +200,12 @@ class EpisodeImageWriter:
                 flush=True,
             )
 
-        run_dir = self._dir_for(task_name or self.task_name)
+        episode_task = task_name or self.task_name
+        run_dir = self._dir_for(episode_task)
         episode = self._resolve_episode(episode_idx, request_index, run_dir)
         episode_key = f"env{int(env_idx)}_{episode}"
+        # 供日志显示：这个 env 这次落进了哪个任务、哪个 episode（模型日志要打这两个值）
+        self._last_by_env[int(env_idx)] = (str(episode_task), episode)
         frame = self._frame_index.get(episode_key, 0)
         episode_dir = run_dir / episode_key
         written: list[Path] = []
@@ -211,11 +216,21 @@ class EpisodeImageWriter:
         self._frame_index[episode_key] = frame + 1
         return written
 
+    def last_context(self, env_idx: int) -> tuple[str | None, str | None]:
+        """该 env 最近一次落盘的 (任务名, episode 编号)，给日志用。
+
+        还没落过盘（例如 save_images 关掉、或本次是该 env 的第一帧且落盘先于日志失败）
+        时任务名退回配置的 task_name、episode 为 None，日志不会因此变成空白。
+        """
+        task_name, episode = self._last_by_env.get(int(env_idx), (None, None))
+        return (task_name if task_name is not None else self.task_name, episode)
+
     def reset(self) -> None:
         """episode 边界：帧号归零、下一次落盘换一个新编号（已写文件不动）。"""
         self._frame_index = {}
         self._synth_episode = None
         self._last_request_index = None
+        self._last_by_env = {}
 
     def _resolve_episode(
         self, episode_idx: Any, request_index: int | None, run_dir: Path

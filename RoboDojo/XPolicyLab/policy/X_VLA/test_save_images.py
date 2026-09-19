@@ -361,6 +361,31 @@ def test_task_name_resolver_sticks_across_frames():
     assert resolver.resolve({"instruction": "Stack the bowls on the table."}) == "stack_bowls"
 
 
+def test_last_context_reports_task_and_episode():
+    """日志用：落盘后能问出这个 env 用了哪个任务名、哪个 episode。"""
+    root = Path(tempfile.mkdtemp()) / "sim_images"
+    writer = _writer(root, task_name="stack_blocks", camera_names=["cam_head"])
+    # 没落过盘：任务名退回配置的那个，episode 为空
+    assert writer.last_context(0) == ("stack_blocks", None)
+
+    writer.save_observation(
+        episode_idx=None, env_idx=0, images=[_IMG], request_index=0,
+        task_name="stack_bowls",
+    )
+    task_name, episode = writer.last_context(0)
+    assert task_name == "stack_bowls" and episode.startswith("ep001_"), (task_name, episode)
+    assert (root / f"20260919_101112_stack_bowls" / f"env0_{episode}").is_dir()
+    # 另一个 env、没给 task_name → 兜底任务名
+    writer.save_observation(
+        episode_idx=None, env_idx=1, images=[_IMG], request_index=0
+    )
+    assert writer.last_context(1) == ("stack_blocks", writer.last_context(1)[1])
+    assert writer.last_context(0)[1] == episode  # 同一次请求里的两个 env 共用一个编号
+
+    writer.reset()
+    assert writer.last_context(0) == ("stack_blocks", None)
+
+
 def test_task_name_resolver_reports_unmapped_once():
     """未登记指令只提示一次；空表 / 非 dict 观测一律返回 None（关掉图片落盘时即如此）。"""
     seen = []

@@ -745,6 +745,9 @@ class Model(ModelTemplate):
     ) -> None:
         if not self.log_io:
             return
+        # 真机不发 task_name / episode_idx，这两个字段要打**服务端算出来的**那份，
+        # 否则日志里永远是 null、看不出这张图落进哪个任务/哪个 episode。
+        task_name, episode = self._image_writer.last_context(env_idx)
 
         def finite_list(value: Any) -> list[float | None]:
             array = np.asarray(value, dtype=np.float32).reshape(-1)
@@ -772,8 +775,9 @@ class Model(ModelTemplate):
             "event": "client_observation",
             "request": self._request_index,
             "env_idx": env_idx,
-            "episode_idx": observation.get("episode_idx"),
-            "task_name": observation.get("task_name"),
+            # 落盘实际用的任务名与 episode 编号（客户端不发的就由服务端算）
+            "task_name": task_name,
+            "episode": episode,
             "instruction": str(observation.get("instruction", ""))[:200],
             "model_prompt": resolve_prompt(
                 encoded_observation,
@@ -921,9 +925,9 @@ class Model(ModelTemplate):
             )
         encoded_obs = self._latest_by_env[resolved_env_idx]
         raw_obs = self._raw_by_env[resolved_env_idx]
-        self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
-        # 图片落盘与推理同源：存的就是紧接着喂进模型的那份图像
-        # （deploy.yml save_images.enabled=false 时零开销直接返回）。
+        # 图片落盘在日志之前：任务名与 episode 编号都是落盘时定下的（指令→task_name
+        # 的映射、request 归零切 episode），日志要打这两个值。落盘与推理同源：存的就是
+        # 紧接着喂进模型的那份图像（deploy.yml save_images.enabled=false 时零开销直接返回）。
         # request_index 传当前请求号（_finalize_chunk 末尾才自增，所以本次请求的
         # 首个 env 落盘时它仍是本 episode 的第 0/1/2… 次）；真机客户端不发
         # episode_idx，落盘器靠它归零来切 episode 编号。
@@ -934,6 +938,7 @@ class Model(ModelTemplate):
             request_index=self._request_index,
             task_name=self._task_name_for(raw_obs),
         )
+        self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
 
@@ -1020,13 +1025,13 @@ class Model(ModelTemplate):
                 mode=self._hysteresis_cfg.mode,
             )
         if self.log_io:
+            task_name, episode = self._image_writer.last_context(resolved_env_idx)
             summary = {
                 "event": "server_actions",
                 "request": self._request_index,
                 "env_idx": resolved_env_idx,
-                "episode_idx": self._raw_by_env[resolved_env_idx].get(
-                    "episode_idx"
-                ),
+                "task_name": task_name,
+                "episode": episode,
                 "model_chunk_size": int(raw_chunk.shape[0]),
                 "execute_steps": int(executed_chunk.shape[0]),
                 "gripper_mode": self.gripper_mode,
