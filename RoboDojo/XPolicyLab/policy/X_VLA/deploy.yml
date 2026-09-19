@@ -91,9 +91,8 @@ save_images:
 # schema，instruction: task_desc），真机评测必须映射到它才与训练同域。
 # 本段与 <仓库根>/configs/real_task_instruction.json 严格同步：那份 JSON 是训练侧
 # 唯一源（process_data.py 按 task_id 读取），改一处必须同步改另一处。
-# 末尾 6 条 slug 兜底：万一平台不发 instruction、服务端回落到 default_prompt
-# （model.py: default_prompt = prompt 配置或 task_name），则按启动时传入的 task_name
-# 命中——那种情况下 task_name 必须是数据目录 slug。平台正常发指令时这几条用不到。
+# 若平台实际不发 instruction（服务端回落到 default_prompt = prompt 配置或 task_name），
+# 本表不会命中，日志里的 model_prompt 会直接暴露成裸 task_name —— 届时按日志原文补 key。
 task_prompt_map:
   "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
   "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
@@ -105,12 +104,6 @@ task_prompt_map:
   "Stack the bowls on the table.": "Nest all three bowls upright at the center of the table."
   "Stand the bottle upright.": "Place all three bottles stably upright on the table."
   "Insert the charger plug into the power strip, then connect the charging cable to the plug.": "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
-  fill_pen_holder: "Pick up and hold the pen holder upright, insert all three pens one by one, then place the filled holder on the table."
-  put_objects_into_basket: "Place all objects on the table into the basket one by one."
-  stack_and_cover_blocks: "Stack all three blocks into one vertical stack, then place the cup over the entire stack."
-  stack_bowls: "Nest all three bowls upright at the center of the table."
-  stand_up_bottles: "Place all three bottles stably upright on the table."
-  insert_charger: "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
 log_io: true
