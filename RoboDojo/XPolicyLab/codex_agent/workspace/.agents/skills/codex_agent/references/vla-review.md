@@ -25,18 +25,20 @@ release visually; do not infer success from a gripper command or planned path.
 
 ## Reply
 
-Choose exactly one JSON object, without Markdown or surrounding prose.
+Choose exactly one JSON object, without Markdown or surrounding prose. The
+object holds the decision under `decision` -- that wrapper is what the output
+schema validates, and the object inside it is the decision.
 
 VLA full/prefix:
 
 ```json
-{"mode":"vla","vla_steps":1,"verify_next":false,"note":"brief evidence","phase":"approach"}
+{"decision":{"mode":"vla","vla_steps":1,"verify_next":false,"note":"brief evidence","phase":"approach"}}
 ```
 
 EEF correction:
 
 ```json
-{"mode":"eef","left":{"position":"keep","orientation":"keep","gripper":"keep"},"right":{"position":"keep","orientation":"keep","gripper":"keep"},"note":"brief evidence","phase":"align"}
+{"decision":{"mode":"eef","left":{"position":"keep","orientation":"keep","gripper":"keep"},"right":{"position":"keep","orientation":"keep","gripper":"keep"},"note":"brief evidence","phase":"align"}}
 ```
 
 `note` should contain only the decisive evidence and purpose, preferably within
