@@ -4,7 +4,7 @@
 数据源是 ``workspace/output/<episode_id>/rollout.jsonl``（``bridge/record.py``
 每行一次请求）。归属判据照抄 bridge 的路由，不是事后猜的：
 
-* **放行路径**（``bridge.py:416``）：``vla_review`` 非空、不是
+* **放行路径**（``bridge.py:448``）：``vla_review`` 非空、不是
   ``verify_previous``、且 chunk 内夹爪变化没超过 ``gripper_change_threshold``
   —— 直接吃下整个 VLA chunk，不问 Codex。这种行 ``ok=True`` 且
   ``decision=None``（``turn_record`` 的默认值）、延迟≈0。
@@ -14,6 +14,21 @@
   - ``gripper_change``：chunk 内夹爪 max-min 超过阈值，即这一段里含抓取/释放。
 * **失败行同样 ``decision=None``**，只能靠 ``ok=False`` 与放行区分。失败不写
   continuation，所以它后面那行按 ``gripper_change`` 归类。
+
+**2026-09-20 起有一处口径变化**（``e974d55`` gate follow-up review on executed
+gripper events）：bridge 现在只在「模型要求 ``verify_next`` **且** 实际下发的
+prefix 里真有夹爪变化」时才把 ``verify_previous`` 传回去（``bridge.py:345``
+``_executed_prefix_has_gripper_change``，判据是被执行的那段 chunk，不是整个
+proposal）。所以此后：
+
+* 本工具给出的 ``verify_previous`` 是**模型要求核验**的次数，不等于实际按核验
+  路由的次数——被 gate 压掉的那些（模型要求了、但下发的 prefix 只是移 EEF 或
+  提前停住）实际按 ``gripper_change`` 走，报告里会单独提示这一批的条数；
+* ``gripper_change`` 与放行数、以及 Codex 调用总数不受影响（``verify_next``
+  为假时本就没有核验可言，那部分分类是精确的）；
+* rollout 记录里没有 chunk（``decision`` 只有 ``mode/note/phase/verify_next/
+  vla_steps``，``observation_state`` 只有两臂位姿与夹爪），所以这是个**不可
+  事后复原的**信息——要精确就得让 bridge 把下发的 continuation 也写进记录。
 
 ``policy_timeout`` 是 bridge 自己的墙钟到期（``app_server.py:449``：新线程首轮
 ``--timeout-first-turn-s``，热轮次 ``--timeout-s``），不是接口报错。每次超时在
@@ -41,6 +56,11 @@ PASS = "放行_不问Codex"
 GRIPPER = "gripper_change"
 VERIFY = "verify_previous"
 
+# e974d55 "gate follow-up review on executed gripper events" 的提交时刻（+0800 10:34:32）。
+# 此前的 rollout 里 verify_previous 就是实际路由；此后是「模型要求核验」，其中一部分
+# 被 gate 改判成 gripper_change，记录里无法复原，只报条数。见模块 docstring。
+GATE_UTC = "2026-09-20T02:34:32"
+
 
 def analyze(path: Path) -> dict:
     """读一个 episode 的 rollout.jsonl，返回逐行归属与汇总。"""
@@ -50,6 +70,7 @@ def analyze(path: Path) -> dict:
     failures: collections.Counter = collections.Counter()
     latencies: list[float] = []
     prev_verify = False
+    verify_after_gate = 0
 
     for row in rows:
         decision = row.get("decision")
@@ -60,6 +81,8 @@ def analyze(path: Path) -> dict:
             prev_verify = False
         else:
             reason = VERIFY if prev_verify else GRIPPER
+            if reason == VERIFY and str(row.get("recorded_at") or "")[:19] >= GATE_UTC:
+                verify_after_gate += 1
             # 只认成功的决策：失败行没有 continuation 可继承
             prev_verify = bool(decision.get("verify_next")) if isinstance(decision, dict) else False
             if ok:
@@ -80,7 +103,8 @@ def analyze(path: Path) -> dict:
             }
         )
     return {"episode": path.parent.name, "rows": entries, "reasons": reasons,
-            "failures": failures, "latencies": latencies}
+            "failures": failures, "latencies": latencies,
+            "verify_after_gate": verify_after_gate}
 
 
 def report(result: dict) -> str:
@@ -93,6 +117,12 @@ def report(result: dict) -> str:
             f"{entry['error_kind'] or ''} {(entry['error'] or '')[:60]}"
         )
     lines.append(f"  -- 归属: {dict(result['reasons'])}")
+    if result["verify_after_gate"]:
+        lines.append(
+            f"  -- ⚠️ 其中 verify_previous {result['verify_after_gate']} 行发生在 e974d55 "
+            f"（{GATE_UTC}Z）之后：那是模型**要求**核验的次数，被 gate 压掉的那部分实际走 "
+            f"gripper_change，记录里无法区分（见 docstring）"
+        )
     lines.append(f"  -- 失败: {dict(result['failures']) or '无'}")
     latencies = sorted(result["latencies"])
     if latencies:
