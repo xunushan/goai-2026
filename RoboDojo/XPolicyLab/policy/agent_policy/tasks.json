@@ -1,5 +1,4 @@
 {
-  "_comment": "stack_bowls step_budget 暂改 800 用于仿真测试（受 stack_bowls step_lim=800 截断），正式需改回 1220；plug_in_charger 属非真机任务，卡片已移除。",
   "fill_pen_holder": {
     "instruction": "Pick up the pen holder and place all the pens into it.",
     "guidance": [],
@@ -21,7 +20,7 @@
   "stack_bowls": {
     "instruction": "Stack the bowls on the table.",
     "guidance": [],
-    "step_budget": 800,
+    "step_budget": 1220,
     "max_decisions": 100
   },
   "stand_up_bottles": {
