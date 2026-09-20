@@ -56,7 +56,11 @@ codex_agent/
 
 策略请求中的 `task.name` 必须与索引键完全一致。没有匹配项时不注入 demo，也不阻断策略调用。
 
-`views` 按关键帧的 `stage` 选择图片：优先使用同名 stage 配置，否则使用 `default`。Python 代码不维护 `grasp/place` 等业务规则，只校验配置中的相机属于固定观测协议且没有重复。
+`views` 按关键帧的 `stage` 选择图片：优先使用同名 stage 配置，否则使用 `default`。
+随后 render 根据 `roles` 剔除 idle 手臂的腕部相机：`left=idle` 不发送
+`cam_left_wrist`，`right=idle` 不发送 `cam_right_wrist`；`cam_high` 不受影响。
+双臂均 active 的协作阶段仍可发送两路腕部图。Python 代码不维护
+`grasp/place` 等任务阶段规则，只执行这条通用的角色过滤并校验相机配置。
 
 ## `demo.json`
 
@@ -97,6 +101,7 @@ Task name: stack_bowls
 Goal: ...
 Reference only: reuse stage order, arm roles, grasp orientation and gripper timing;
 adapt positions to the current images and measured state.
+Image selection omits the wrist camera of any arm marked idle.
 ```
 
 每个关键帧生成一个简短块：

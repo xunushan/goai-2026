@@ -36,21 +36,20 @@ def test_exact_task_selection_and_compact_camera_policy() -> None:
     assert "[EXAMPLE 1/5 | approach | frame 24]" in text
     assert "[EXAMPLE 5/5 | home | frame 366]" in text
     assert '"action"' not in text
-    # approach/transport/home use cam_high; grasp/place retain all three views.
-    assert len(images) == 9
+    # Grasp/place request both wrists, but the idle left wrist is omitted.
+    assert len(images) == 7
     assert all(item["url"].startswith("data:image/jpeg;base64,") for item in images)
     labels = [item["text"] for item in items if item["type"] == "text" and item["text"].startswith("Historical image")]
     assert labels == [
         "Historical image 1: cam_high",
         "Historical image 2: cam_high",
-        "Historical image 2: cam_left_wrist",
         "Historical image 2: cam_right_wrist",
         "Historical image 3: cam_high",
         "Historical image 4: cam_high",
-        "Historical image 4: cam_left_wrist",
         "Historical image 4: cam_right_wrist",
         "Historical image 5: cam_high",
     ]
+    assert "Image selection omits the wrist camera of any arm marked idle." in text
     assert library.index["stack_bowls"]["views"] == {
         "default": ("cam_high",),
         "grasp": ("cam_high", "cam_left_wrist", "cam_right_wrist"),
@@ -109,7 +108,7 @@ def test_experience_is_added_only_when_a_thread_opens() -> None:
         "task_name": "stack_bowls",
         "demo": "stack_bowls/demo.json",
         "keyframes": 5,
-        "images": 9,
+        "images": 7,
     }
     assert state.thread_prefix("stack_bowls", fresh_thread=False) == []
 

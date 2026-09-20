@@ -43,7 +43,7 @@ library does not cause it to be loaded.
 When the first Codex thread opens, Bridge stdout prints one audit line:
 
 ```text
-[bridge][experience] episode=... task=stack_bowls status=loaded demo=stack_bowls/demo.json keyframes=5 images=9
+[bridge][experience] episode=... task=stack_bowls status=loaded demo=stack_bowls/demo.json keyframes=5 images=7
 ```
 
 `status` is one of `disabled`, `no_match`, `loaded`, or `error`. The same object

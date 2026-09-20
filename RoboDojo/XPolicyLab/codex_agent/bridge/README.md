@@ -238,8 +238,9 @@ rerenders the demo and loses no episode context.
 
 Each task directory keeps the full JSON and every source image. The shipped
 `stack_bowls` configuration uses only `cam_high` by default and overrides `grasp`
-and `place` to use all three cameras. This relation lives in `index.json`, not in
-Python. Images are passed to App Server as data URLs; filesystem paths never enter
+and `place` to allow wrist views. During rendering, a wrist view is omitted when
+that arm's role is `idle`; bilateral active stages retain both wrists. Stage-to-view
+selection lives in `index.json`; Python only applies this role filter. Images are passed to App Server as data URLs; filesystem paths never enter
 the model context. Rendered App Server items are cached after their first load;
 thread rotation reuses that in-memory result instead of reading and rendering the
 demo again. Use

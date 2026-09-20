@@ -67,6 +67,7 @@ def render_demo_text(demo: dict[str, Any], task_name: str) -> list[str]:
             f"Goal: {demo['task']}",
             "Reference only: reuse stage order, arm roles, grasp orientation and gripper timing; "
             "adapt positions to the current images and measured state.",
+            "Image selection omits the wrist camera of any arm marked idle.",
             f"State layout: {demo.get('state_layout', 'position xyz, quaternion wxyz, gripper')}",
             "State is the measured keyframe state. Decision is the recorded command associated "
             "with that keyframe; it is historical evidence, not a pending command.",
@@ -113,7 +114,14 @@ def _compile_demo(
     for index, (frame, text_block) in enumerate(zip(frames, text_blocks[1:-1]), 1):
         items.append({"type": "text", "text": text_block})
         images = frame["images"]
-        selected_names = views.get(frame["stage"], views["default"])
+        selected_names = tuple(
+            name
+            for name in views.get(frame["stage"], views["default"])
+            if not (
+                name == "cam_left_wrist" and frame["roles"]["left"] == "idle"
+                or name == "cam_right_wrist" and frame["roles"]["right"] == "idle"
+            )
+        )
         selected_keys = tuple(f"observation.images.{name}" for name in selected_names)
         selected = [(camera, images[camera]) for camera in selected_keys]
         for camera, relative in selected:
