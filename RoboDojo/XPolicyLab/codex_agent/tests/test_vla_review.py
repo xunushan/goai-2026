@@ -50,10 +50,16 @@ def main() -> int:
     quiet_packet["vla_review"]["chunk"]["left"]["gripper"] = [1.0, 0.95]
     quiet_packet["vla_review"]["chunk"]["right"]["gripper"] = [1.0, 0.95]
     assert not _has_gripper_change(Observation.parse(quiet_packet).vla_review)
-    vla = validate_response({"decision": {"mode": "vla", "vla_steps": 1, "verify_next": True, "note": "ok", "phase": "grasp"}}, vla_horizon=2)
+    vla = validate_response({"decision": {"mode": "vla", "vla_steps": 2, "verify_next": True, "note": "ok", "phase": "grasp"}}, vla_horizon=2)
     motion = MotionConfig(settle_steps=0)
     chunk, continuation = _synthesise(observation, vla, motion)
-    assert len(chunk) == 1 and continuation["verify_previous"] is True
+    assert len(chunk) == 2 and continuation["verify_previous"] is True
+    before_event = validate_response({"decision": {"mode": "vla", "vla_steps": 1, "verify_next": True, "note": "approach only", "phase": "approach"}}, vla_horizon=2)
+    chunk, continuation = _synthesise(observation, before_event, motion)
+    assert len(chunk) == 1 and continuation["verify_previous"] is False
+    no_verify = validate_response({"decision": {"mode": "vla", "vla_steps": 2, "verify_next": False, "note": "no follow-up", "phase": "grasp"}}, vla_horizon=2)
+    _, continuation = _synthesise(observation, no_verify, motion)
+    assert continuation["verify_previous"] is False
     eef = validate_response({"decision": {"mode": "eef", "left": {"position": "keep", "orientation": "keep", "gripper": "keep"}, "right": {"position": [0.01, 0, 0], "orientation": "keep", "gripper": "keep"}, "note": "align", "phase": "align"}}, vla_horizon=2)
     chunk, continuation = _synthesise(observation, eef, motion)
     assert len(chunk) == 2 and continuation["verify_previous"] is False

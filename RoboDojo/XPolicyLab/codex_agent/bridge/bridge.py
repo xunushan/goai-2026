@@ -342,6 +342,27 @@ def _has_gripper_change(review: dict[str, Any]) -> bool:
     )
 
 
+def _executed_prefix_has_gripper_change(
+    observation: Observation, steps: int
+) -> bool:
+    """Whether the returned VLA prefix commands a new gripper event.
+
+    Include the current measured opening so a one-step prefix whose first action
+    closes or opens is still detected. This checks what will actually be sent to
+    the simulator, not an unexecuted suffix of the reviewed proposal.
+    """
+    assert observation.vla_review is not None
+    threshold = float(observation.vla_review["gripper_change_threshold"])
+    for side in ("left", "right"):
+        values = [
+            observation.arms[side].gripper,
+            *observation.vla_review["chunk"][side]["gripper"][:steps],
+        ]
+        if max(values) - min(values) > threshold:
+            return True
+    return False
+
+
 def _synthesise(
     observation: Observation,
     decision: dict[str, Any],
@@ -350,7 +371,18 @@ def _synthesise(
     remaining = observation.budget["remaining_steps"]
     if observation.vla_review is not None and decision.get("mode") == "vla":
         chunk = _vla_chunk(observation.vla_review, min(decision["vla_steps"], remaining))
-        continuation = {"previous_request_id": observation.request_id, "verify_previous": decision["verify_next"]}
+        # The model may request verification only for a grasp/release command
+        # that this selected prefix really executes. This safely terminates
+        # repeated verify_previous turns that merely move an EEF or stop before
+        # the proposed gripper event.
+        verify_previous = bool(
+            decision["verify_next"]
+            and _executed_prefix_has_gripper_change(observation, len(chunk))
+        )
+        continuation = {
+            "previous_request_id": observation.request_id,
+            "verify_previous": verify_previous,
+        }
         return chunk, continuation
     parsed = parse_decision(
         decision,
