@@ -281,13 +281,11 @@ def output_schema(vla_review: bool = False) -> dict[str, Any]:
     separate objects on purpose: a shared dict edited by one consumer would
     silently retype the other arm's schema.
 
-    The root is a typed object carrying ``anyOf`` rather than a bare
-    ``{"oneOf": [...]}``: the DeepSeek backend (``wire_api = "responses"``)
-    requires ``type``/``anyOf``/``$ref`` on every node and rejects a root that is
-    an object without properties. Naming ``mode`` at the root alongside the
-    branches keeps the union exact, because both branches set
-    ``additionalProperties: false`` and pin ``mode`` to a different value, so no
-    response can satisfy both.
+    VLA review wraps its union in a required ``decision`` property. DeepSeek
+    requires a typed root with declared properties, while OpenAI strict output
+    forbids a root-level union and requires ``additionalProperties: false`` on
+    every object. The bridge unwraps ``decision`` before execution, so its
+    internal decision and rollout-record formats stay flat.
 
     The adapter validates the same exact shape again before execution.
     """
@@ -310,22 +308,26 @@ def output_schema(vla_review: bool = False) -> dict[str, Any]:
     eef["properties"]["mode"] = {"type": "string", "enum": ["eef"]}
     return {
         "type": "object",
-        "properties": {"mode": {"type": "string", "enum": ["vla", "eef"]}},
-        "required": ["mode"],
-        "anyOf": [
-            {
-                "type": "object", "additionalProperties": False,
-                "required": ["mode", "vla_steps", "verify_next", "note", "phase"],
-                "properties": {
-                    "mode": {"type": "string", "enum": ["vla"]},
-                    "vla_steps": {"type": "integer", "minimum": 1},
-                    "verify_next": {"type": "boolean"},
-                    "note": {"type": "string", "minLength": 1},
-                    "phase": {"type": "string", "minLength": 1, "maxLength": 10},
-                },
-            },
-            eef,
-        ]
+        "additionalProperties": False,
+        "required": ["decision"],
+        "properties": {
+            "decision": {
+                "anyOf": [
+                    {
+                        "type": "object", "additionalProperties": False,
+                        "required": ["mode", "vla_steps", "verify_next", "note", "phase"],
+                        "properties": {
+                            "mode": {"type": "string", "enum": ["vla"]},
+                            "vla_steps": {"type": "integer", "minimum": 1},
+                            "verify_next": {"type": "boolean"},
+                            "note": {"type": "string", "minLength": 1},
+                            "phase": {"type": "string", "minLength": 1, "maxLength": 10},
+                        },
+                    },
+                    eef,
+                ]
+            }
+        },
     }
 
 
@@ -339,6 +341,12 @@ def validate_response(value: Any, *, vla_horizon: int | None = None) -> dict[str
     """
     if not isinstance(value, dict):
         raise PolicyValidationError("the reply must be a JSON object")
+    if vla_horizon is not None:
+        if set(value) != {"decision"} or not isinstance(value["decision"], dict):
+            raise PolicyValidationError(
+                "a VLA-review reply must contain exactly one decision object"
+            )
+        value = value["decision"]
     if vla_horizon is not None and value.get("mode") == "vla":
         wanted = {"mode", "vla_steps", "verify_next", "note", "phase"}
         if set(value) != wanted:
