@@ -32,7 +32,10 @@ import collections
 import json
 from pathlib import Path
 
-DEFAULT_ROOT = Path(__file__).resolve().parents[1] / "workspace" / "output"
+DEFAULT_ROOT = (
+    Path(__file__).resolve().parents[1]
+    / "RoboDojo/XPolicyLab/codex_agent/workspace/output"
+)
 
 PASS = "放行_不问Codex"
 GRIPPER = "gripper_change"
