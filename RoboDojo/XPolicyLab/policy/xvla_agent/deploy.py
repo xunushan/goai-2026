@@ -17,10 +17,15 @@ def eval_one_episode(TASK_ENV, model_client):
             model_client.call(func_name="update_obs", obs=obs)
 
 def eval_one_episode_batch(TASK_ENV, model_client):
-    """批评估：每个 env 独立消费自己的动作缓冲并在耗尽后重规划。
+    """批评估：每个 env 按自己的动作缓冲独立重规划。
 
-    take_action_batch 要求仍在运行的 env 同步执行一步，因此这里按 env 保存 Bridge
-    返回的 chunk；某个缓冲先耗尽时只为该 env 请求新动作，不截断其他 env 的剩余动作。
+    take_action_batch 要求各 env 同步走一步，但每个 env 的 chunk 一旦耗尽就该重新
+    推理，不能按「批内统一 chunk 长度」推进。这里给每个 env 维护一个动作缓冲，缓冲
+    耗尽的 env 才重新推理，其余 env 继续消费自己的剩余动作。
+
+    当前服务端每次返回的动作数恒为 actions_per_chunk，所有缓冲同时耗尽，行为与
+    「按批内统一长度推进」的旧实现逐调用一致（test_deploy_batch.py 逐条比对了动作
+    序列与推理调用序列）。
 
     注意 get_obs_batch 承担 render / capture / 视频写盘，必须每步对全部 running env
     调用（跳过中间步的刷新会破坏精度，见 X_VLA mid_step_obs 三档的教训）。

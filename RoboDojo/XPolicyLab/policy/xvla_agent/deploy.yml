@@ -6,7 +6,7 @@ bench_name: null
 task_name: null
 env_cfg_type: null
 seed: null
-eval_batch: false
+eval_batch: true
 
 checkpoint_num: null
 obs_transform_pipeline: null
@@ -31,7 +31,7 @@ domain_id: 0
 steps: 10
 # Flow-noise 的评测复现 seed：相同 (layout, policy, ckpt) 可复现轨迹。
 # 正式测评前删除本行（或置 null）即恢复原始随机噪声，无需改代码。
-policy_seed: 42
+policy_seed: null
 # The official RoboDojo ckpt-100000 predicts and executes all 30 actions before
 # requesting a fresh observation. Keep 30 for official-aligned evaluation.
 actions_per_chunk: 30
@@ -45,6 +45,19 @@ actions_per_chunk: 30
 # horizon 默认取 ckpt 的 num_actions（30）即整段长度，通常无需配置；仅需缩小
 # 平滑窗口时才单独设置 temporal_ensemble_horizon（须在 [2, 30]）。
 temporal_ensemble_coeff: null
+# 闭环自锁临时保护（默认关闭）。连续 3 次重规划仍停留在 12 mm 范围内，且某臂
+# 连续 2 个 chunk 都出现「首点反向跳 2~15 mm、随后至少向前 3 mm、夹角 cosine<=-0.8」
+# 时，只平移该臂整条 xyz 轨迹使首点对齐当前实测位置。相对轨迹、旋转和夹爪不变；
+# 触发详情写入 server_actions.self_lock_guard。真机临时解锁时设 enabled: true。
+self_lock_guard:
+  enabled: false
+  history_replans: 3
+  trigger_count: 2
+  stall_radius_m: 0.012
+  min_start_jump_m: 0.002
+  max_start_jump_m: 0.015
+  min_chunk_motion_m: 0.003
+  reverse_cosine: -0.8
 # 批量推理（优化 B）：true 时 get_action_batch 收到多个 env 会合并为一次 B=N 的
 # generate_actions（值保持，见 model.py 注释）。仅多 env eval（eval_batch）生效，
 # 单 env 仍走顺序路径。默认 false 与旧行为完全一致。
@@ -54,7 +67,7 @@ gripper_threshold: 0.7
 # 多视角图像：按顺序送入模型的相机名，顺序与模型训练视角一致。
 # 支持 1~3 路（processor num_views=3）；不配置（或空）时保持原单路
 # cam_head 行为（encode_obs 走 legacy 候选回退）。
-camera_names: [cam_head, cam_left_wrist, cam_right_wrist]
+camera_names: [cam_head]
 # 夹爪迟滞（闭环执行改造方案 3.2 节 D4）。enabled=false 完全旁路（与现状逐帧一致）；
 # 启用时保持 gripper_mode: continuous，迟滞接管夹爪输出，不需要 gripper_threshold。
 hysteresis:
@@ -62,16 +75,51 @@ hysteresis:
   mode: direction_latch   # binary（离散 0/1 迟滞）| direction_latch（连续迟滞）
   lo: 0.3
   hi: 0.7
-# 指令映射：key 必须与 sim 端 task.gen_instruction 发送的指令逐字符一致（含句号），
-# 值才是实际喂给模型的 prompt；用 task name 作 key 不会命中 resolve_prompt。
-# 自训模型（X3/X0）语言条件用 sim_lerobot_v30_ee_6d 数据集完整指令，而评测时 env
-# gen_instruction 为 RoboDojo 短句，二者不一致，故在此做 env原文 → 训练指令 映射；
+# 仿真图片落盘（调试用，默认关）。enabled=true 时服务端在**每次推理前**把该次真正
+# 喂进模型的图像写成 JPEG（实现见同目录 save_images.py），用于排查「模型到底看到了
+# 什么画面」——像素与推理严格同源。目录结构：
+#   <root>/<服务启动时间戳>_<task_name>/env<env_idx>_<episode_idx>/<相机名>/<帧号>.jpg
+#   - 最外层时间戳区分同一台机器的多次运行，同 task 反复评测不互相覆盖；
+#   - 每个 episode 一个文件夹（episode_idx 由 eval client 逐 env 生成）；
+#   - 每路相机一个子文件夹，名字取上面的 camera_names（未配置时 view_0/view_1…）；
+#   - 帧号是该 episode 内的第几次推理（每次重规划一张，从 000000 起）。
+# 注意：eval_batch 批评测下客户端只把「需要重规划」的 env 观测发给服务端，所以存到的
+# 是每次重规划时的画面，不含 chunk 中间步。写盘在推理线程内同步进行，单张 480x640
+# JPEG q=90 约 30~50KB，长评测注意 /data 磁盘占用。
+save_images:
+  enabled: false
+  root: /data/outputs/sim_images
+  jpeg_quality: 90
+# 指令映射：key 必须与客户端发来的 instruction 逐字符一致（含句号），值才是实际
+# 喂给模型的 prompt。查表逻辑见 model.py resolve_prompt：先按 prompt / instruction /
+# task / language_instruction 的顺序取到原文，再查本表；表里没有就原样透传。
+#
+# 【sim】自训模型（X3/X0）语言条件用 sim_lerobot_v30_ee_6d 数据集完整指令，而评测时
+# env gen_instruction 为 RoboDojo 短句，二者不一致，故在此做 env原文 → 训练指令 映射；
 # 官方 RoboDojo ckpt 与其 env 指令同域，重评官方时不应走此映射。
-task_prompt_map:
-  "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
-  "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
-  "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
-  "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
+#
+# 【real】Piper X 真机：key = 平台发来的 original 文案（real hdf5 根级 instructions
+# 存的就是它），value = modified_instruction —— 后者是 real piper_x 训练数据的语言
+# 标签（XPolicyLab/policy/Pi_05/openpi/scripts/process_data.py 的 ("real","piper_x")
+# schema，instruction: task_desc），真机评测必须映射到它才与训练同域。
+# 本段与 <仓库根>/configs/real_task_instruction.json 严格同步：那份 JSON 是训练侧
+# 唯一源（process_data.py 按 task_id 读取），改一处必须同步改另一处。
+# 若平台实际不发 instruction（服务端回落到 default_prompt = prompt 配置或 task_name），
+# 本表不会命中，日志里的 model_prompt 会直接暴露成裸 task_name —— 届时按日志原文补 key。
+# ⚠️ 2026-09-20：复评官方 ckpt-100000 期间整体关闭（null → env 原文直通，与官方
+# 训练同域）。下方注释块保留映射原值，跑自训模型（X3/X0）或真机 piper_x 时恢复即可。
+task_prompt_map: null
+# task_prompt_map:
+#   "Stack the three blocks with different textures.": "Stack the three blocks with different textures on top of each other, then reset the robot arms to the home position."
+#   "Stack the three bowls together.": "Nest all three bowls upright, release them, then return to origin."
+#   "Hold the pen holder with one hand, place all pens into it with the other hand, then put it back down.": "Hold the pen holder upright, insert all four pens tip-up one by one, place it down, then return to origin."
+#   "Plug the charger into the power strip.": "Insert the charger fully upright into the power-strip socket, release it, then return to origin."
+#   "Pick up the pen holder and place all the pens into it.": "Pick up and hold the pen holder upright, insert all three pens one by one, then place the filled holder on the table."
+#   "Place all the objects on the table into the basket.": "Place all objects on the table into the basket one by one."
+#   "Stack the blocks on the table, then cover them with the cup.": "Stack all three blocks into one vertical stack, then place the cup over the entire stack."
+#   "Stack the bowls on the table.": "Nest all three bowls upright at the center of the table."
+#   "Stand the bottle upright.": "Place all three bottles stably upright on the table."
+#   "Insert the charger plug into the power strip, then connect the charging cable to the plug.": "Insert the charger plug into the power strip, then connect the charging cable to the charger plug."
 # Log action ranges plus raw/thresholded gripper values; image pixels are never
 # printed.
 log_io: true
@@ -85,10 +133,11 @@ ws_ping_timeout_s: null
 
 port: 6000
 
-# Standalone Codex robot harness. Keep X-VLA inference in this process; the
-# Bridge owns sparse review routing and final action-chunk synthesis.
+
+# Sparse Codex review. Disabled keeps the X_VLA path unchanged.
+# When enabling review, use a single active rollout (eval_batch: false).
 bridge_url: http://localhost:8765
-codex_enabled: true
+codex_enabled: false
 bridge_timeout_s: 105
 jpeg_quality: 88
 gripper_change_threshold: 0.1

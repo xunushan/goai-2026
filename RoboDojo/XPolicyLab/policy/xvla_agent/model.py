@@ -23,14 +23,20 @@ for _path in (str(_REPO_ROOT), str(_CUR_DIR), str(_XVLA_ROOT)):
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
-from XPolicyLab.utils.episode_index import EpisodeIndexResolver
 from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 
 from xvla.models.modeling_xvla import XVLA
 from xvla.models.processing_xvla import XVLAProcessor
 
 from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
+from save_images import (
+    EpisodeImageWriter,
+    SaveImagesConfig,
+    TaskNameResolver,
+    load_task_name_map,
+)
 from temporal_ensemble import ServerTemporalEnsembler
+from self_lock_guard import ChunkSelfLockGuard, SelfLockGuardConfig
 from codex_review import CodexReviewer
 
 # R0/R1 腕部残差模型（config.json 的 architectures / wrist_residual_mode 由此判别）。
@@ -419,7 +425,11 @@ class Model(ModelTemplate):
     def __init__(self, model_cfg):
         self.model_cfg = dict(model_cfg)
         self.task_name = self.model_cfg.get("task_name", "default_task")
-        self.codex_reviewer = CodexReviewer(self.model_cfg) if self.model_cfg.get("codex_enabled", False) else None
+        self.codex_reviewer = (
+            CodexReviewer(self.model_cfg)
+            if self.model_cfg.get("codex_enabled", False)
+            else None
+        )
         self.action_type = self.model_cfg.get("action_type", "ee")
         if self.action_type != "ee":
             raise ValueError("X-VLA in XPolicyLab currently supports only action_type='ee'.")
@@ -494,6 +504,13 @@ class Model(ModelTemplate):
             self.temporal_ensemble_coeff is not None
             and self.actions_per_chunk < self.temporal_ensemble_horizon
         )
+        # Opt-in emergency guard for the observed closed-loop limit cycle:
+        # repeated small-range re-plans whose fresh chunk first jumps opposite
+        # to its own subsequent motion.  One guard instance is kept per env.
+        self._self_lock_guard_cfg = SelfLockGuardConfig.from_model_cfg(
+            self.model_cfg
+        )
+        self._self_lock_guards: dict[int, ChunkSelfLockGuard] = {}
         self.gripper_mode = str(
             self.model_cfg.get("gripper_mode", "continuous")
         ).lower()
@@ -543,7 +560,6 @@ class Model(ModelTemplate):
                     f"configure at most {processor_views} cameras."
                 )
         self._request_index = 0
-        self._episode_indexes: dict[int, EpisodeIndexResolver] = {}
         # 评测复现用的 flow-noise seed。None / 未配置 = 关闭（保持原始随机行为，
         # 正式测评时直接删除 deploy.yml 的 policy_seed 行即可）；配置数值后每次
         # episode reset 都从固定序列起点开始，相同 (layout, policy, ckpt) 可复现。
@@ -562,6 +578,28 @@ class Model(ModelTemplate):
         # 抽取（与顺序路径逐位一致），批内各行互不影响（transformer 按行
         # attention），仅批 GEMM 浮点舍入差异。deploy.yml 设 batch_inference=true 开启。
         self.batch_inference = bool(self.model_cfg.get("batch_inference", False))
+        # 仿真图片落盘（deploy.yml 的 `save_images` 段，实现见 save_images.py）：
+        # enabled=false 时完全不碰磁盘（_prep_env 的调用首行即返回）。落盘目录名里的
+        # 服务启动时间戳在这里定格，同机多次评测各自成目录。
+        self._save_images_cfg = SaveImagesConfig.from_model_cfg(self.model_cfg)
+        self._image_writer = EpisodeImageWriter(
+            self._save_images_cfg,
+            task_name=self.task_name,
+            camera_names=self.camera_names,
+        )
+        # 真机客户端只发指令、不发 task_name，落盘目录按指令查映射表得到任务名
+        # （源文件见 deploy.yml save_images.task_instruction_json）。关掉图片落盘
+        # 就不读这份表，缺文件也不影响服务启动（load_task_name_map 内部只告警）。
+        self._task_name_map = (
+            load_task_name_map(self._save_images_cfg.task_instruction_json)
+            if self._image_writer.active
+            else {}
+        )
+        # 指令只在 episode 首帧出现，解析结果按 episode 粘住（见 TaskNameResolver）；
+        # 没查到的指令只提示一次，免得每个 episode 刷屏。
+        self._task_name_resolver = TaskNameResolver(
+            self._task_name_map, on_unmapped=self._warn_unmapped_instruction
+        )
         print(
             "[x_vla] "
             f"model_chunk_size={self.model_chunk_size} "
@@ -574,6 +612,9 @@ class Model(ModelTemplate):
             f"temporal_ensemble_coeff={self.temporal_ensemble_coeff} "
             f"temporal_ensemble_horizon={self.temporal_ensemble_horizon} "
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
+            f"self_lock_guard={'on' if self._self_lock_guard_cfg.enabled else 'off'} "
+            f"save_images={self._image_writer.describe()} "
+            f"task_name_map={len(self._task_name_map) if self._image_writer.active else 'off'} "
             f"policy_seed={self.policy_seed} "
             f"batch_inference={self.batch_inference}",
             flush=True,
@@ -719,6 +760,9 @@ class Model(ModelTemplate):
     ) -> None:
         if not self.log_io:
             return
+        # 真机不发 task_name / episode_idx，这两个字段要打**服务端算出来的**那份，
+        # 否则日志里永远是 null、看不出这张图落进哪个任务/哪个 episode。
+        task_name, episode = self._image_writer.last_context(env_idx)
 
         def finite_list(value: Any) -> list[float | None]:
             array = np.asarray(value, dtype=np.float32).reshape(-1)
@@ -746,8 +790,9 @@ class Model(ModelTemplate):
             "event": "client_observation",
             "request": self._request_index,
             "env_idx": env_idx,
-            "episode_idx": observation.get("episode_idx"),
-            "task_name": observation.get("task_name"),
+            # 落盘实际用的任务名与 episode 编号（客户端不发的就由服务端算）
+            "task_name": task_name,
+            "episode": episode,
             "instruction": str(observation.get("instruction", ""))[:200],
             "model_prompt": resolve_prompt(
                 encoded_observation,
@@ -767,27 +812,15 @@ class Model(ModelTemplate):
             int(obs.get("env_idx", index)) if isinstance(obs, dict) else index
             for index, obs in enumerate(obs_list)
         ]
-        resolved_observations = []
-        for env_idx, observation in zip(
-            self._latest_env_idx_list, obs_list, strict=True
-        ):
-            resolver = self._episode_indexes.setdefault(
-                env_idx, EpisodeIndexResolver()
-            )
-            resolved = dict(observation)
-            resolved["episode_idx"] = resolver.resolve(
-                observation.get("episode_idx")
-            )
-            resolved_observations.append(resolved)
         self.observation_window = [
             encode_obs(obs, self.default_prompt, self.task_prompt_map, self.camera_names)
-            for obs in resolved_observations
+            for obs in obs_list
         ]
         self._latest_by_env = dict(
             zip(self._latest_env_idx_list, self.observation_window, strict=True)
         )
         self._raw_by_env = dict(
-            zip(self._latest_env_idx_list, resolved_observations, strict=True)
+            zip(self._latest_env_idx_list, obs_list, strict=True)
         )
 
     def infer(
@@ -855,8 +888,10 @@ class Model(ModelTemplate):
 
         env_idx_list = env_idx_list or self._latest_env_idx_list
         env_list = [int(env_idx) for env_idx in env_idx_list]
-        if len(env_list) != 1:
-            raise ValueError("xvla_agent supports one active rollout because one Codex thread is stateful")
+        if self.codex_reviewer is not None and len(env_list) != 1:
+            raise ValueError(
+                "xvla_agent Codex review supports one active rollout"
+            )
         if self.batch_inference and len(env_list) > 1:
             action_list = self._get_action_batch_batched(env_list)
         else:
@@ -901,20 +936,47 @@ class Model(ModelTemplate):
         ]
 
     def _prep_env(self, resolved_env_idx):
-        """取某 env 缓存的编码 obs + 其策略生成器（含 KeyError 检查与 obs 日志）。"""
+        """取某 env 缓存的编码 obs + 其策略生成器（含 KeyError 检查、obs 日志与图片落盘）。"""
         if resolved_env_idx not in self._latest_by_env:
             raise KeyError(
                 f"No buffered observation for env_idx={resolved_env_idx}; "
                 f"available={sorted(self._latest_by_env)}"
             )
         encoded_obs = self._latest_by_env[resolved_env_idx]
-        self._log_observation(
-            self._raw_by_env[resolved_env_idx],
-            encoded_obs,
-            resolved_env_idx,
+        raw_obs = self._raw_by_env[resolved_env_idx]
+        # 图片落盘在日志之前：任务名与 episode 编号都是落盘时定下的（指令→task_name
+        # 的映射、request 归零切 episode），日志要打这两个值。落盘与推理同源：存的就是
+        # 紧接着喂进模型的那份图像（deploy.yml save_images.enabled=false 时零开销直接返回）。
+        # request_index 传当前请求号（_finalize_chunk 末尾才自增，所以本次请求的
+        # 首个 env 落盘时它仍是本 episode 的第 0/1/2… 次）；真机客户端不发
+        # episode_idx，落盘器靠它归零来切 episode 编号。
+        self._image_writer.save_observation(
+            episode_idx=raw_obs.get("episode_idx"),
+            env_idx=resolved_env_idx,
+            images=encoded_obs["images"],
+            request_index=self._request_index,
+            task_name=self._task_name_for(raw_obs),
         )
+        self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
+
+    def _task_name_for(self, observation: dict[str, Any]) -> str | None:
+        """本次观测属于哪个任务：按指令查映射表（同 resolve_prompt 的取值顺序）。
+
+        查不到返回 None，落盘器会退回配置里的 task_name——真机服务一个实例按 task
+        启动，单任务评测时映射表没登记也照样落在老目录，不会没图。指令只在 episode
+        首帧出现，粘住逻辑见 TaskNameResolver。
+        """
+        return self._task_name_resolver.resolve(observation)
+
+    def _warn_unmapped_instruction(self, instruction: str) -> None:
+        """指令不在映射表里时提示一次（落盘仍走配置的 task_name）。"""
+        print(
+            "[x_vla][images] 指令不在 task_name 映射表里，落盘用配置的 "
+            f"task_name={self.task_name}：{instruction!r}",
+            flush=True,
+        )
 
     def _finalize_chunk(self, resolved_env_idx, raw_chunk):
         """raw_chunk 之后的全部后处理：校验→temporal ensemble/截取→16 维 ee
@@ -930,6 +992,24 @@ class Model(ModelTemplate):
                 "X-VLA returned an unexpected chunk length: "
                 f"expected {self.model_chunk_size}, got {raw_chunk.shape[0]}"
             )
+        self_lock_diagnostics = None
+        if self._self_lock_guard_cfg.enabled:
+            guard = self._self_lock_guards.get(resolved_env_idx)
+            if guard is None:
+                guard = ChunkSelfLockGuard(self._self_lock_guard_cfg)
+                self._self_lock_guards[resolved_env_idx] = guard
+            current_proprio = self._latest_by_env[resolved_env_idx]["proprio"]
+            raw_chunk, self_lock_diagnostics = guard.apply(
+                current_proprio,
+                raw_chunk,
+                self.actions_per_chunk,
+            )
+            if self_lock_diagnostics["triggered"]:
+                # Predictions already stored by temporal ensemble predate the
+                # correction and can re-introduce the rollback.  Restart this
+                # env's ensemble from the corrected chunk.
+                self._temporal_ensemblers.pop(resolved_env_idx, None)
+
         temporal_ensemble_diagnostics = None
         if self.temporal_ensemble_active:
             assert self.temporal_ensemble_coeff is not None
@@ -982,13 +1062,13 @@ class Model(ModelTemplate):
                 mode=self._hysteresis_cfg.mode,
             )
         if self.log_io:
+            task_name, episode = self._image_writer.last_context(resolved_env_idx)
             summary = {
                 "event": "server_actions",
                 "request": self._request_index,
                 "env_idx": resolved_env_idx,
-                "episode_idx": self._raw_by_env[resolved_env_idx].get(
-                    "episode_idx"
-                ),
+                "task_name": task_name,
+                "episode": episode,
                 "model_chunk_size": int(raw_chunk.shape[0]),
                 "execute_steps": int(executed_chunk.shape[0]),
                 "gripper_mode": self.gripper_mode,
@@ -999,6 +1079,7 @@ class Model(ModelTemplate):
                     else None
                 ),
                 "temporal_ensemble": temporal_ensemble_diagnostics,
+                "self_lock_guard": self_lock_diagnostics,
                 "policy_seed": self.policy_seed,
                 "policy_noise_draw": (
                     self._policy_noise_draws[resolved_env_idx]
@@ -1100,12 +1181,15 @@ class Model(ModelTemplate):
         self._raw_by_env = {}
         self._latest_by_env = {}
         self._request_index = 0
-        self._episode_indexes = {}
         # episode 开始：清空生成器，使每个 episode 从固定噪声序列起点重新开始
         self._policy_generators = {}
         self._policy_noise_draws = {}
         # episode 开始：清空 temporal ensemble 状态，每个 episode 从新的预测
         # 序列起点开始对齐
         self._temporal_ensemblers = {}
+        self._self_lock_guards = {}
+        # episode 开始：图片落盘的帧号回到 000000，客户端不发 episode_idx 时
+        # 下一次落盘换一个新编号（已写文件不动）
+        self._image_writer.reset()
         if self.codex_reviewer is not None:
             self.codex_reviewer.reset()
