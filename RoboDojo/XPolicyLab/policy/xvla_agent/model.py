@@ -752,6 +752,22 @@ class Model(ModelTemplate):
             )
         return summary
 
+    def _log_task_context(self, env_idx: int) -> tuple[str | None, str | None]:
+        """日志里的 (任务名, episode 编号)：客户端给了就用它给的那份。
+
+        仿真客户端每个 env 的观测自带精确 task_name（含 _random 后缀）与
+        episode_idx，那是权威值——不管这轮走 VLA 还是走 Codex review，日志都该打它。
+        真机两样都不发，才回落到落盘器算出来的那份（指令→task_name 映射、request
+        归零切 episode 编号）；落盘关掉时回落值是 (配置的 task_name, None)，所以
+        客户端不发值时这两列就是空的。
+        """
+        task_name, episode = self._image_writer.last_context(env_idx)
+        raw_obs = self._raw_by_env.get(int(env_idx)) or {}
+        return (
+            _normalize_prompt_value(raw_obs.get("task_name")) or task_name,
+            _normalize_prompt_value(raw_obs.get("episode_idx")) or episode,
+        )
+
     def _log_observation(
         self,
         observation: dict[str, Any],
@@ -760,9 +776,7 @@ class Model(ModelTemplate):
     ) -> None:
         if not self.log_io:
             return
-        # 真机不发 task_name / episode_idx，这两个字段要打**服务端算出来的**那份，
-        # 否则日志里永远是 null、看不出这张图落进哪个任务/哪个 episode。
-        task_name, episode = self._image_writer.last_context(env_idx)
+        task_name, episode = self._log_task_context(env_idx)
 
         def finite_list(value: Any) -> list[float | None]:
             array = np.asarray(value, dtype=np.float32).reshape(-1)
@@ -1062,7 +1076,7 @@ class Model(ModelTemplate):
                 mode=self._hysteresis_cfg.mode,
             )
         if self.log_io:
-            task_name, episode = self._image_writer.last_context(resolved_env_idx)
+            task_name, episode = self._log_task_context(resolved_env_idx)
             summary = {
                 "event": "server_actions",
                 "request": self._request_index,
