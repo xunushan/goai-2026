@@ -27,7 +27,12 @@ def _without_codex_hooks(source: str) -> str:
         ),
         (
             "\n        if self.codex_reviewer is not None:\n"
-            "            observation = self._raw_by_env[resolved_env_idx]\n"
+            "            observation = dict(self._raw_by_env[resolved_env_idx])\n"
+            "            task_name, episode = self._log_task_context(resolved_env_idx)\n"
+            "            if not observation.get(\"task_name\"):\n"
+            "                observation[\"task_name\"] = task_name\n"
+            "            if observation.get(\"episode_idx\") is None:\n"
+            "                observation[\"episode_idx\"] = episode\n"
             "            try:\n"
             "                return self.codex_reviewer.review(observation, actions)\n"
             "            except Exception as exc:\n"

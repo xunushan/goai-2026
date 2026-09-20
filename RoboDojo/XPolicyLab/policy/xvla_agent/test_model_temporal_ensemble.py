@@ -39,6 +39,23 @@ _make_module(
     "XPolicyLab.utils.checkpoint_resolver",
     resolve_checkpoint_root=lambda model_cfg, **kw: None,
 )
+
+
+class _PolicyContext:
+    def __init__(self, *args, **kwargs):
+        pass
+
+    def resolve(self, observation, env_idx):
+        return "test_task", "test_episode"
+
+    def reset(self):
+        pass
+
+
+_make_module(
+    "XPolicyLab.utils.policy_context",
+    PolicyContextResolver=_PolicyContext,
+)
 _make_module(
     "XPolicyLab.utils.episode_index",
     EpisodeIndexResolver=type("EpisodeIndexResolver", (), {}),

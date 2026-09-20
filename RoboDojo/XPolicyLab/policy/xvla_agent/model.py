@@ -23,6 +23,7 @@ for _path in (str(_REPO_ROOT), str(_CUR_DIR), str(_XVLA_ROOT)):
 
 from XPolicyLab.model_template import ModelTemplate
 from XPolicyLab.utils.checkpoint_resolver import resolve_checkpoint_root
+from XPolicyLab.utils.policy_context import PolicyContextResolver
 from XPolicyLab.utils.process_data import decode_image_bit, get_robot_action_dim_info
 
 from xvla.models.modeling_xvla import XVLA
@@ -32,8 +33,6 @@ from gripper_hysteresis import HysteresisConfig, apply_gripper_hysteresis
 from save_images import (
     EpisodeImageWriter,
     SaveImagesConfig,
-    TaskNameResolver,
-    load_task_name_map,
 )
 from temporal_ensemble import ServerTemporalEnsembler
 from self_lock_guard import ChunkSelfLockGuard, SelfLockGuardConfig
@@ -587,18 +586,9 @@ class Model(ModelTemplate):
             task_name=self.task_name,
             camera_names=self.camera_names,
         )
-        # 真机客户端只发指令、不发 task_name，落盘目录按指令查映射表得到任务名
-        # （源文件见 deploy.yml save_images.task_instruction_json）。关掉图片落盘
-        # 就不读这份表，缺文件也不影响服务启动（load_task_name_map 内部只告警）。
-        self._task_name_map = (
-            load_task_name_map(self._save_images_cfg.task_instruction_json)
-            if self._image_writer.active
-            else {}
-        )
-        # 指令只在 episode 首帧出现，解析结果按 episode 粘住（见 TaskNameResolver）；
-        # 没查到的指令只提示一次，免得每个 episode 刷屏。
-        self._task_name_resolver = TaskNameResolver(
-            self._task_name_map, on_unmapped=self._warn_unmapped_instruction
+        self._policy_context = PolicyContextResolver(
+            self.model_cfg.get("task_name"),
+            self.model_cfg.get("task_instruction_json"),
         )
         print(
             "[x_vla] "
@@ -614,7 +604,6 @@ class Model(ModelTemplate):
             f"temporal_ensemble_active={self.temporal_ensemble_active} "
             f"self_lock_guard={'on' if self._self_lock_guard_cfg.enabled else 'off'} "
             f"save_images={self._image_writer.describe()} "
-            f"task_name_map={len(self._task_name_map) if self._image_writer.active else 'off'} "
             f"policy_seed={self.policy_seed} "
             f"batch_inference={self.batch_inference}",
             flush=True,
@@ -752,20 +741,9 @@ class Model(ModelTemplate):
             )
         return summary
 
-    def _log_task_context(self, env_idx: int) -> tuple[str | None, str | None]:
-        """日志里的 (任务名, episode 编号)：客户端给了就用它给的那份。
-
-        仿真客户端每个 env 的观测自带精确 task_name（含 _random 后缀）与
-        episode_idx，那是权威值——不管这轮走 VLA 还是走 Codex review，日志都该打它。
-        真机两样都不发，才回落到落盘器算出来的那份（指令→task_name 映射、request
-        归零切 episode 编号）；落盘关掉时回落值是 (配置的 task_name, None)，所以
-        客户端不发值时这两列就是空的。
-        """
-        task_name, episode = self._image_writer.last_context(env_idx)
-        raw_obs = self._raw_by_env.get(int(env_idx)) or {}
-        return (
-            _normalize_prompt_value(raw_obs.get("task_name")) or task_name,
-            _normalize_prompt_value(raw_obs.get("episode_idx")) or episode,
+    def _log_task_context(self, env_idx: int) -> tuple[str, str]:
+        return self._policy_context.resolve(
+            self._raw_by_env.get(int(env_idx)) or {}, env_idx
         )
 
     def _log_observation(
@@ -958,39 +936,20 @@ class Model(ModelTemplate):
             )
         encoded_obs = self._latest_by_env[resolved_env_idx]
         raw_obs = self._raw_by_env[resolved_env_idx]
-        # 图片落盘在日志之前：任务名与 episode 编号都是落盘时定下的（指令→task_name
-        # 的映射、request 归零切 episode），日志要打这两个值。落盘与推理同源：存的就是
-        # 紧接着喂进模型的那份图像（deploy.yml save_images.enabled=false 时零开销直接返回）。
-        # request_index 传当前请求号（_finalize_chunk 末尾才自增，所以本次请求的
-        # 首个 env 落盘时它仍是本 episode 的第 0/1/2… 次）；真机客户端不发
-        # episode_idx，落盘器靠它归零来切 episode 编号。
+        task_name, episode = self._log_task_context(resolved_env_idx)
+        # 策略上下文先独立解析任务和 episode；日志与可选图片落盘共享同一身份。
+        # 因此 save_images=false 时真机日志仍有 instruction 映射出的任务名和
+        # 服务端生成的 episode，而开启落盘时目录名与日志也不会分叉。
         self._image_writer.save_observation(
-            episode_idx=raw_obs.get("episode_idx"),
+            episode_idx=episode,
             env_idx=resolved_env_idx,
             images=encoded_obs["images"],
             request_index=self._request_index,
-            task_name=self._task_name_for(raw_obs),
+            task_name=task_name,
         )
         self._log_observation(raw_obs, encoded_obs, resolved_env_idx)
         generator = self._get_policy_generator(resolved_env_idx)
         return encoded_obs, generator
-
-    def _task_name_for(self, observation: dict[str, Any]) -> str | None:
-        """本次观测属于哪个任务：按指令查映射表（同 resolve_prompt 的取值顺序）。
-
-        查不到返回 None，落盘器会退回配置里的 task_name——真机服务一个实例按 task
-        启动，单任务评测时映射表没登记也照样落在老目录，不会没图。指令只在 episode
-        首帧出现，粘住逻辑见 TaskNameResolver。
-        """
-        return self._task_name_resolver.resolve(observation)
-
-    def _warn_unmapped_instruction(self, instruction: str) -> None:
-        """指令不在映射表里时提示一次（落盘仍走配置的 task_name）。"""
-        print(
-            "[x_vla][images] 指令不在 task_name 映射表里，落盘用配置的 "
-            f"task_name={self.task_name}：{instruction!r}",
-            flush=True,
-        )
 
     def _finalize_chunk(self, resolved_env_idx, raw_chunk):
         """raw_chunk 之后的全部后处理：校验→temporal ensemble/截取→16 维 ee
@@ -1119,7 +1078,12 @@ class Model(ModelTemplate):
             )
         self._request_index += 1
         if self.codex_reviewer is not None:
-            observation = self._raw_by_env[resolved_env_idx]
+            observation = dict(self._raw_by_env[resolved_env_idx])
+            task_name, episode = self._log_task_context(resolved_env_idx)
+            if not observation.get("task_name"):
+                observation["task_name"] = task_name
+            if observation.get("episode_idx") is None:
+                observation["episode_idx"] = episode
             try:
                 return self.codex_reviewer.review(observation, actions)
             except Exception as exc:
@@ -1202,8 +1166,9 @@ class Model(ModelTemplate):
         # 序列起点开始对齐
         self._temporal_ensemblers = {}
         self._self_lock_guards = {}
-        # episode 开始：图片落盘的帧号回到 000000，客户端不发 episode_idx 时
-        # 下一次落盘换一个新编号（已写文件不动）
+        # episode 开始：清掉图片帧号和策略上下文；下一次无客户端 episode_idx
+        # 的真机请求会生成一个新的稳定编号（已写文件不动）。
         self._image_writer.reset()
+        self._policy_context.reset()
         if self.codex_reviewer is not None:
             self.codex_reviewer.reset()
