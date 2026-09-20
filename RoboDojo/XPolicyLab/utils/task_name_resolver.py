@@ -12,6 +12,7 @@ import numpy as np
 DEFAULT_REAL_TASK_INSTRUCTIONS = (
     Path(__file__).resolve().parents[3] / "configs" / "real_task_instruction.json"
 )
+TASK_NAME_KEYS = ("task_name",)
 INSTRUCTION_KEYS = ("prompt", "instruction", "task", "language_instruction")
 
 
@@ -61,7 +62,15 @@ def load_real_task_name_map(path: str | Path | None = None) -> dict[str, str]:
 
 
 class TaskNameResolver:
-    """Use a configured task or bind the first mapped instruction for an episode."""
+    """Use a configured task, a task the client names, or a mapped instruction.
+
+    Precedence is configured, then the observation's own ``task_name``, then the
+    instruction mapping. A client that knows which task it is running -- the
+    simulator does -- names the task directly, and that beats guessing from
+    prose: two tasks can share one instruction template, and the mapping table
+    only covers the platform contract anyway. The instruction path stays for
+    prose-only clients.
+    """
 
     def __init__(
         self,
@@ -79,6 +88,11 @@ class TaskNameResolver:
     def resolve(self, observation: Mapping[str, Any]) -> str:
         if self._episode_task_name:
             return self._episode_task_name
+        for field in TASK_NAME_KEYS:
+            explicit = _text(observation.get(field))
+            if explicit:
+                self._episode_task_name = explicit
+                return explicit
         for field in INSTRUCTION_KEYS:
             raw = observation.get(field)
             key = _key(raw)
