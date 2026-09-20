@@ -18,24 +18,28 @@
 ```text
 codex_agent/
 ├── experience_library/
-│   ├── index.json
-│   └── stack_bowls/
-│       ├── demo.json
-│       ├── rendered_example.md
-│       └── images/
-│           ├── 000-approach-cam_high.jpg
-│           └── ...
+│   ├── sim_experience_library/
+│   │   ├── index.json
+│   │   ├── stack_bowls/
+│   │   └── plug_in_charger/
+│   └── real_experience_library/
+│       ├── index.json
+│       ├── fill_pen_holder/
+│       └── ...
 ├── bridge/
 │   └── experience.py
 └── tools/
     └── render_experience.py
 ```
 
-`--experience-library` 可以把经验库换到其它绝对路径；默认使用上述目录。
+`--experience-library` 指向一个含 `index.json` 的具体经验库。默认使用
+`experience_library/sim_experience_library`；真机启动时改为
+`experience_library/real_experience_library`。该参数在 Bridge 进程启动时确定，
+切换环境需要重启 Bridge，不会在一个 episode 中途切换。
 
 ## 任务索引与视图配置
 
-`experience_library/index.json` 是任务选择和图片选择的唯一配置入口：
+所选经验库的 `index.json` 是任务选择和图片选择的唯一配置入口：
 
 ```json
 {
@@ -106,7 +110,7 @@ Decision: ...
 Outcome: grasped
 ```
 
-文本块后紧跟配置选中的图片。图片由 bridge 读取并转换成 `data:image/...;base64,...`，本机文件路径不会发送给模型。完整人工审查样例见 `experience_library/stack_bowls/rendered_example.md`。
+文本块后紧跟配置选中的图片。图片由 bridge 读取并转换成 `data:image/...;base64,...`，本机文件路径不会发送给模型。完整人工审查样例见 `experience_library/sim_experience_library/stack_bowls/rendered_example.md`。
 
 ## Episode 上下文与 thread 轮换
 
@@ -158,8 +162,8 @@ bridge 启动时校验 `index.json`；首次使用任务经验时校验 demo：
 
 ## 增加任务
 
-1. 新建 `experience_library/<task>/demo.json` 和 `images/`。
-2. 在 `index.json` 增加与策略请求 `task.name` 完全一致的键。
+1. 在目标库中新建 `<task>/demo.json` 和 `images/`。
+2. 在该库的 `index.json` 增加与策略请求 `task.name` 完全一致的键。
 3. 配置 `views.default` 和需要覆盖的 stage。
 4. 运行 `tools/render_experience.py <demo.json>` 检查文本。
 5. 更新或生成 `rendered_example.md` 做图片与文本联合 review。

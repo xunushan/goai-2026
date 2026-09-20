@@ -1,0 +1,570 @@
+{
+  "task": "Stack all three blocks into one vertical stack, then place the cup over the entire stack.",
+  "task_slug": "stack_and_cover_blocks",
+  "dataset": "data/real_lerobot_v30_ee",
+  "episode_index": 294,
+  "fps": 25.0,
+  "state_layout": "left[x,y,z,qw,qx,qy,qz,gripper] + right[same]",
+  "keyframes": [
+    {
+      "frame_index": 146,
+      "event": "move",
+      "stage": "approach",
+      "event_span": [
+        115,
+        146
+      ],
+      "observation": "left jaws open, closing in on the blocks scattered over the table; the cover rests at the left; right arm parked",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "aligned",
+      "state": {
+        "left": {
+          "position": [
+            0.237,
+            -0.1776,
+            0.1587
+          ],
+          "orientation": [
+            0.0036,
+            -0.3626,
+            0.9313,
+            -0.0336
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2377,
+            -0.178,
+            0.1575
+          ],
+          "orientation": [
+            0.0027,
+            -0.3592,
+            0.9327,
+            -0.0321
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/000-approach-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/000-approach-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/000-approach-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 201,
+      "event": "grasp_block",
+      "stage": "grasp",
+      "event_span": [
+        147,
+        201
+      ],
+      "observation": "left jaws have just closed on the first block and are lifting it off the table",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "grasped",
+      "state": {
+        "left": {
+          "position": [
+            0.23,
+            -0.1877,
+            0.1505
+          ],
+          "orientation": [
+            -0.02,
+            -0.3187,
+            0.9475,
+            -0.0187
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2304,
+            -0.188,
+            0.1514
+          ],
+          "orientation": [
+            -0.02,
+            -0.3132,
+            0.9493,
+            -0.0188
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/001-grasp-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/001-grasp-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/001-grasp-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 255,
+      "event": "place_block",
+      "stage": "place",
+      "event_span": [
+        240,
+        266
+      ],
+      "observation": "left jaws are opening to set the block down at the centre of the table — the bottom block of the stack",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "placed",
+      "state": {
+        "left": {
+          "position": [
+            0.2239,
+            -0.3136,
+            0.1522
+          ],
+          "orientation": [
+            0.0263,
+            0.0012,
+            -0.9996,
+            -0.0109
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2238,
+            -0.3137,
+            0.1522
+          ],
+          "orientation": [
+            0.0285,
+            0.0012,
+            -0.9995,
+            -0.0093
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.1177,
+            -0.0006,
+            0.2699
+          ],
+          "orientation": [
+            0.5006,
+            -0.491,
+            0.4903,
+            -0.5176
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/002-place-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/002-place-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/002-place-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 615,
+      "event": "place_block",
+      "stage": "stack",
+      "event_span": [
+        603,
+        656
+      ],
+      "observation": "right jaws are setting a block down on the two already stacked at the centre of the table and are still closed on it; the right wrist camera looks straight at it (held block in front, the two below rising away behind), the head camera sees only the arm coming down from above with the colour-banded stack between the jaws",
+      "roles": {
+        "left": "idle",
+        "right": "active"
+      },
+      "result": "stacked",
+      "state": {
+        "left": {
+          "position": [
+            0.098,
+            0.002,
+            0.1968
+          ],
+          "orientation": [
+            0.4645,
+            -0.5329,
+            0.4981,
+            -0.5022
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.2178,
+            0.2826,
+            0.2126
+          ],
+          "orientation": [
+            0.0858,
+            -0.9949,
+            -0.0183,
+            0.0495
+          ],
+          "gripper": "closed"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.098,
+            0.002,
+            0.1968
+          ],
+          "orientation": [
+            0.4645,
+            -0.5329,
+            0.4981,
+            -0.5022
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.2178,
+            0.2826,
+            0.2126
+          ],
+          "orientation": [
+            0.0857,
+            -0.9949,
+            -0.0183,
+            0.0495
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/003-stack-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/003-stack-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/003-stack-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 806,
+      "event": "grasp_cup",
+      "stage": "grasp",
+      "event_span": [
+        789,
+        814
+      ],
+      "observation": "left jaws have closed on the cover lying at the upper left of the table and lifted it clear of the surface",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "grasped",
+      "state": {
+        "left": {
+          "position": [
+            0.3917,
+            -0.0502,
+            0.1966
+          ],
+          "orientation": [
+            0.0967,
+            -0.7674,
+            0.6207,
+            -0.128
+          ],
+          "gripper": "partial"
+        },
+        "right": {
+          "position": [
+            0.0974,
+            -0.0031,
+            0.1933
+          ],
+          "orientation": [
+            0.462,
+            -0.5233,
+            0.5255,
+            -0.4864
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.3917,
+            -0.0504,
+            0.1966
+          ],
+          "orientation": [
+            0.0944,
+            -0.7672,
+            0.6211,
+            -0.1295
+          ],
+          "gripper": "close"
+        },
+        "right": {
+          "position": [
+            0.0974,
+            -0.0031,
+            0.1933
+          ],
+          "orientation": [
+            0.462,
+            -0.5233,
+            0.5255,
+            -0.4864
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/004-grasp-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/004-grasp-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/004-grasp-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 918,
+      "event": "place_cup",
+      "stage": "place",
+      "event_span": [
+        904,
+        926
+      ],
+      "observation": "the blocks are stacked; left arm is lowering the cup over the stack",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "placed",
+      "state": {
+        "left": {
+          "position": [
+            0.2495,
+            -0.2808,
+            0.1977
+          ],
+          "orientation": [
+            0.0947,
+            -0.0094,
+            -0.9815,
+            0.1664
+          ],
+          "gripper": "partial"
+        },
+        "right": {
+          "position": [
+            0.0974,
+            -0.0031,
+            0.1933
+          ],
+          "orientation": [
+            0.462,
+            -0.5233,
+            0.5255,
+            -0.4864
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2504,
+            -0.2818,
+            0.1983
+          ],
+          "orientation": [
+            0.0945,
+            -0.0081,
+            -0.9812,
+            0.1678
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.0974,
+            -0.0031,
+            0.1933
+          ],
+          "orientation": [
+            0.462,
+            -0.5233,
+            0.5255,
+            -0.4864
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/005-place-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/005-place-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/005-place-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 1000,
+      "event": "move",
+      "stage": "home",
+      "event_span": [
+        978,
+        1000
+      ],
+      "observation": "both arms back at their home poses; the cup sits over the block stack at the centre of the table",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "task_complete",
+      "state": {
+        "left": {
+          "position": [
+            0.0991,
+            -0.0018,
+            0.2088
+          ],
+          "orientation": [
+            0.5014,
+            -0.4819,
+            0.5166,
+            -0.4995
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.0973,
+            -0.0031,
+            0.194
+          ],
+          "orientation": [
+            0.4639,
+            -0.5221,
+            0.5237,
+            -0.4877
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.0988,
+            -0.0014,
+            0.2082
+          ],
+          "orientation": [
+            0.504,
+            -0.4821,
+            0.51,
+            -0.5035
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0973,
+            -0.0031,
+            0.194
+          ],
+          "orientation": [
+            0.4639,
+            -0.5221,
+            0.5237,
+            -0.4877
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/006-home-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/006-home-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/006-home-cam_right_wrist.jpg"
+      }
+    }
+  ]
+}

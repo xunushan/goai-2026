@@ -14,7 +14,7 @@ experience:
 ```
 
 - `true`: on the first Codex thread of an episode, the Bridge looks up the exact
-  `task_name` in `codex_agent/experience_library/index.json` and injects that
+  `task_name` in the active experience library's `index.json` and injects that
   demonstration. If the task has no index entry, nothing is injected.
 - `false`: no demonstration is read or injected. Normal observation and decision
   history is still retained and replayed when the thread rotates.
@@ -23,14 +23,18 @@ The value is fixed for an episode. Changing it during an episode is rejected so
 one rollout cannot silently change its context halfway through. Restart/reset the
 episode after changing the policy configuration.
 
-The current test entry is `stack_bowls`:
+Simulation and real-robot demonstrations are isolated libraries:
 
 ```text
 codex_agent/experience_library/
-├── index.json
-└── stack_bowls/
-    ├── demo.json
-    └── images/
+├── sim_experience_library/
+│   ├── index.json
+│   ├── stack_bowls/
+│   └── plug_in_charger/
+└── real_experience_library/
+    ├── index.json
+    ├── fill_pen_holder/
+    └── ...
 ```
 
 `index.json` is the only routing table. Merely placing another directory in the
@@ -56,8 +60,13 @@ python3 -m bridge.bridge \
   --codex-bin codex \
   --model gpt-6-astra \
   --reasoning-effort medium \
+  --experience-library experience_library/sim_experience_library \
   --max-live-image-turns 8
 ```
+
+Use `--experience-library experience_library/real_experience_library` for the
+real robot. The selected path is fixed for the Bridge process; restart the
+Bridge to switch environments. `GET /healthz` reports the resolved active path.
 
 Important parameters:
 
@@ -69,7 +78,7 @@ Important parameters:
 | `--timeout-first-turn-s` | `90` | New-thread timeout, including workspace/skill loading |
 | `--max-live-image-turns` | `8` | Image-bearing turns before thread rotation; `0` disables rotation |
 | `--workspace` | `codex_agent/workspace` | AGENTS.md, skills, output and scratch workspace |
-| `--experience-library` | `codex_agent/experience_library` | Demonstration library root |
+| `--experience-library` | `codex_agent/experience_library/sim_experience_library` | Active simulation or real demonstration library root |
 | `--host` / `--port` | `127.0.0.1` / `8765` | Bridge listen address |
 | `--token` | environment token | Optional HTTP authentication token |
 

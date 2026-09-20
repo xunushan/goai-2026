@@ -55,7 +55,11 @@ MAX_BODY_BYTES = 32 * 1024 * 1024
 
 # Where the workspace sits relative to this package, i.e. ``codex_agent/workspace``.
 DEFAULT_WORKSPACE = Path(__file__).resolve().parent.parent / "workspace"
-DEFAULT_EXPERIENCE_LIBRARY = Path(__file__).resolve().parent.parent / "experience_library"
+DEFAULT_EXPERIENCE_LIBRARY = (
+    Path(__file__).resolve().parent.parent
+    / "experience_library"
+    / "sim_experience_library"
+)
 
 CAMERA_NAMES = ("cam_head", "cam_left_wrist", "cam_right_wrist")
 

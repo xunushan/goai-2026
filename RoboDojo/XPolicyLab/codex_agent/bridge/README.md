@@ -227,7 +227,8 @@ that has to round-trip a thread id is a caller that can send back the wrong one.
 ## Experience library
 
 `experience_library/` is host-owned and deliberately outside `workspace/`, so the
-agent cannot browse or repeatedly load demonstrations. `index.json` maps an exact
+agent cannot browse or repeatedly load demonstrations. Its simulation and real
+subdirectories are separate libraries. The selected library's `index.json` maps an exact
 task name to one successful `demo.json` and declares the camera views for each
 stage; an unmapped task simply receives no demo.
 The bridge loads the selected demonstration once as the episode's initial context.
@@ -242,7 +243,8 @@ Python. Images are passed to App Server as data URLs; filesystem paths never ent
 the model context. Rendered App Server items are cached after their first load;
 thread rotation reuses that in-memory result instead of reading and rendering the
 demo again. Use
-`tools/render_experience.py experience_library/<task>/demo.json` to inspect the exact
+`tools/render_experience.py experience_library/sim_experience_library/<task>/demo.json`
+to inspect the exact
 generated text without calling Codex.
 
 ## Operational notes

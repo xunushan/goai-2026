@@ -19,7 +19,9 @@ from codex_agent.bridge.experience import (  # noqa: E402
 from codex_agent.bridge.bridge import BridgeState  # noqa: E402
 
 
-LIBRARY = PACKAGE / "experience_library"
+LIBRARY_ROOT = PACKAGE / "experience_library"
+LIBRARY = LIBRARY_ROOT / "sim_experience_library"
+REAL_LIBRARY = LIBRARY_ROOT / "real_experience_library"
 
 
 def test_exact_task_selection_and_compact_camera_policy() -> None:
@@ -68,6 +70,24 @@ def test_exact_task_selection_and_compact_camera_policy() -> None:
         pass
     else:
         raise AssertionError("a missing experience camera was accepted")
+
+
+def test_real_library_loads_every_indexed_task() -> None:
+    library = ExperienceLibrary(REAL_LIBRARY)
+    assert set(library.index) == {
+        "fill_pen_holder",
+        "insert_charger",
+        "put_objects_into_basket",
+        "stack_and_cover_blocks",
+        "stack_bowls",
+        "stand_up_bottles",
+    }
+    for task_name in library.index:
+        items = library.items(task_name)
+        assert items
+        assert any(item["type"] == "image" for item in items)
+        text = "\n".join(item["text"] for item in items if item["type"] == "text")
+        assert f"Task name: {task_name}" in text
 
 
 def test_experience_is_added_only_when_a_thread_opens() -> None:

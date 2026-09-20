@@ -1,0 +1,19 @@
+{
+  "stack_bowls": {
+    "demo": "stack_bowls/demo.json",
+    "views": {
+      "default": ["cam_high"],
+      "grasp": ["cam_high", "cam_left_wrist", "cam_right_wrist"],
+      "place": ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+    }
+  },
+  "plug_in_charger": {
+    "demo": "plug_in_charger/demo.json",
+    "views": {
+      "default": ["cam_high"],
+      "grasp": ["cam_high", "cam_left_wrist", "cam_right_wrist"],
+      "handover": ["cam_high", "cam_left_wrist", "cam_right_wrist"],
+      "insert": ["cam_high", "cam_left_wrist", "cam_right_wrist"]
+    }
+  }
+}

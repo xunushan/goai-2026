@@ -1,0 +1,411 @@
+{
+  "task": "Nest all three bowls upright at the center of the table.",
+  "task_slug": "stack_bowls",
+  "dataset": "data/real_lerobot_v30_ee",
+  "episode_index": 302,
+  "fps": 25.0,
+  "state_layout": "left[x,y,z,qw,qx,qy,qz,gripper] + right[same]",
+  "keyframes": [
+    {
+      "frame_index": 98,
+      "event": "move",
+      "stage": "approach",
+      "event_span": [
+        69,
+        69
+      ],
+      "observation": "left jaws open and already at the rim of the first (pink) bowl, not yet closed; the other two bowls stand upright to its right; right arm parked",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "aligned",
+      "state": {
+        "left": {
+          "position": [
+            0.338,
+            0.0473,
+            0.1899
+          ],
+          "orientation": [
+            0.0048,
+            0.728,
+            -0.6855,
+            -0.0126
+          ],
+          "gripper": "partial"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.339,
+            0.0475,
+            0.1878
+          ],
+          "orientation": [
+            0.0043,
+            0.7279,
+            -0.6855,
+            -0.0138
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/000-approach-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/000-approach-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/000-approach-cam_right_wrist.jpg"
+      },
+      "synthetic": true
+    },
+    {
+      "frame_index": 132,
+      "event": "grasp_bowl",
+      "stage": "grasp",
+      "event_span": [
+        14,
+        132
+      ],
+      "observation": "left jaws have just closed on the bowl rim and are lifting it off the table",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "grasped",
+      "state": {
+        "left": {
+          "position": [
+            0.3536,
+            0.0297,
+            0.1803
+          ],
+          "orientation": [
+            0.0512,
+            0.7093,
+            -0.7031,
+            -0.0008
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.3547,
+            0.0257,
+            0.1863
+          ],
+          "orientation": [
+            0.0502,
+            0.7052,
+            -0.7072,
+            0.0002
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/001-grasp-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/001-grasp-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/001-grasp-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 156,
+      "event": "move_bowl",
+      "stage": "transport",
+      "event_span": [
+        133,
+        179
+      ],
+      "observation": "left arm carries the bowl, held clear of the table",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "transported",
+      "state": {
+        "left": {
+          "position": [
+            0.2493,
+            -0.1214,
+            0.3627
+          ],
+          "orientation": [
+            -0.0514,
+            -0.5183,
+            0.84,
+            -0.1518
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2452,
+            -0.1279,
+            0.3576
+          ],
+          "orientation": [
+            -0.0538,
+            -0.5123,
+            0.8449,
+            -0.1442
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/002-transport-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/002-transport-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/002-transport-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 204,
+      "event": "place_bowl",
+      "stage": "place",
+      "event_span": [
+        185,
+        228
+      ],
+      "observation": "left jaws are opening to set the bowl down",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "placed",
+      "state": {
+        "left": {
+          "position": [
+            0.2217,
+            -0.1649,
+            0.2029
+          ],
+          "orientation": [
+            -0.0336,
+            -0.5229,
+            0.8487,
+            -0.0717
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2217,
+            -0.1649,
+            0.2029
+          ],
+          "orientation": [
+            -0.0351,
+            -0.5228,
+            0.8487,
+            -0.0723
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0985,
+            0.0011,
+            0.2118
+          ],
+          "orientation": [
+            0.523,
+            -0.482,
+            0.4813,
+            -0.5124
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/003-place-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/003-place-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/003-place-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 629,
+      "event": "move",
+      "stage": "home",
+      "event_span": [
+        607,
+        629
+      ],
+      "observation": "both arms back at their home poses; the bowls rest as one nested stack at the centre of the table",
+      "roles": {
+        "left": "idle",
+        "right": "active"
+      },
+      "result": "task_complete",
+      "state": {
+        "left": {
+          "position": [
+            0.0987,
+            0.0007,
+            0.2122
+          ],
+          "orientation": [
+            0.5176,
+            -0.4848,
+            0.4752,
+            -0.5208
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.1002,
+            0.0019,
+            0.2091
+          ],
+          "orientation": [
+            0.5122,
+            -0.5008,
+            0.4998,
+            -0.4869
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.0987,
+            0.0007,
+            0.2122
+          ],
+          "orientation": [
+            0.5176,
+            -0.4848,
+            0.4752,
+            -0.5208
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0998,
+            0.0016,
+            0.2083
+          ],
+          "orientation": [
+            0.5146,
+            -0.497,
+            0.4966,
+            -0.4915
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/004-home-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/004-home-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/004-home-cam_right_wrist.jpg"
+      }
+    }
+  ]
+}

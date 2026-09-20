@@ -21,7 +21,7 @@ bridge:
 images:
   jpeg_quality: 88
 
-# Inject the task demo selected by codex_agent/experience_library/index.json.
+# Inject the task demo selected by the Bridge's active experience-library index.
 experience:
   enabled: true
 

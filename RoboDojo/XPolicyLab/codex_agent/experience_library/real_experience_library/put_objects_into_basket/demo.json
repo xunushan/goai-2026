@@ -1,0 +1,410 @@
+{
+  "task": "Place all objects on the table into the basket one by one.",
+  "task_slug": "put_objects_into_basket",
+  "dataset": "data/real_lerobot_v30_ee",
+  "episode_index": 105,
+  "fps": 25.0,
+  "state_layout": "left[x,y,z,qw,qx,qy,qz,gripper] + right[same]",
+  "keyframes": [
+    {
+      "frame_index": 177,
+      "event": "move",
+      "stage": "approach",
+      "event_span": [
+        128,
+        177
+      ],
+      "observation": "left jaws open, closing in on the white mug at the left of the table; the wicker basket sits at the centre, the remaining objects are still spread around it; right arm parked",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "aligned",
+      "state": {
+        "left": {
+          "position": [
+            0.3816,
+            0.0038,
+            0.2209
+          ],
+          "orientation": [
+            0.0909,
+            -0.7207,
+            0.6822,
+            -0.0838
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.3836,
+            0.0038,
+            0.2165
+          ],
+          "orientation": [
+            0.0897,
+            -0.7208,
+            0.6823,
+            -0.0825
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/000-approach-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/000-approach-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/000-approach-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 209,
+      "event": "grasp_object",
+      "stage": "grasp",
+      "event_span": [
+        178,
+        209
+      ],
+      "observation": "left jaws have just closed on the mug and are lifting it off the table",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "grasped",
+      "state": {
+        "left": {
+          "position": [
+            0.395,
+            0.0176,
+            0.1864
+          ],
+          "orientation": [
+            0.0715,
+            -0.7325,
+            0.6732,
+            -0.0712
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.3946,
+            0.0176,
+            0.1864
+          ],
+          "orientation": [
+            0.0702,
+            -0.7316,
+            0.6745,
+            -0.0697
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/001-grasp-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/001-grasp-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/001-grasp-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 238,
+      "event": "move_object",
+      "stage": "transport",
+      "event_span": [
+        213,
+        261
+      ],
+      "observation": "left arm carries the mug up and clear of the table, still well short of the basket rim",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "transported",
+      "state": {
+        "left": {
+          "position": [
+            0.2271,
+            -0.0446,
+            0.4153
+          ],
+          "orientation": [
+            0.1465,
+            -0.59,
+            0.7294,
+            -0.3135
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.2225,
+            -0.0529,
+            0.4186
+          ],
+          "orientation": [
+            0.1445,
+            -0.5724,
+            0.7389,
+            -0.3247
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/002-transport-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/002-transport-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/002-transport-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 272,
+      "event": "place_object",
+      "stage": "place",
+      "event_span": [
+        262,
+        309
+      ],
+      "observation": "left jaws are opening to drop the mug into the basket",
+      "roles": {
+        "left": "active",
+        "right": "idle"
+      },
+      "result": "placed",
+      "state": {
+        "left": {
+          "position": [
+            0.3313,
+            -0.2136,
+            0.3366
+          ],
+          "orientation": [
+            0.1446,
+            -0.3956,
+            0.788,
+            -0.449
+          ],
+          "gripper": "closed"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.3313,
+            -0.2136,
+            0.3366
+          ],
+          "orientation": [
+            0.1445,
+            -0.3956,
+            0.7881,
+            -0.449
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0854,
+            0.0005,
+            0.3286
+          ],
+          "orientation": [
+            0.5357,
+            -0.4586,
+            0.457,
+            -0.5421
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/003-place-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/003-place-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/003-place-cam_right_wrist.jpg"
+      }
+    },
+    {
+      "frame_index": 1548,
+      "event": "move",
+      "stage": "home",
+      "event_span": [
+        1526,
+        1548
+      ],
+      "observation": "both arms back at their home poses; the table is clear and every object has ended up inside the basket",
+      "roles": {
+        "left": "idle",
+        "right": "active"
+      },
+      "result": "task_complete",
+      "state": {
+        "left": {
+          "position": [
+            0.098,
+            0.0,
+            0.211
+          ],
+          "orientation": [
+            0.5201,
+            -0.4823,
+            0.4827,
+            -0.5136
+          ],
+          "gripper": "open"
+        },
+        "right": {
+          "position": [
+            0.0994,
+            0.0007,
+            0.2089
+          ],
+          "orientation": [
+            0.4957,
+            -0.5023,
+            0.4934,
+            -0.5084
+          ],
+          "gripper": "open"
+        }
+      },
+      "decision": {
+        "left": {
+          "position": [
+            0.098,
+            0.0,
+            0.211
+          ],
+          "orientation": [
+            0.5201,
+            -0.4823,
+            0.4827,
+            -0.5136
+          ],
+          "gripper": "keep"
+        },
+        "right": {
+          "position": [
+            0.0989,
+            0.0006,
+            0.2079
+          ],
+          "orientation": [
+            0.4989,
+            -0.4983,
+            0.4927,
+            -0.51
+          ],
+          "gripper": "keep"
+        }
+      },
+      "images": {
+        "observation.images.cam_high": "images/004-home-cam_high.jpg",
+        "observation.images.cam_left_wrist": "images/004-home-cam_left_wrist.jpg",
+        "observation.images.cam_right_wrist": "images/004-home-cam_right_wrist.jpg"
+      }
+    }
+  ]
+}
