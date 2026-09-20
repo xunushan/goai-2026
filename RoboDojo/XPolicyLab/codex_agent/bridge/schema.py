@@ -281,6 +281,14 @@ def output_schema(vla_review: bool = False) -> dict[str, Any]:
     separate objects on purpose: a shared dict edited by one consumer would
     silently retype the other arm's schema.
 
+    The root is a typed object carrying ``anyOf`` rather than a bare
+    ``{"oneOf": [...]}``: the DeepSeek backend (``wire_api = "responses"``)
+    requires ``type``/``anyOf``/``$ref`` on every node and rejects a root that is
+    an object without properties. Naming ``mode`` at the root alongside the
+    branches keeps the union exact, because both branches set
+    ``additionalProperties: false`` and pin ``mode`` to a different value, so no
+    response can satisfy both.
+
     The adapter validates the same exact shape again before execution.
     """
     eef = {
@@ -301,7 +309,10 @@ def output_schema(vla_review: bool = False) -> dict[str, Any]:
     eef["required"] = ["mode", "left", "right", "note", "phase"]
     eef["properties"]["mode"] = {"type": "string", "enum": ["eef"]}
     return {
-        "oneOf": [
+        "type": "object",
+        "properties": {"mode": {"type": "string", "enum": ["vla", "eef"]}},
+        "required": ["mode"],
+        "anyOf": [
             {
                 "type": "object", "additionalProperties": False,
                 "required": ["mode", "vla_steps", "verify_next", "note", "phase"],
