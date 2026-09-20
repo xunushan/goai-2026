@@ -16,6 +16,7 @@
 
 from __future__ import annotations
 
+import copy
 import math
 from functools import partial
 from typing import Final, Iterable, Tuple
@@ -304,6 +305,7 @@ class SoftPromptedTransformer(nn.Module):
         len_soft_prompts: int = 32,
         max_len_seq: int = 512,
         use_hetero_proj: bool = False,
+        use_main_visual_projection: bool = False,
     ) -> None:
         super().__init__()
         self.hidden_size = hidden_size
@@ -311,6 +313,7 @@ class SoftPromptedTransformer(nn.Module):
         self.dim_time = dim_time
         self.len_soft_prompts = len_soft_prompts
         self.use_hetero_proj = use_hetero_proj
+        self.use_main_visual_projection = use_main_visual_projection
 
         self.blocks = nn.ModuleList(
             [TransformerBlock(hidden_size, num_heads, mlp_ratio=mlp_ratio) for _ in range(depth)]
@@ -322,6 +325,12 @@ class SoftPromptedTransformer(nn.Module):
         else:
             self.vlm_proj = nn.Linear(multi_modal_input_size, hidden_size)
             self.aux_visual_proj = nn.Linear(multi_modal_input_size, hidden_size)
+
+        self.main_visual_proj = (
+            copy.deepcopy(self.aux_visual_proj)
+            if use_main_visual_projection
+            else None
+        )
 
         self.pos_emb = nn.Parameter(torch.zeros(1, max_len_seq, hidden_size), requires_grad=True)
         nn.init.normal_(self.pos_emb, std=0.02)
@@ -346,6 +355,7 @@ class SoftPromptedTransformer(nn.Module):
         action_with_noise: torch.Tensor,
         proprio: torch.Tensor,
         t: torch.Tensor,
+        main_visual_inputs: torch.Tensor | None = None,
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -373,14 +383,27 @@ class SoftPromptedTransformer(nn.Module):
         action_tokens = torch.cat([action_with_noise, proprio_tokens, time_tokens], dim=-1)
         x = self.action_encoder(action_tokens, domain_id)                   # [B, T_action, H]
 
-        # Project visual streams and concatenate
+        # Project visual streams and concatenate. The optional main-camera
+        # shortcut uses the checkpoint's independently trained projection.
         if self.use_hetero_proj:
-            x = torch.cat(
-                [x, self.vlm_proj(vlm_features, domain_id), self.aux_visual_proj(aux_visual_inputs, domain_id)],
-                dim=1,
-            )
+            visual_tokens = [self.vlm_proj(vlm_features, domain_id)]
+            if self.use_main_visual_projection:
+                if main_visual_inputs is None:
+                    raise ValueError(
+                        "main_visual_inputs is required when use_main_visual_projection=True"
+                    )
+                visual_tokens.append(self.main_visual_proj(main_visual_inputs, domain_id))
+            visual_tokens.append(self.aux_visual_proj(aux_visual_inputs, domain_id))
         else:
-            x = torch.cat([x, self.vlm_proj(vlm_features), self.aux_visual_proj(aux_visual_inputs)], dim=1)
+            visual_tokens = [self.vlm_proj(vlm_features)]
+            if self.use_main_visual_projection:
+                if main_visual_inputs is None:
+                    raise ValueError(
+                        "main_visual_inputs is required when use_main_visual_projection=True"
+                    )
+                visual_tokens.append(self.main_visual_proj(main_visual_inputs))
+            visual_tokens.append(self.aux_visual_proj(aux_visual_inputs))
+        x = torch.cat([x, *visual_tokens], dim=1)
 
         # Add positional embeddings (truncate if needed)
         seq_len = x.shape[1]

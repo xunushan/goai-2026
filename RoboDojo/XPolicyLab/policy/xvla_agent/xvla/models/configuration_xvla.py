@@ -46,6 +46,7 @@ class XVLAConfig(PretrainedConfig):
         max_len_seq: int = 512,
         use_hetero_proj: bool = False,
         soft_prompt_length: int = 32,
+        use_main_visual_projection: bool = False,
 
         # === Action & proprio ===
         num_actions: int = 30,
@@ -78,6 +79,9 @@ class XVLAConfig(PretrainedConfig):
         self.max_len_seq = max_len_seq
         self.use_hetero_proj = use_hetero_proj
         self.soft_prompt_length = soft_prompt_length
+        # Optional direct action-side projection of the main-camera visual
+        # tokens. False keeps historical checkpoints and token layout intact.
+        self.use_main_visual_projection = use_main_visual_projection
 
         # Action/proprioception settings
         self.num_actions = num_actions
